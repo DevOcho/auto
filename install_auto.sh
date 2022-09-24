@@ -4,9 +4,22 @@
 mkdir -p ~/.auto
 echo "Directory ~/.auto created"
 
+# If auto was previously installed we want save the local.toml file
+if [ -f ~/.auto/config/local.toml ]; then
+    echo "Saving local.toml"
+    cp -f ~/.auto/config/local.toml /tmp/local.toml.bak
+fi
+
 # Copy the contents of auto into the new directory
 cp -r auto/* ~/.auto/.
 echo "Contents of auto installed"
+
+# If we saved the local.toml let's put it back
+if [ -f "/tmp/local.toml.bak" ]; then
+    echo "Restored local.toml"
+    cp -f /tmp/local.toml.bak ~/.auto/config/local.toml
+    rm -f /tmp/local.toml.bak
+fi
 
 # Remove the python extension
 mv ~/.auto/auto.py ~/.auto/auto

@@ -4,6 +4,7 @@ click >= 8.0.0
 codespell
 coverage
 flake8
+gitpython
 isort
 mccabe
 myst-parser

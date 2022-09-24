@@ -1,25 +1,22 @@
 [code]
-directory = "/home/rogue/source/pyatt-dev"
+directory = "/home/rogue/source/devocho"
 
 [pods]
 
-    [pods.training-portal]
-    # helm install --set ingress.enabled=true --description "Training Portal" training-portal training-portal/
-    name = "training-portal"
-    desc = "Training Portal"
+    [pods.portal]
+    # helm install --set ingress.enabled=true --description "Portal" portal portal/
+    name = "portal"
+    desc = "Portal"
     version = "0.0.8"
     active = true
     command = "helm install"
     command_args = "--set ingress.enabled=true"
-    helm_directory = "training-portal"
-    code_path = "/home/rogue/source/pyatt-dev"
     seed_command = "loaddb.py"
 
 
 # Images we want preloaded in the local container registry
 [images]
 images = [
-        'training-portal:0.0.8',
         'mysql:8.0',
         'proxysql/proxysql:2.3.2',
         'minio/minio:RELEASE.2022-09-01T23-53-36Z'

@@ -5,8 +5,8 @@
 #
 
 # Let's build some stuff
-BLUE='\033[0;36m'
-NC='\033[0m'
+BLUE=\033[0;36m
+NC=\033[0m
 
 init:
 	@printf "Making ${BLUE}auto${NC}\n"
