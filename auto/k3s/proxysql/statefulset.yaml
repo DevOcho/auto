@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: proxysql
+  labels:
+    app: proxysql
+spec:
+  replicas: 2
+  serviceName: proxysqlcluster
+  selector:
+    matchLabels:
+      app: proxysql
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: proxysql
+    spec:
+      restartPolicy: Always
+      containers:
+      - image: k3d-registry.local:12345/proxysql/proxysql:2.3.2
+        name: proxysql
+        volumeMounts:
+        - name: proxysql-config
+          mountPath: /etc/proxysql.cnf
+          subPath: proxysql.cnf
+        - name: proxysql-data
+          mountPath: /var/lib/proxysql
+          subPath: data
+        ports:
+        - containerPort: 6033
+          name: proxysql-mysql
+        - containerPort: 6032
+          name: proxysql-admin
+      volumes:
+      - name: proxysql-config
+        configMap:
+          name: proxysql-configmap
+  volumeClaimTemplates:
+  - metadata:
+      name: proxysql-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 2Gi

@@ -1,0 +1,19 @@
+black >= 22.3.0
+blacken-docs
+click >= 8.0.0
+codespell
+coverage
+flake8
+isort
+mccabe
+myst-parser
+pre-commit
+pyfiglet
+pytest
+pytest-cov
+pyupgrade
+rich
+sphinx
+sphinx-theme
+toml
+types-toml
