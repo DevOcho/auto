@@ -1,7 +1,6 @@
 """Imports"""
 import os
 import re
-import sys
 import time
 
 import requests
@@ -11,30 +10,6 @@ from rich import print as rprint
 
 # GLOBALS
 CONFIG = toml.load(os.path.expanduser("~") + "/.auto/config/local.toml", _dict=dict)
-
-
-def check_docker():
-    """Make sure docker exists and the service is running"""
-
-    rprint("  -- Is Docker installed on the system?")
-    # Verify docker is installed
-    bash_command = """which docker"""
-    if not utils.run_and_wait(bash_command, check_result="/usr/bin/docker"):
-        rprint(
-            """[red]ERROR: Uh Oh!
-                We didn't see docker on your system.  You'll need that installed to continue"""
-        )
-        sys.exit()
-
-    # Verify docker is running
-    bash_command = """ps aux"""
-    if not utils.run_and_wait(bash_command, check_result="dockerd"):
-        rprint(
-            """[red]      ERROR: Uh Oh! Docker Daemon doesn't appear to be running.[/]
-        Please run the following command:
-          `sudo service docker start`"""
-        )
-        sys.exit()
 
 
 def start_registry(progress, task):
@@ -61,7 +36,7 @@ def populate_registry(progress, task):
     registry_load_list = CONFIG["images"]["images"]
 
     # Get the registry items already loaded
-    req = requests.get("http://k3d-registry.local:12345/v2/_catalog")
+    req = requests.get("http://k3d-registry.local:12345/v2/_catalog", timeout=30)
     registry_list = req.json()
 
     # Remove loaded items from the list
@@ -349,3 +324,16 @@ def init_pod_db(pod):
 
     # Tell the user we did it
     rprint(f"  -- {pod} database initialized")
+
+
+def verify_dependencies():
+    """Verify the system has what it needs to run auto"""
+
+    # Check for the docker daemon running and command being available
+    utils.check_docker()
+
+    # Check for k3d and kubectl
+    utils.check_k8s()
+
+    # Check for hosts entries
+    utils.check_host_entries()

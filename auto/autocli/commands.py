@@ -32,7 +32,9 @@ def start(self, pod, dry_run):  # pylint: disable=unused-argument
 
             # Are we ready?
             # STEP 1: Verify Docker is running on the host
-            core.check_docker()
+            rprint("[deep_sky_blue1]Verify Dependencies")
+            core.verify_dependencies()
+            rprint("       [green]Dependencies installed and working")
 
             # We need our own container registry
             rprint("[deep_sky_blue1]Container Registry")

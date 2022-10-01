@@ -155,3 +155,76 @@ def create_mysql_database(database, retries=0):
             create_mysql_database(database, retries=retries)
         else:
             rprint(f"  [red]FAILED: Could not create database[/] {database}")
+
+
+def check_docker():
+    """Make sure docker exists and the service is running"""
+
+    # Verify docker is installed
+    bash_command = """which docker"""
+    if not run_and_wait(bash_command, check_result="docker"):
+        rprint(
+            """[red]ERROR: Docker is missing![/]
+                We didn't see docker on your system.  You'll need that installed to continue"""
+        )
+        sys.exit()
+
+    # Verify docker is running
+    bash_command = """ps aux"""
+    if not run_and_wait(bash_command, check_result="dockerd"):
+        rprint(
+            """[red]      ERROR: Docker Daemon doesn't appear to be running.[/]
+        Please run the following command:
+          `sudo service docker start`"""
+        )
+        sys.exit()
+
+    # Verify the `docker` command is available to this user
+    bash_command = """docker ps"""
+    if not run_and_wait(bash_command, check_result="CONTAINER ID"):
+        rprint(
+            """[red]    ERROR: The `docker` command doesn't appear to be working![/]
+             Perhaps you need to run the post install steps:
+               https://docs.docker.com/engine/install/linux-postinstall/
+          """
+        )
+        sys.exit()
+
+
+def check_k8s():
+    """Look for the things necessary to run k3s via k3d"""
+
+    # check for the k3d command
+    bash_command = """k3d cluster list"""
+    if not run_and_wait(bash_command, check_result="LOADBALANCER"):
+        rprint(
+            """[red]    ERROR: The `k3d` command doesn't appear to be installed![/]
+             Please visit https://k3d.io for installation instructions.
+          """
+        )
+        sys.exit()
+
+    # check for the kubectl command
+    bash_command = """kubectl get --help"""
+    if not run_and_wait(bash_command, check_result="Display one or many resources"):
+        rprint(
+            """[red]    ERROR: The `kubectl` command doesn't appear to be installed![/]
+             Please install it to continue.
+          """
+        )
+        sys.exit()
+
+
+def check_host_entries():
+    """Check that appropriate host entries are made"""
+
+    # check for the k3d-registry.local host entry
+    bash_command = """cat /etc/hosts"""
+    if not run_and_wait(bash_command, check_result="k3d-registry.local"):
+        rprint(
+            """[red]    ERROR: No registry entry in /etc/hosts ![/]
+             Please add the following to your /etc/hosts file
+             127.0.0.1      k3d-registry.local
+          """
+        )
+        sys.exit()

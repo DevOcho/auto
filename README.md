@@ -6,12 +6,11 @@ to create your environment.
 
 ## Install `auto`
 
-
 ### Dependencies
 You will need a Linux system with the following pre-installed:
 - bash (`auto` uses Bash commands)
 - git
-- docker (both the daemon running and the bash command)
+- docker (both the daemon running and the bash command available as a non-root user)
 - k3d (k3d.io)
 - kubectl
 
@@ -75,4 +74,3 @@ the following files/folders in your repo.
 /auto/k8s   (if using k8s yaml)
 /auto/helm  (if using helm charts)
 /migrations (database related items [more on this later])
-```

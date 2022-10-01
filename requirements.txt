@@ -10,6 +10,7 @@ mccabe
 myst-parser
 pre-commit
 pyfiglet
+pylint
 pytest
 pytest-cov
 pyupgrade
