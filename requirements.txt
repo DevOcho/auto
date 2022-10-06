@@ -3,6 +3,7 @@ blacken-docs
 click >= 8.0.0
 codespell
 coverage
+dulwich
 flake8
 gitpython
 isort

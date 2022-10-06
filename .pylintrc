@@ -1,0 +1,17 @@
+[MASTER]
+# Use multiple processes to speed up Pylint.
+jobs=4
+
+[FORMAT]
+# Maximum number of characters on a single line.
+max-line-length=120
+
+[SIMILARITIES]
+# Ignore comments when computing similarities.
+ignore-comments=yes
+
+# Ignore docstrings when computing similarities.
+ignore-docstrings=yes
+
+# Ignore imports when computing similarities.
+ignore-imports=yes

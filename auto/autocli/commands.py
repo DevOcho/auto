@@ -1,4 +1,6 @@
 """Auto Commands"""
+import sys
+
 import click
 from autocli import core
 from rich import print as rprint
@@ -24,6 +26,7 @@ def start(self, pod, dry_run):  # pylint: disable=unused-argument
 
     # Local Vars
     new_cluster = False
+    pods = []
 
     if not pod:
         # Let's run the steps with a progress bar
@@ -33,8 +36,18 @@ def start(self, pod, dry_run):  # pylint: disable=unused-argument
             # Are we ready?
             # STEP 1: Verify Docker is running on the host
             rprint("[deep_sky_blue1]Verify Dependencies")
-            core.verify_dependencies()
-            rprint("       [green]Dependencies installed and working")
+            if not dry_run:
+                core.verify_dependencies()
+            rprint(" - [green]Dependencies installed and working")
+
+            # Manage code repos and local docker images
+            rprint("[deep_sky_blue1]Pulling code and building local images")
+            if not dry_run:
+                pods = core.pull_and_build_pods()
+            rprint(" - [green]Pods built")
+
+            if not dry_run:
+                sys.exit()
 
             # We need our own container registry
             rprint("[deep_sky_blue1]Container Registry")
@@ -58,7 +71,7 @@ def start(self, pod, dry_run):  # pylint: disable=unused-argument
             # Load system containers
             rprint("[deep_sky_blue1]Loading system containers...")
             if not dry_run:
-                core.install_mysql_in_cluster()
+                # core.install_system_containers()
                 if new_cluster:
                     core.create_databases()
             progress.update(task, advance=33)
@@ -72,9 +85,10 @@ def start(self, pod, dry_run):  # pylint: disable=unused-argument
             # Let's give them a hint on how they can get started
             print()
             rprint("[italic]Hint: Some items may still be starting in k3s.")
-            rprint(
-                "[italic]You can access the training pod via: http://training-pod.local:8088/"
-            )
+            rprint("[italic]You can access your pod(s) via the following URLs:")
+            for repo in pods:
+                pod_name = repo["repo"].split("/")[-1:][0].replace(".git", "")
+                rprint(f"[italic]  http://{pod_name}.local:8088/")
     else:
         rprint(f"[steel_blue]Starting[/] {pod}")
         core.start_pod(pod)

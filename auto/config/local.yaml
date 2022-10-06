@@ -1,0 +1,22 @@
+---
+code: /home/rogue/source/devocho
+
+pods:
+  - repo: git@github.com:DevOcho/portal.git
+    branch: main
+
+images:
+  - image: mysql:8.0
+  - image: proxysql/proxysql:2.3.2
+  - image: minio/minio:RELEASE.2022-09-01T23-53-36Z
+
+mysql:
+  - active: true
+    databases:
+      - name: portal
+
+minio:
+  - active: true
+
+proxysql:
+  - active: true

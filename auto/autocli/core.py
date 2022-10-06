@@ -4,12 +4,19 @@ import re
 import time
 
 import requests
-import toml
+
+# import toml
+import yaml
 from autocli import utils
 from rich import print as rprint
 
 # GLOBALS
-CONFIG = toml.load(os.path.expanduser("~") + "/.auto/config/local.toml", _dict=dict)
+# CONFIG = toml.load(os.path.expanduser("~") + "/.auto/config/local.toml", _dict=dict)
+CONFIG = {}
+with open(
+    os.path.expanduser("~") + "/.auto/config/local.yaml", encoding="utf-8"
+) as yaml_file:
+    CONFIG = yaml.safe_load(yaml_file)
 
 
 def start_registry(progress, task):
@@ -162,7 +169,9 @@ def start_pod(pod) -> None:
             else:
                 command = f"""helm install {values['command_args']} """
                 command += f"""--description \"{values['desc']}\" """
-                command += f"""{values['name']} {user_path}/.auto/helm/{values['helm_directory']}"""
+                command += (
+                    f"""{values['name']} {user_path}/.auto/helm/{values['name']}"""
+                )
                 utils.run_and_wait(command)
                 rprint(f"       * [steel_blue]Helm installed: [/]{pod}")
 
@@ -337,3 +346,17 @@ def verify_dependencies():
 
     # Check for hosts entries
     utils.check_host_entries()
+
+
+def pull_and_build_pods():
+    """Pull all git repos, then docker build, then upload the images to the local registry"""
+
+    code_folder = CONFIG["code"]
+    rprint(f" -- using code folder: {code_folder}")
+
+    rprint(" -- pulling code repos")
+    for pod in CONFIG["pods"]:
+        rprint(f"    = Pulling [magenta]{pod['repo']}[/]")
+        utils.pull_repo(pod, code_folder)
+
+    return CONFIG["pods"]

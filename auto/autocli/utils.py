@@ -1,9 +1,11 @@
 """Utils for the auto commands"""
 
+import os
 import re
 import shlex
 import subprocess
 import sys
+from subprocess import CalledProcessError
 from time import sleep
 
 from rich import print as rprint
@@ -228,3 +230,50 @@ def check_host_entries():
           """
         )
         sys.exit()
+
+
+def pull_repo(repo, code_folder):
+    """Pull a code repository to the code folder"""
+
+    # Determine where to put this repo based on the code_folder + git project name
+    repo_local_dir = (
+        code_folder + "/" + repo["repo"].split("/")[-1:][0].replace(".git", "")
+    )
+
+    # We need to capture the cwd so we can come back here
+    cwd = os.getcwd()
+
+    # Does this repo exist on this system?
+    if os.path.exists(repo_local_dir):
+
+        # change to the repo folder so we can run `git status`
+        os.chdir(repo_local_dir)
+        cmd = "git status"
+        if not run_and_wait(cmd, check_result="nothing to commit, working tree clean"):
+            # If that didn't work tell the user and then reset and leave
+            rprint(f"[yellow]       ! Skipping {repo['repo']} with untracked changes")
+            os.chdir(cwd)
+            return
+
+        # `git pull` the repo
+        cmd = f"git pull {repo['repo']}"
+        if not run_and_wait(cmd):
+            rprint(f"[yellow]       ! Skipping {repo['repo']}")
+
+    else:
+        try:
+            # Repo isn't already present so we will need to clone it
+            os.chdir(code_folder)
+            cmd = f"git clone {repo['repo']}"
+            if not run_and_wait(cmd):
+                rprint(
+                    f"[yellow]       ! Could not clone {repo['repo']} for unknown reasons"
+                )
+        except CalledProcessError:
+            rprint(f"[yellow]       ! Could not clone {repo['repo']}")
+            rprint(
+                "[yellow]       ! Make sure the repository exists and you have permission to clone it"
+            )
+
+    # Now change back to the previous cwd so everything is copacetic
+    os.chdir(cwd)
