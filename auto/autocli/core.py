@@ -50,7 +50,8 @@ def populate_registry():
                 registry_load_list.remove(delete_candidate)
 
     # Load new images in the registry
-    for image in registry_load_list:
+    for image_obj in registry_load_list:
+        image = image_obj["image"]
 
         # Is this a local image already?
         bash_command = "docker images"
@@ -101,7 +102,7 @@ def start_cluster(progress, task):
     print("       = Nope, creating cluster.  This will take a minute.")
     # if it's not running let's start it
     load_bal_port = 8088
-    code_dir = CONFIG["code"]["directory"]
+    code_dir = CONFIG["code"]
     bash_command = f"""/usr/local/bin/k3d cluster create \
                        --volume {code_dir}:/mnt/code \
                        --registry-use k3d-registry.local:12345 \
