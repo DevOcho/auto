@@ -4,14 +4,11 @@ import re
 import time
 
 import requests
-
-# import toml
 import yaml
 from autocli import utils
 from rich import print as rprint
 
-# GLOBALS
-# CONFIG = toml.load(os.path.expanduser("~") + "/.auto/config/local.toml", _dict=dict)
+# Read Config and provide globally
 CONFIG = {}
 with open(
     os.path.expanduser("~") + "/.auto/config/local.yaml", encoding="utf-8"
@@ -19,41 +16,40 @@ with open(
     CONFIG = yaml.safe_load(yaml_file)
 
 
-def start_registry(progress, task):
+def start_registry():
     """Start a container registry"""
 
-    rprint("  -- Does a registry already exist?")
     # Do we have a registry or do we need to create one?
     bash_command = """/usr/local/bin/k3d registry list"""
     if utils.run_and_wait(bash_command, check_result="k3d-registry.local"):
-        rprint("     = Found a registry so we will use it")
+        rprint("     = Using existing registry")
     else:
         # No registry found so we need to make one
+        rprint("     = Creating new registry")
         bash_command = """k3d registry create registry.local --port 12345"""
         utils.run_and_wait(bash_command)
         rprint("    [steel_blue1]Created Registry")
         time.sleep(3)
-    progress.update(task, advance=5)
 
 
-def populate_registry(progress, task):
+def populate_registry():
     """Load important images into the registry to speed up the deployment of pods"""
 
     # Get the list of images we want to pre-load from the config file
-    registry_load_list = CONFIG["images"]["images"]
+    registry_load_list = CONFIG["registry"]
 
-    # Get the registry items already loaded
+    # Get the registry images already loaded
     req = requests.get("http://k3d-registry.local:12345/v2/_catalog", timeout=30)
     registry_list = req.json()
 
-    # Remove loaded items from the list
+    # Remove images that are already loaded in the registry
     for image in registry_list["repositories"]:
         for delete_candidate in registry_load_list:
-            candidate_name = delete_candidate.split(":")[0]
+            candidate_name = delete_candidate["image"].split(":")[0]
             if re.search(candidate_name, image):
                 registry_load_list.remove(delete_candidate)
 
-    # Load the items we haven't already got in the registry
+    # Load new images in the registry
     for image in registry_load_list:
 
         # Is this a local image already?
@@ -70,7 +66,17 @@ def populate_registry(progress, task):
         bash_command = "docker push k3d-registry.local:12345/" + image
         utils.run_and_wait(bash_command)
         rprint("  -- Loaded: [steel_blue]" + image)
-    progress.update(task, advance=5)
+
+    # Now we need to build and load the pods
+    for pod in CONFIG["pods"]:
+
+        # What is the name of this pod?
+        pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
+
+        # Since this is a slow process, let's skip the ones that are already loaded
+        if pod_name not in registry_list["repositories"]:
+            # Build, Tag, and Load the pod image into the registry
+            tag_pod_docker_image(pod_name)
 
 
 def start_cluster(progress, task):
@@ -245,15 +251,22 @@ def connect_to_mysql() -> None:
     utils.connect_to_db()
 
 
-def tag_pod_docker_image(pod, version) -> None:
+def tag_pod_docker_image(pod) -> None:
     """Tag and push a new docker image to local registry"""
+
+    # Local Vars
+    code_path = CONFIG["code"]
+
+    # We need to load the pod's config and see what version we are on
+    with open(
+        CONFIG["code"] + "/" + pod + "/.auto/config.yaml", encoding="utf-8"
+    ) as pod_config_yaml:
+        pod_config = yaml.safe_load(pod_config_yaml)
+    version = pod_config["version"]
 
     rprint(f"[steel_blue]Building and Tagging: [/][bright_cyan]{pod} {version}")
 
     # Verify the pod is real using the users source code folder
-    code_path = os.environ["AUTO_CODE"]
-    code_path = CONFIG["pods"][pod]["code_path"]
-    rprint(f"code_path: {code_path}")
     if os.path.isdir(code_path + "/" + pod):
         rprint(f"  -- Found pod {pod}")
 
@@ -277,7 +290,7 @@ def tag_pod_docker_image(pod, version) -> None:
         command = "docker image prune -f"
         utils.run_and_wait(command)
 
-    # They tried to build a pod that didn't exist.  probably a typo
+    # They tried to build a pod that didn't exist.  Maybe a typo?
     else:
         print("")
         rprint(f"[red bold]ERROR: Portal {pod} does not exist")

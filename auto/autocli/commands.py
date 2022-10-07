@@ -46,20 +46,19 @@ def start(self, pod, dry_run):  # pylint: disable=unused-argument
                 pods = core.pull_and_build_pods()
             rprint(" - [green]Pods built")
 
-            if not dry_run:
-                sys.exit()
-
             # We need our own container registry
             rprint("[deep_sky_blue1]Container Registry")
             if not dry_run:
-                core.start_registry(progress, task)
+                core.start_registry()
             rprint("       [green]Registry Ready")
+            progress.update(task, advance=5)
 
             # Populate the container registry with important images
             rprint("[deep_sky_blue1]Populating Container Registry for faster loading")
             if not dry_run:
-                core.populate_registry(progress, task)
+                core.populate_registry()
             rprint("       [green]Registry Populated")
+            progress.update(task, advance=5)
 
             # Start the k3s cluster
             rprint("[deep_sky_blue1]Cluster")
@@ -67,6 +66,9 @@ def start(self, pod, dry_run):  # pylint: disable=unused-argument
                 new_cluster = core.start_cluster(progress, task)
             rprint("       [green]Cluster Ready")
             progress.update(task, advance=33)
+
+            if not dry_run:
+                sys.exit()
 
             # Load system containers
             rprint("[deep_sky_blue1]Loading system containers...")
@@ -176,10 +178,9 @@ def logs(self, pod):  # pylint: disable=unused-argument
 
 @greet.command()
 @click.argument("pod")
-@click.argument("version")
 @click.pass_context
-def tag(self, pod, version):  # pylint: disable=unused-argument
-    """tag a new image"""
+def tag(self, pod):  # pylint: disable=unused-argument
+    """Build, Tag, and Load a pod container image in the local repository"""
 
-    # Let's connect to the MySQL database inside the k3s cluster
-    core.tag_pod_docker_image(pod, version)
+    # Build, Tag, and load pod in local repository
+    core.tag_pod_docker_image(pod)

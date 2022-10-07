@@ -251,7 +251,9 @@ def pull_repo(repo, code_folder):
         cmd = "git status"
         if not run_and_wait(cmd, check_result="nothing to commit, working tree clean"):
             # If that didn't work tell the user and then reset and leave
-            rprint(f"[yellow]       ! Skipping {repo['repo']} with untracked changes")
+            rprint(
+                f"[yellow]       ! Skipping {repo['repo']} because repo has untracked changes"
+            )
             os.chdir(cwd)
             return
 

@@ -1,19 +1,23 @@
 ---
+# The code folder is where you want us to download all of your pod code repositories
 code: /home/rogue/source/devocho
 
+# Each repo listed here will be run as a pod in k3s
 pods:
   - repo: git@github.com:DevOcho/portal.git
     branch: main
 
-images:
+# We will pre-load the following images into the local k3s container registry
+registry:
   - image: mysql:8.0
   - image: proxysql/proxysql:2.3.2
   - image: minio/minio:RELEASE.2022-09-01T23-53-36Z
 
+# Database config
 mysql:
   - active: true
     databases:
-      - name: portal
+      - name: dev_training
 
 minio:
   - active: true
