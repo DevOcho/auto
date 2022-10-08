@@ -74,7 +74,7 @@ def wait_for_pod_status(podname: str, status: str, max_wait_time=30) -> None:
 
     while not pod_complete or cycles < max_wait_time:
         # Get the pod(s) in question
-        bash_command = f"""kubectl get pods --all-namespaces | grep {podname}"""
+        bash_command = f"""kubectl get pods --all-namespaces | grep {podname} || true"""
         results = subprocess.run(
             bash_command, capture_output=True, shell=True, check=True
         )

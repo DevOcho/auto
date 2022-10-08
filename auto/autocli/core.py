@@ -95,6 +95,7 @@ def start_cluster(progress, task):
             bash_command = """k3d cluster start"""
             utils.run_and_wait(bash_command)
 
+        # Let them know this isn't a new cluster
         return False
 
     # The cluster hasn't already been created so I need to start one
@@ -115,6 +116,7 @@ def start_cluster(progress, task):
         print("       = Cluster Started.  Waiting for Pods to finish starting...")
         progress.update(task, advance=6)
 
+    # When we see "Complete" then we know it's done
     if utils.wait_for_pod_status("helm", "Complete"):
         progress.update(task, advance=5)
 
@@ -128,6 +130,7 @@ def start_cluster(progress, task):
     if utils.run_and_wait(bash_command):
         print("       = Pods finished starting.  Removed completed setup pods.")
 
+    # Tell them this is a new cluster
     return True
 
 
@@ -216,6 +219,13 @@ def install_pods_in_cluster() -> None:
             # init_pod_db(pod)
 
 
+def install_system_pods():
+    """Install all of the system pods in the cluster"""
+
+    # MySQL
+    install_mysql_in_cluster()
+
+
 def install_mysql_in_cluster() -> None:
     """Install MySQL into the cluster"""
 
@@ -231,9 +241,9 @@ def install_mysql_in_cluster() -> None:
     command = f"kubectl apply -f {user_path}/.auto/k3s/mysql/service.yaml"
     utils.run_and_wait(command)
 
-    # Let's give it a few seconds to start before we let other pods start
-    time.sleep(5)
-    rprint("       [green]Started MySQL")
+    # Let's wait for it to start before we let other pods start
+    if utils.wait_for_pod_status("mysql", "Running"):
+        rprint("       [green]Started MySQL")
 
 
 def create_databases():
@@ -242,8 +252,8 @@ def create_databases():
 
     # Let's create the mysql databases
     for database in CONFIG["mysql"]["databases"]:
-        utils.create_mysql_database(database)
-        print(f"      *  [steel_blue]Created database:[/] {database}")
+        utils.create_mysql_database(database["name"])
+        print(f"      *  [steel_blue]Created database:[/] {database['name']}")
 
 
 def connect_to_mysql() -> None:
