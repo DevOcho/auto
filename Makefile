@@ -10,8 +10,9 @@ NC=\033[0m
 
 init:
 	@printf "Making ${BLUE}auto${NC}\n"
-	@echo "Installing pip3 requirements"
+	@printf "Installing pip3 requirements..."
 	@pip3 -q install -r requirements.txt
+	@printf " done\n"
 	@pre-commit install
 
 
