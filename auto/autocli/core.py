@@ -75,9 +75,25 @@ def populate_registry():
         pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
 
         # Since this is a slow process, let's skip the ones that are already loaded
-        if pod_name not in registry_list["repositories"]:
-            # Build, Tag, and Load the pod image into the registry
-            tag_pod_docker_image(pod_name)
+        if pod_name in registry_list["repositories"]:
+            req = requests.get(
+                f"http://k3d-registry.local:12345/v2/{pod_name}/tags/list", timeout=30
+            )
+            image_info = req.json()
+
+            # We need to load the pod's config and see what version we are on
+            with open(
+                CONFIG["code"] + "/" + pod_name + "/.auto/config.yaml", encoding="utf-8"
+            ) as pod_config_yaml:
+                pod_config = yaml.safe_load(pod_config_yaml)
+            version = pod_config["version"]
+
+            # If the loaded image is the same version as one already there we are skipping it
+            if image_info["tags"] == version:
+                continue
+
+        # Build, Tag, and Load the pod image into the registry
+        tag_pod_docker_image(pod_name)
 
 
 def start_cluster(progress, task):
@@ -167,23 +183,35 @@ def stop_pod(pod) -> None:
 def start_pod(pod) -> None:
     """Start a single pod"""
 
-    user_path = os.path.expanduser("~")
+    # Local Vars
+    os.path.expanduser("~")
+    code_dir = CONFIG["code"]
+    pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
 
-    for config_pod, values in CONFIG["pods"].items():
-        if pod == values["name"]:
-            # is this pod already running?
-            if utils.run_and_wait("""kubectl get pods""", check_result=values["name"]):
-                rprint(f"       * {config_pod}: [steel_blue]already running")
+    # Is this pod already running?
+    if utils.run_and_wait("""kubectl get pods""", check_result=pod_name):
+        rprint(f"       * {pod_name}: [steel_blue]already running")
 
-            # If we aren't running let's start via helm
-            else:
-                command = f"""helm install {values['command_args']} """
-                command += f"""--description \"{values['desc']}\" """
-                command += (
-                    f"""{values['name']} {user_path}/.auto/helm/{values['name']}"""
-                )
-                utils.run_and_wait(command)
-                rprint(f"       * [steel_blue]Helm installed: [/]{pod}")
+    # If we aren't running let's start via helm install or kubectl apply
+    else:
+        # Get the pod config
+        config_file_path = code_dir + "/" + pod_name + "/.auto/config.yaml"
+        with open(config_file_path, encoding="utf-8") as pod_yaml:
+            pod_config = yaml.safe_load(pod_yaml)
+
+        # If they are using helm
+        if re.search("helm", pod_config["command"]):
+            command = f"""{pod_config['command']} {pod_config['command-args']} """
+            command += f"""--description \"{pod_config['desc']}\" """
+            command += f"""{pod_config['name']} {code_dir}/{pod_name}/.auto/helm"""
+
+        # They are using kubectl apply
+        else:
+            command = f"{pod_config['command']} {pod_config['command_args']}"
+
+        # Run the pod install command
+        utils.run_and_wait(command)
+        rprint(f"       * [steel_blue]: {pod}[/] installed")
 
 
 def restart_pod(pod) -> None:
@@ -201,9 +229,9 @@ def restart_pod(pod) -> None:
 
 
 def install_pods_in_cluster() -> None:
-    """Install Portals into the cluster"""
+    """Install Pods into the cluster"""
 
-    print("  -- Installing Portals")
+    print("  -- Installing Pods")
     # Let's setup the code directory PV and PVC in k3s
     user_path = os.path.expanduser("~")
     command = f"kubectl apply -f {user_path}/.auto/k3s/pv.yaml"
@@ -212,11 +240,11 @@ def install_pods_in_cluster() -> None:
     utils.run_and_wait(command)
     rprint("        [green]Setup code directory in k3s")
 
-    rprint("     = Portals:")
-    for values in CONFIG["pods"].items():
-        for pod in values:
-            start_pod(pod)
-            # init_pod_db(pod)
+    # Now let's start all the pods
+    rprint("     = Pods:")
+    for pod in CONFIG["pods"]:
+        start_pod(pod)
+        # init_pod_db(pod)
 
 
 def install_system_pods():
@@ -282,17 +310,17 @@ def tag_pod_docker_image(pod) -> None:
         rprint(f"  -- Found pod {pod}")
 
         # Perform docker build
-        rprint(f"  -- Building {pod} container")
+        rprint(f"  -- Building [bright_cyan]{pod}[/] container")
         command = f"docker build -t {pod}:{version} {code_path}/{pod}"
         utils.run_and_wait(command)
 
         # Tag the image for the registry
-        rprint(f"  -- Tagging {pod} image for the registry")
+        rprint(f"  -- Tagging [bright_cyan]{pod}[/] image for the registry")
         command = f"docker tag {pod}:{version} k3d-registry.local:12345/{pod}:{version}"
         utils.run_and_wait(command)
 
         # Push the image to the registry
-        rprint(f"  -- Pushing {pod} image to the registry")
+        rprint(f"  -- Pushing [bright_cyan]{pod}[/] image to the registry")
         command = f"docker push k3d-registry.local:12345/{pod}:{version}"
         utils.run_and_wait(command)
 
@@ -380,7 +408,7 @@ def pull_and_build_pods():
 
     rprint(" -- pulling code repos")
     for pod in CONFIG["pods"]:
-        rprint(f"    = Pulling [magenta]{pod['repo']}[/]")
+        rprint(f"    = Pulling [steel_blue]{pod['repo']}[/]")
         utils.pull_repo(pod, code_folder)
 
     return CONFIG["pods"]

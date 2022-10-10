@@ -1,5 +1,4 @@
 """Auto Commands"""
-import sys
 
 import click
 from autocli import core
@@ -74,9 +73,6 @@ def start(self, pod, dry_run):  # pylint: disable=unused-argument
                 if new_cluster:
                     core.create_databases()
             progress.update(task, advance=33)
-
-            if not dry_run:
-                sys.exit()
 
             # Build and load our pods
             rprint("[deep_sky_blue1]Building and loading pods...")
