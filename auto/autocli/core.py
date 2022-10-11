@@ -22,10 +22,10 @@ def start_registry():
     # Do we have a registry or do we need to create one?
     bash_command = """/usr/local/bin/k3d registry list"""
     if utils.run_and_wait(bash_command, check_result="k3d-registry.local"):
-        rprint("     = Using existing registry")
+        rprint(" -- Using existing registry")
     else:
         # No registry found so we need to make one
-        rprint("     = Creating new registry")
+        rprint(" -- Creating new registry")
         bash_command = """k3d registry create registry.local --port 12345"""
         utils.run_and_wait(bash_command)
         rprint("    [steel_blue1]Created Registry")
@@ -116,7 +116,7 @@ def start_cluster(progress, task):
 
     # The cluster hasn't already been created so I need to start one
     progress.update(task, advance=5)
-    print("       = Nope, creating cluster.  This will take a minute.")
+    print("     = Nope, creating cluster.  This will take a minute.")
     # if it's not running let's start it
     load_bal_port = 8088
     code_dir = CONFIG["code"]
@@ -129,7 +129,7 @@ def start_cluster(progress, task):
 
     # We want to let the k3d pods finish running so we can remove the temporary ones
     if utils.run_and_wait(bash_command):
-        print("       = Cluster Started.  Waiting for Pods to finish starting...")
+        print("     = Cluster Started.  Waiting for Pods to finish starting...")
         progress.update(task, advance=6)
 
     # When we see "Complete" then we know it's done
@@ -144,7 +144,7 @@ def start_cluster(progress, task):
     bash_command = """kubectl delete pod -n kube-system \
                       --field-selector=status.phase==Succeeded"""
     if utils.run_and_wait(bash_command):
-        print("       = Pods finished starting.  Removed completed setup pods.")
+        print("     = Pods finished starting.  Removed completed setup pods.")
 
     # Tell them this is a new cluster
     return True
@@ -162,7 +162,7 @@ def stop_cluster(progress, task) -> None:
 def delete_cluster(progress, task) -> None:
     """Delete the cluster"""
 
-    print("  -- Deleting cluster")
+    rprint("  -- Deleting cluster :skull::skull:")
     bash_command = """/usr/local/bin/k3d cluster delete"""
     utils.run_and_wait(bash_command)
     progress.update(task, advance=50)
@@ -279,9 +279,10 @@ def create_databases():
     rprint("  -- Creating Databases")
 
     # Let's create the mysql databases
+    print(CONFIG["mysql"])
     for database in CONFIG["mysql"]["databases"]:
         utils.create_mysql_database(database["name"])
-        print(f"      *  [steel_blue]Created database:[/] {database['name']}")
+        rprint(f"      *  Created database: [bright_cyan]{database['name']}")
 
 
 def connect_to_mysql() -> None:
@@ -303,24 +304,24 @@ def tag_pod_docker_image(pod) -> None:
         pod_config = yaml.safe_load(pod_config_yaml)
     version = pod_config["version"]
 
-    rprint(f"[steel_blue]Building and Tagging: [/][bright_cyan]{pod} {version}")
+    rprint(f"  -- Building and Tagging: [bright_cyan]{pod} {version}")
 
     # Verify the pod is real using the users source code folder
     if os.path.isdir(code_path + "/" + pod):
-        rprint(f"  -- Found pod {pod}")
+        rprint(f"     = Found pod {pod}")
 
         # Perform docker build
-        rprint(f"  -- Building [bright_cyan]{pod}[/] container")
+        rprint(f"     = Building [bright_cyan]{pod}[/] container")
         command = f"docker build -t {pod}:{version} {code_path}/{pod}"
         utils.run_and_wait(command)
 
         # Tag the image for the registry
-        rprint(f"  -- Tagging [bright_cyan]{pod}[/] image for the registry")
+        rprint(f"     = Tagging [bright_cyan]{pod}[/] image for the registry")
         command = f"docker tag {pod}:{version} k3d-registry.local:12345/{pod}:{version}"
         utils.run_and_wait(command)
 
         # Push the image to the registry
-        rprint(f"  -- Pushing [bright_cyan]{pod}[/] image to the registry")
+        rprint(f"     = Pushing [bright_cyan]{pod}[/] image to the registry")
         command = f"docker push k3d-registry.local:12345/{pod}:{version}"
         utils.run_and_wait(command)
 
@@ -397,7 +398,7 @@ def verify_dependencies():
     utils.check_k8s()
 
     # Check for hosts entries
-    utils.check_host_entries()
+    utils.check_registry_host_entry()
 
 
 def pull_and_build_pods():
@@ -408,7 +409,7 @@ def pull_and_build_pods():
 
     rprint(" -- pulling code repos")
     for pod in CONFIG["pods"]:
-        rprint(f"    = Pulling [steel_blue]{pod['repo']}[/]")
+        rprint(f"    = Pulling [bright_cyan]{pod['repo']}[/]")
         utils.pull_repo(pod, code_folder)
 
     return CONFIG["pods"]

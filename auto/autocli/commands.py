@@ -1,7 +1,7 @@
 """Auto Commands"""
 
 import click
-from autocli import core
+from autocli import core, utils
 from rich import print as rprint
 from rich.progress import Progress
 
@@ -37,33 +37,35 @@ def start(self, pod, dry_run):  # pylint: disable=unused-argument
             rprint("[deep_sky_blue1]Verify Dependencies")
             if not dry_run:
                 core.verify_dependencies()
-            rprint(" - [green]Dependencies installed and working")
+            rprint(
+                " :white_heavy_check_mark:[green] Dependencies installed and working"
+            )
 
             # Manage code repos and local docker images
             rprint("[deep_sky_blue1]Pulling code and building local images")
             if not dry_run:
                 pods = core.pull_and_build_pods()
-            rprint(" - [green]Pods built")
+            rprint(" :white_heavy_check_mark:[green] Pods built")
 
             # We need our own container registry
             rprint("[deep_sky_blue1]Container Registry")
             if not dry_run:
                 core.start_registry()
-            rprint("       [green]Registry Ready")
+            rprint(" :white_heavy_check_mark:[green] Registry Ready")
             progress.update(task, advance=5)
 
             # Populate the container registry with important images
             rprint("[deep_sky_blue1]Populating Container Registry for faster loading")
             if not dry_run:
                 core.populate_registry()
-            rprint("       [green]Registry Populated")
+            rprint(" :white_heavy_check_mark:[green] Registry Populated")
             progress.update(task, advance=5)
 
             # Start the k3s cluster
             rprint("[deep_sky_blue1]Cluster")
             if not dry_run:
                 new_cluster = core.start_cluster(progress, task)
-            rprint("       [green]Cluster Ready")
+            rprint(" :white_heavy_check_mark:[green] Cluster Ready")
             progress.update(task, advance=33)
 
             # Load system containers
@@ -72,12 +74,14 @@ def start(self, pod, dry_run):  # pylint: disable=unused-argument
                 core.install_system_pods()
                 if new_cluster:
                     core.create_databases()
+            rprint(" :white_heavy_check_mark:[green] System Pods Loaded")
             progress.update(task, advance=33)
 
             # Build and load our pods
             rprint("[deep_sky_blue1]Building and loading pods...")
             if not dry_run:
                 core.install_pods_in_cluster()
+            rprint(" :white_heavy_check_mark:[green] Pods Loaded")
             progress.update(task, advance=34)
 
             # Let's give them a hint on how they can get started
@@ -86,7 +90,8 @@ def start(self, pod, dry_run):  # pylint: disable=unused-argument
             rprint("[italic]You can access your pod(s) via the following URLs:")
             for repo in pods:
                 pod_name = repo["repo"].split("/")[-1:][0].replace(".git", "")
-                rprint(f"[italic]  http://{pod_name}.local:8088/")
+                if utils.check_host_entry(pod_name):
+                    rprint(f"[italic]  http://{pod_name}.local:8088/")
     else:
         rprint(f"[steel_blue]Starting[/] {pod}")
         core.start_pod(pod)

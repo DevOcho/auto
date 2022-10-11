@@ -217,19 +217,31 @@ def check_k8s():
         sys.exit()
 
 
-def check_host_entries():
+def check_registry_host_entry():
     """Check that appropriate host entries are made"""
 
     # check for the k3d-registry.local host entry
+    if not check_host_entry("k3d-registry"):
+        sys.exit()
+
+
+def check_host_entry(host):
+    """Check that a host entry for the pod has been made"""
+
+    # check for the k3d-registry.local host entry
     bash_command = """cat /etc/hosts"""
-    if not run_and_wait(bash_command, check_result="k3d-registry.local"):
+    if not run_and_wait(bash_command, check_result=host):
         rprint(
-            """[red]    ERROR: No registry entry in /etc/hosts ![/]
-             Please add the following to your /etc/hosts file
-             127.0.0.1      k3d-registry.local
+            f"""[red]    :x: ERROR: No registry entry in /etc/hosts ![/]
+       Please add the following to your /etc/hosts file
+       127.0.0.1      {host}.local
           """
         )
-        sys.exit()
+
+        return False
+
+    # We found the entry so tell them everything is ok
+    return True
 
 
 def pull_repo(repo, code_folder):
@@ -252,7 +264,7 @@ def pull_repo(repo, code_folder):
         if not run_and_wait(cmd, check_result="nothing to commit, working tree clean"):
             # If that didn't work tell the user and then reset and leave
             rprint(
-                f"[yellow]       ! Not pulling {repo['repo']} because there are untracked changes"
+                f"[yellow]       :warning: Not pulling {repo['repo']} because there are untracked changes"
             )
             os.chdir(cwd)
             return
@@ -260,7 +272,7 @@ def pull_repo(repo, code_folder):
         # `git pull` the repo
         cmd = f"git pull {repo['repo']}"
         if not run_and_wait(cmd):
-            rprint(f"[yellow]       ! Skipping {repo['repo']}")
+            rprint(f"[yellow]       :warning: Skipping {repo['repo']}")
 
     else:
         try:
@@ -269,12 +281,12 @@ def pull_repo(repo, code_folder):
             cmd = f"git clone {repo['repo']}"
             if not run_and_wait(cmd):
                 rprint(
-                    f"[yellow]       ! Could not clone {repo['repo']} for unknown reasons"
+                    f"[yellow]       :warning: Could not clone {repo['repo']} for unknown reasons"
                 )
         except CalledProcessError:
-            rprint(f"[yellow]       ! Could not clone {repo['repo']}")
+            rprint(f"[yellow]       :warning: Could not clone {repo['repo']}")
             rprint(
-                "[yellow]       ! Make sure the repository exists and you have permission to clone it"
+                "[yellow]       :warning: Make sure the repository exists and you have permission to clone it"
             )
 
     # Now change back to the previous cwd so everything is copacetic
