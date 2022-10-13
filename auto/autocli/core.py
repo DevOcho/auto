@@ -21,9 +21,7 @@ def start_registry():
 
     # Do we have a registry or do we need to create one?
     bash_command = """/usr/local/bin/k3d registry list"""
-    if utils.run_and_wait(bash_command, check_result="k3d-registry.local"):
-        rprint(" -- Using existing registry")
-    else:
+    if not utils.run_and_wait(bash_command, check_result="k3d-registry.local"):
         # No registry found so we need to make one
         rprint(" -- Creating new registry")
         bash_command = """k3d registry create registry.local --port 12345"""
@@ -35,6 +33,9 @@ def start_registry():
 def populate_registry():
     """Load important images into the registry to speed up the deployment of pods"""
 
+    # Local vars
+    skip_version = False
+
     # Get the list of images we want to pre-load from the config file
     registry_load_list = CONFIG["registry"]
 
@@ -45,8 +46,7 @@ def populate_registry():
     # Remove images that are already loaded in the registry
     for image in registry_list["repositories"]:
         for delete_candidate in registry_load_list:
-            candidate_name = delete_candidate["image"].split(":")[0]
-            if re.search(candidate_name, image):
+            if re.search(delete_candidate["image"].split(":")[0], image):
                 registry_load_list.remove(delete_candidate)
 
     # Load new images in the registry
@@ -66,7 +66,7 @@ def populate_registry():
         # Push the image into the registry
         bash_command = "docker push k3d-registry.local:12345/" + image
         utils.run_and_wait(bash_command)
-        rprint("  -- Loaded: [steel_blue]" + image)
+        rprint("  -- Loaded: [bright_cyan]" + image)
 
     # Now we need to build and load the pods
     for pod in CONFIG["pods"]:
@@ -88,8 +88,13 @@ def populate_registry():
                 pod_config = yaml.safe_load(pod_config_yaml)
             version = pod_config["version"]
 
+            # search for this version so we know if we need to skip it
+            for tag in image_info["tags"]:
+                if tag == version:
+                    skip_version = True
+
             # If the loaded image is the same version as one already there we are skipping it
-            if image_info["tags"] == version:
+            if skip_version or image_info["tags"] == version:
                 continue
 
         # Build, Tag, and Load the pod image into the registry
@@ -100,14 +105,11 @@ def start_cluster(progress, task):
     """Start a K3D cluster and return if it is new (true) or existing (false)"""
 
     # Verify the cluster isn't already running
-    rprint("  -- Does a cluster already exist?")
     bash_command = """/usr/local/bin/k3d cluster list"""
     if utils.run_and_wait(bash_command, check_result="k3s-default"):
-        print("     = cluster exists so using it")
 
         # Is the cluster running or stopped?
         if utils.run_and_wait(bash_command, check_result="0/1"):
-            print("         - Uh oh, it's not running... starting it now")
             bash_command = """k3d cluster start"""
             utils.run_and_wait(bash_command)
 
@@ -116,7 +118,7 @@ def start_cluster(progress, task):
 
     # The cluster hasn't already been created so I need to start one
     progress.update(task, advance=5)
-    print("     = Nope, creating cluster.  This will take a minute.")
+    print("  -- Creating cluster (this will take a minute)")
     # if it's not running let's start it
     load_bal_port = 8088
     code_dir = CONFIG["code"]

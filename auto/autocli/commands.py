@@ -113,7 +113,7 @@ def stop(self, pod, dry_run, delete_cluster):  # pylint: disable=unused-argument
     else:
         # Stopping the entire cluster
         with Progress(transient=False) as progress:
-            task = progress.add_task("Stopping Things", total=100)
+            task = progress.add_task("Cluster Shutdown", total=100)
 
             if not dry_run:
                 if delete_cluster:
