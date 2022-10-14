@@ -8,11 +8,12 @@ to create your environment.
 
 ### Dependencies
 You will need a Linux system with the following pre-installed:
-- bash (`auto` uses Bash commands)
-- git
-- docker (both the daemon running and the bash command available as a non-root user)
-- k3d (k3d.io)
-- kubectl
+- Bash (`auto` uses Bash commands)
+- Git
+- Python 3
+- Docker (both the daemon running and the bash command available as a non-root user)
+- K3D (k3d.io)
+- Kubectl
 
 Optional dependencies:
 - Helm (if you plan to use helm charts for deployments)

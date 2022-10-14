@@ -188,7 +188,12 @@ def start_pod(pod) -> None:
     # Local Vars
     os.path.expanduser("~")
     code_dir = CONFIG["code"]
-    pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
+
+    # If we get a dictionary we have to find the pod name from the repo name
+    if isinstance(pod, dict):
+        pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
+    else:
+        pod_name = pod
 
     # Is this pod already running?
     if utils.run_and_wait("""kubectl get pods""", check_result=pod_name):
@@ -213,7 +218,9 @@ def start_pod(pod) -> None:
 
         # Run the pod install command
         utils.run_and_wait(command)
-        rprint(f"       * [steel_blue]: {pod}[/] installed")
+        rprint(
+            f"       * [steel_blue]: {pod_name}[/] installed from branch pod['branch']"
+        )
 
 
 def restart_pod(pod) -> None:
