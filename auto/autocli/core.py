@@ -219,7 +219,7 @@ def start_pod(pod) -> None:
         # Run the pod install command
         utils.run_and_wait(command)
         rprint(
-            f"       * [steel_blue]: {pod_name}[/] installed from branch pod['branch']"
+            f"     * [bright_cyan]: {pod_name}[/] installed from branch {pod['branch']}"
         )
 
 
@@ -240,17 +240,15 @@ def restart_pod(pod) -> None:
 def install_pods_in_cluster() -> None:
     """Install Pods into the cluster"""
 
-    print("  -- Installing Pods")
     # Let's setup the code directory PV and PVC in k3s
     user_path = os.path.expanduser("~")
     command = f"kubectl apply -f {user_path}/.auto/k3s/pv.yaml"
     utils.run_and_wait(command)
     command = f"kubectl apply -f {user_path}/.auto/k3s/pvc.yaml"
     utils.run_and_wait(command)
-    rprint("        [green]Setup code directory in k3s")
 
     # Now let's start all the pods
-    rprint("     = Pods:")
+    rprint("  -- Pods:")
     for pod in CONFIG["pods"]:
         start_pod(pod)
         # init_pod_db(pod)
