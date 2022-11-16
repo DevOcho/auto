@@ -218,9 +218,7 @@ def start_pod(pod) -> None:
 
         # Run the pod install command
         utils.run_and_wait(command)
-        rprint(
-            f"     * [bright_cyan]: {pod_name}[/] installed from branch {pod['branch']}"
-        )
+        rprint(f"     * [bright_cyan]: {pod_name}[/] installed")
 
 
 def restart_pod(pod) -> None:
@@ -286,8 +284,7 @@ def create_databases():
     rprint("  -- Creating Databases")
 
     # Let's create the mysql databases
-    print(CONFIG["mysql"])
-    for database in CONFIG["mysql"]["databases"]:
+    for database in CONFIG["mysql"][0]["databases"]:
         utils.create_mysql_database(database["name"])
         rprint(f"      *  Created database: [bright_cyan]{database['name']}")
 

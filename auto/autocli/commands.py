@@ -1,4 +1,8 @@
-"""Auto Commands"""
+"""Auto Commands
+
+  --dry-run     This is for automated testing and visually testing the output
+  --offline     This disables steps that require internet so you can work without Internet
+"""
 
 import click
 from autocli import core, utils
@@ -20,7 +24,8 @@ def greet():
 @click.pass_context
 @click.argument("pod", required=False)
 @click.option("--dry-run", is_flag=True, default=False)
-def start(self, pod, dry_run):  # pylint: disable=unused-argument
+@click.option("--offline", is_flag=True, default=False)
+def start(self, pod, dry_run, offline):  # pylint: disable=unused-argument
     """Start a new k3s/k3d cluster"""
 
     # Local Vars
@@ -43,7 +48,7 @@ def start(self, pod, dry_run):  # pylint: disable=unused-argument
 
             # Manage code repos and local docker images
             rprint("[deep_sky_blue1]Pulling code and building local images")
-            if not dry_run:
+            if not dry_run and not offline:
                 pods = core.pull_and_build_pods()
             rprint(" :white_heavy_check_mark:[green] Pods built")
 
@@ -150,7 +155,7 @@ def seed(self, pod):  # pylint: disable=unused-argument
 @greet.command()
 @click.pass_context
 @click.argument("pod", required=True)
-def initdb(self, pod):  # pylint: disable=unused-argument
+def init(self, pod):  # pylint: disable=unused-argument
     """Init a pod's databases"""
 
     # Let's do this
