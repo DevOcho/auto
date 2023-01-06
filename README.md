@@ -33,6 +33,17 @@ The `auto` install will update your `~/.bashrc` file to add itself to your path 
 variable.  For that change to take effect you will need to run `source ~/.bashrc` in each
 open terminal or restart your terminals.
 
+If you are using a shell other than Bash, you will want to add the following to your path
+
+```
+# Adding auto to the path
+export PATH="$PATH:/home/$USER/.auto"
+
+# Auto Code Directory
+export AUTO_CODE=/home/rogue/source/devocho/auto
+```
+
+
 ## Quickstart
 
 Once you've installed `auto` you can get up and running with the following steps:
@@ -75,3 +86,7 @@ the following files/folders in your repo.
 /auto/k8s   (if using k8s yaml)
 /auto/helm  (if using helm charts)
 /migrations (database related items [more on this later])
+
+## Usage
+
+Need to write this but for now just use the `auto -h` inline help docs.
