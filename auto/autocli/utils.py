@@ -11,7 +11,7 @@ from time import sleep
 from rich import print as rprint
 
 
-def run_and_wait(cmd: str, check_result="") -> int:
+def run_and_wait(cmd: str, capture_output=True, check_result="") -> int:
     """Run a Bash command and wait for it to finish"""
 
     # Local vars
@@ -22,7 +22,7 @@ def run_and_wait(cmd: str, check_result="") -> int:
     args = shlex.split(cmd)
 
     # Run the command and return the output
-    output = subprocess.run(args, capture_output=True, shell=True, check=True)
+    output = subprocess.run(args, capture_output=capture_output, shell=True, check=True)
 
     if check_result:
         results = output.stdout.splitlines()

@@ -55,7 +55,7 @@ def populate_registry():
 
         # Is this a local image already?
         bash_command = "docker images"
-        if not utils.run_and_wait(bash_command, check_result=image.split(":")[0]):
+        if not utils.run_and_wait(bash_command, check_result=image):
             bash_command = "docker pull " + image
             utils.run_and_wait(bash_command)
 
@@ -208,7 +208,10 @@ def start_pod(pod) -> None:
 
         # If they are using helm
         if re.search("helm", pod_config["command"]):
-            command = f"""{pod_config['command']} {pod_config['command-args']} """
+            if "command-args" in pod_config:
+                command = f"""{pod_config['command']} {pod_config['command-args']} """
+            else:
+                command = f"""{pod_config['command']} """
             command += f"""--description \"{pod_config['desc']}\" """
             command += f"""{pod_config['name']} {code_dir}/{pod_name}/.auto/helm"""
 
@@ -249,14 +252,20 @@ def install_pods_in_cluster() -> None:
     rprint("  -- Pods:")
     for pod in CONFIG["pods"]:
         start_pod(pod)
-        # init_pod_db(pod)
 
 
 def install_system_pods():
     """Install all of the system pods in the cluster"""
 
-    # MySQL
-    install_mysql_in_cluster()
+    # Start all the system pods that are active in the config
+    for pod in CONFIG["system-pods"]:
+        rprint("  -- Starting: " + pod["pod"]["name"])
+        if pod["pod"]["active"]:
+            for command in pod["pod"]["commands"]:
+                try:
+                    utils.run_and_wait(command["command"])
+                except Exception:  # pylint: disable=broad-except
+                    rprint(f"    [red]Error running {command['command']}")
 
 
 def install_mysql_in_cluster() -> None:
@@ -284,9 +293,21 @@ def create_databases():
     rprint("  -- Creating Databases")
 
     # Let's create the mysql databases
-    for database in CONFIG["mysql"][0]["databases"]:
-        utils.create_mysql_database(database["name"])
-        rprint(f"      *  Created database: [bright_cyan]{database['name']}")
+    for system_pod in CONFIG["system-pods"]:
+        if system_pod["pod"]["name"] == "mysql":
+
+            # Let's wait for the MySQL pod to start
+            if utils.wait_for_pod_status("mysql", "Running"):
+                rprint("       [green]MySQL running")
+                # I haven't thought of a better way to handle this
+                # The pod is running but I need to give MySQL a few seconds to
+                # Start inside the pod.
+                time.sleep(5)
+
+            # Create the database
+            for database in system_pod["pod"]["databases"]:
+                utils.create_mysql_database(database["name"])
+                rprint(f"      *  Created database: [bright_cyan]{database['name']}")
 
 
 def connect_to_mysql() -> None:
@@ -372,7 +393,7 @@ def seed_pod(pod):
 
     # Setup the schema
     command = f"kubectl exec -ti {pod_name} -- ./seeddb.py"
-    utils.run_and_wait(command)
+    utils.run_and_wait(command, capture_output=False)
 
     # Tell the user we did it
     rprint(f"  -- {pod} database seeded")
@@ -386,7 +407,7 @@ def init_pod_db(pod):
 
     # Setup the schema
     command = f"kubectl exec -ti {pod_name} -- ./initdb.py"
-    utils.run_and_wait(command)
+    utils.run_and_wait(command, capture_output=False)
 
     # Tell the user we did it
     rprint(f"  -- {pod} database initialized")

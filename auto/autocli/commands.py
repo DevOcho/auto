@@ -147,7 +147,11 @@ def restart(self, pod):  # pylint: disable=unused-argument
 def seed(self, pod):  # pylint: disable=unused-argument
     """Seed a pod's databases"""
 
-    # Let's do this
+    # We have to init the pod before we can seed it
+    rprint(f"[steel_blue]Initializing [/]{pod}[steel_blue] pod")
+    core.init_pod_db(pod)
+
+    # Now we can seed the pod
     rprint(f"[steel_blue]Seeding [/]{pod}[steel_blue] pod")
     core.seed_pod(pod)
 
