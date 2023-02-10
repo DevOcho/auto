@@ -263,9 +263,10 @@ def install_system_pods():
         if pod["pod"]["active"]:
             for command in pod["pod"]["commands"]:
                 try:
-                    utils.run_and_wait(command["command"])
+                    # utils.run_and_wait(command["command"])
+                    utils.run_and_wait(command)
                 except Exception:  # pylint: disable=broad-except
-                    rprint(f"    [red]Error running {command['command']}")
+                    rprint(f"    [red]Error running {command}")
 
 
 def install_mysql_in_cluster() -> None:
