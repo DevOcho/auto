@@ -22,20 +22,26 @@ def run_and_wait(cmd: str, capture_output=True, check_result="") -> int:
     args = shlex.split(cmd)
 
     # Run the command and return the output
-    output = subprocess.run(args, capture_output=capture_output, shell=True, check=True)
+    try:
+        output = subprocess.run(
+            args, capture_output=capture_output, shell=True, check=True
+        )
 
-    if check_result:
-        results = output.stdout.splitlines()
-        for line in results:
-            if re.search(check_result, str(line)):
-                found = 1
+        if check_result:
+            results = output.stdout.splitlines()
+            for line in results:
+                if re.search(check_result, str(line)):
+                    found = 1
 
-        # Returning either that the check was successful (if there was a check)
-        # or that the command was successful (if there wasn't a check)
-        return found
+            # Returning either that the check was successful (if there was a check)
+            # or that the command was successful (if there wasn't a check)
+            return found
 
-    # Get to this point implies success
-    return 1
+        # Get to this point implies success
+        return 1
+
+    except CalledProcessError:
+        return 0
 
 
 def run_async(cmd: str) -> bytes:
@@ -65,12 +71,12 @@ def verify_pod_is_installed(pod: str) -> bool:
     return pod_name or run_and_wait("""kubectl get pods""", check_result=pod)
 
 
-def wait_for_pod_status(podname: str, status: str, max_wait_time=30) -> None:
+def wait_for_pod_status(podname: str, status: str, max_wait_time=60) -> None:
     """Check for a pod to be complete and then return"""
 
     # Local vars
     pod_complete = 0
-    cycles = 0
+    cycles = 0  # Each cycle is a half a second
 
     while not pod_complete or cycles < max_wait_time:
         # Get the pod(s) in question
@@ -88,7 +94,7 @@ def wait_for_pod_status(podname: str, status: str, max_wait_time=30) -> None:
                     pod_complete = 1
 
         cycles += 1
-        sleep(1)
+        sleep(0.5)
 
 
 def get_full_pod_name(pod) -> str:

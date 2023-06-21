@@ -43,7 +43,7 @@ def populate_registry():
     req = requests.get("http://k3d-registry.local:12345/v2/_catalog", timeout=30)
     registry_list = req.json()
 
-    # Remove images that are already loaded in the registry
+    # Remove images that are already loaded in the registry since we don't need to load them
     for image in registry_list["repositories"]:
         for delete_candidate in registry_load_list:
             if re.search(delete_candidate["image"].split(":")[0], image):
@@ -263,7 +263,6 @@ def install_system_pods():
         if pod["pod"]["active"]:
             for command in pod["pod"]["commands"]:
                 try:
-                    # utils.run_and_wait(command["command"])
                     utils.run_and_wait(command)
                 except Exception:  # pylint: disable=broad-except
                     rprint(f"    [red]Error running {command}")
@@ -302,7 +301,7 @@ def create_databases():
                 rprint("       [green]MySQL running")
                 # I haven't thought of a better way to handle this
                 # The pod is running but I need to give MySQL a few seconds to
-                # Start inside the pod.
+                # start inside the pod.
                 time.sleep(5)
 
             # Create the database

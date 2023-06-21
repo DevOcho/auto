@@ -14,7 +14,7 @@ CONTEXT_SETTINGS = dict(help_option_names=["-h", "--help"], ignore_unknown_optio
 
 
 @click.group(context_settings=CONTEXT_SETTINGS)
-@click.version_option(version="0.0.1")
+@click.version_option(version="0.1.0")
 def greet():
     """Commandline utility to assist with creating/deleting clusters and
     starting/stopping pods."""
