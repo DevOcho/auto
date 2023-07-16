@@ -46,43 +46,45 @@ def start(self, pod, dry_run, offline):  # pylint: disable=unused-argument
                 " :white_heavy_check_mark:[green] Dependencies installed and working"
             )
 
-            # Manage code repos and local docker images
+            # STEP 2: Manage code repos and local docker images
             rprint("[deep_sky_blue1]Pulling code and building local images")
             if not dry_run and not offline:
                 pods = core.pull_and_build_pods()
             rprint(" :white_heavy_check_mark:[green] Pods built")
 
-            # We need our own container registry
+            # STEP 3: We need our own container registry
             rprint("[deep_sky_blue1]Container Registry")
             if not dry_run:
                 core.start_registry()
             rprint(" :white_heavy_check_mark:[green] Registry Ready")
             progress.update(task, advance=5)
 
-            # Populate the container registry with important images
+            # STEP 4: Populate the container registry with important images
             rprint("[deep_sky_blue1]Populating Container Registry for faster loading")
             if not dry_run:
                 core.populate_registry()
             rprint(" :white_heavy_check_mark:[green] Registry Populated")
             progress.update(task, advance=5)
 
-            # Start the k3s cluster
+            # STEP 5: Start the k3s cluster
             rprint("[deep_sky_blue1]Cluster")
             if not dry_run:
                 new_cluster = core.start_cluster(progress, task)
             rprint(" :white_heavy_check_mark:[green] Cluster Ready")
             progress.update(task, advance=33)
 
-            # Load system containers
+            # STEP 6: Load system containers
             rprint("[deep_sky_blue1]Loading system pods...")
             if not dry_run:
+                # Load system containers and system containers requested by pods
                 core.install_system_pods()
+
                 if new_cluster:
                     core.create_databases()
             rprint(" :white_heavy_check_mark:[green] System Pods Loaded")
             progress.update(task, advance=33)
 
-            # Build and load our pods
+            # STEP 7: Build and load our pods
             rprint("[deep_sky_blue1]Building and loading pods...")
             if not dry_run:
                 core.install_pods_in_cluster()

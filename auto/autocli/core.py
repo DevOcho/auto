@@ -119,7 +119,6 @@ def start_cluster(progress, task):
     # The cluster hasn't already been created so I need to start one
     progress.update(task, advance=5)
     print("  -- Creating cluster (this will take a minute)")
-    # if it's not running let's start it
     load_bal_port = 8088
     code_dir = CONFIG["code"]
     bash_command = f"""/usr/local/bin/k3d cluster create \
@@ -257,11 +256,31 @@ def install_pods_in_cluster() -> None:
 def install_system_pods():
     """Install all of the system pods in the cluster"""
 
-    # Start all the system pods that are active in the config
+    # Local Vars
+    pod_list = []
+
+    # Get all the system pods that are active in the global config
     for pod in CONFIG["system-pods"]:
-        rprint("  -- Starting: " + pod["pod"]["name"])
-        if pod["pod"]["active"]:
-            for command in pod["pod"]["commands"]:
+        if pod["active"]:
+            if pod not in pod_list:
+                pod_list.append(pod)
+
+    # Now get the requested system pods from the pod configs
+    for pod in CONFIG["pods"]:
+        # Load the pod config to see what system pods it wants
+        pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
+        pod_config = utils.get_pod_config(pod_name)
+        for pod in pod_config["system-pods"]:
+            if pod["name"] not in pod_list:
+                pod_list.append(pod["name"])
+
+    # Now let's start the ones that we found
+    for pod in CONFIG["system-pods"]:
+        rprint(f"[red]HERE: [/red]{pod}")
+        if pod["name"] in pod_list:
+            rprint(f"[red]HERE[/red]")
+            rprint("  -- Starting: " + pod["name"])
+            for command in pod["commands"]:
                 try:
                     utils.run_and_wait(command)
                 except Exception:  # pylint: disable=broad-except
@@ -294,20 +313,25 @@ def create_databases():
 
     # Let's create the mysql databases
     for system_pod in CONFIG["system-pods"]:
-        if system_pod["pod"]["name"] == "mysql":
+        if system_pod["name"] == "mysql":
 
             # Let's wait for the MySQL pod to start
             if utils.wait_for_pod_status("mysql", "Running"):
                 rprint("       [green]MySQL running")
                 # I haven't thought of a better way to handle this
                 # The pod is running but I need to give MySQL a few seconds to
-                # start inside the pod.
+                # start inside the pod.  Probably should just keep trying to run
+                # a command until it succeeds?
                 time.sleep(5)
 
-            # Create the database
-            for database in system_pod["pod"]["databases"]:
-                utils.create_mysql_database(database["name"])
-                rprint(f"      *  Created database: [bright_cyan]{database['name']}")
+            # Create the databases requested in each of the pods
+            for pod in CONFIG["pods"]:
+                pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
+                pod_config = utils.get_pod_config(pod_name)
+                for system_pod in pod_config["system-pods"]:
+                    for database in system_pod["databases"]:
+                        utils.create_mysql_database(database["name"])
+                        rprint(f"      *  Created database: [bright_cyan]{database['name']}")
 
 
 def connect_to_mysql() -> None:
@@ -429,9 +453,11 @@ def verify_dependencies():
 def pull_and_build_pods():
     """Pull all git repos, then docker build, then upload the images to the local registry"""
 
+    # Set the code folder from config and notify the user
     code_folder = CONFIG["code"]
     rprint(f" -- using code folder: {code_folder}")
 
+    # Pull each repo so we have it locally
     rprint(" -- pulling code repos")
     for pod in CONFIG["pods"]:
         rprint(f"    = Pulling [bright_cyan]{pod['repo']}[/]")

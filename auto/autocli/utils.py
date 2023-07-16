@@ -5,10 +5,19 @@ import re
 import shlex
 import subprocess
 import sys
+import yaml
 from subprocess import CalledProcessError
 from time import sleep
 
 from rich import print as rprint
+
+
+# Read Config and provide globally
+CONFIG = {}
+with open(
+    os.path.expanduser("~") + "/.auto/config/local.yaml", encoding="utf-8"
+) as yaml_file:
+    CONFIG = yaml.safe_load(yaml_file)
 
 
 def run_and_wait(cmd: str, capture_output=True, check_result="") -> int:
@@ -297,3 +306,13 @@ def pull_repo(repo, code_folder):
 
     # Now change back to the previous cwd so everything is copacetic
     os.chdir(cwd)
+
+def get_pod_config(pod):
+    """Get the individual config for a pod"""
+
+    with open(
+        CONFIG["code"] + "/" + pod + "/.auto/config.yaml", encoding="utf-8"
+    ) as pod_config_yaml:
+        pod_config = yaml.safe_load(pod_config_yaml)
+
+    return pod_config
