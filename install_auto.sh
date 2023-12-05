@@ -42,12 +42,12 @@ then
     echo '           or you can type "source ~/.bashrc" in the terminal';\
 
     # Now set an ENV var for the code directory
-    CODE_DIR=$(pwd)
-    echo '';\
-    echo "Setting Auto Code Directory to $CODE_DIR";\
-    echo '' >> ~/.bashrc;\
-    echo '# Auto Code Directory' >> ~/.bashrc;\
-    echo "export AUTO_CODE=$CODE_DIR" >> ~/.bashrc;\
+    #CODE_DIR=$(pwd)
+    #echo '';\
+    #echo "Setting Auto Code Directory to $CODE_DIR";\
+    #echo '' >> ~/.bashrc;\
+    #echo '# Auto Code Directory' >> ~/.bashrc;\
+    #echo "export AUTO_CODE=$CODE_DIR" >> ~/.bashrc;\
 fi
 
 printf "\nYou now have ${BLUE}auto${NC} installed.\n"

@@ -389,6 +389,9 @@ def output_logs(pod):
 
     pod_name = utils.get_full_pod_name(pod)
 
+    if not pod_name:
+        utils.declare_error("Pod not found: {pod}")
+
     rprint(f"Printing logs for {pod_name}")
     rprint("[steel_blue]Press ^C to exit")
 
@@ -405,38 +408,29 @@ def output_logs(pod):
 def seed_pod(pod):
     """Run the seeddb.py script inside a pod's container"""
 
-    # Let's see which pod we need to execute commands against
-    pod_name = utils.get_full_pod_name(pod)
+    # Get the pod config and the init command
+    config = utils.get_pod_config(pod)
+    seed_command = config["seed-command"]
 
-    # Setup the schema
-    command = f"kubectl exec -ti {pod_name} -- ./seeddb.py"
-    utils.run_and_wait(command, capture_output=False)
+    # Run the command
+    utils.run_command_inside_pod(pod, seed_command)
 
-    # Tell the user we did it
+    # Tell the user
     rprint(f"  -- {pod} database seeded")
 
 
 def init_pod_db(pod):
     """Run the initdb.py script inside a pod's container"""
 
-    # Verify this pod is installed and running
-    pod_name = utils.get_full_pod_name(pod)
-    if not pod_name:
-        utils.declare_error(f"[bright_cyan]{pod}[/bright_cyan] pod is not running")
-
     # Get the pod config and the init command
     config = utils.get_pod_config(pod)
     init_command = config["init-command"]
 
-    # Init the database
-    if config:
-        command = f"kubectl exec -ti {pod_name} -- {init_command}"
-        utils.run_and_wait(command, capture_output=False)
+    # Run the command
+    utils.run_command_inside_pod(pod, init_command)
 
-        # Tell the user we did it
-        rprint(f"  -- {pod} database initialized")
-    else:
-        utils.declare_error(f"  !! {pod} could [red]NOT[/red] be initialized")
+    # Tell the user
+    rprint(f"  -- {pod} database initialized")
 
 
 def verify_dependencies():

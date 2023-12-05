@@ -158,6 +158,7 @@ def seed(self, pod):  # pylint: disable=unused-argument
     # We have to init the pod before we can seed it
     rprint(f"[steel_blue]Initializing [/]{pod}[steel_blue] pod")
     core.init_pod_db(pod)
+    rprint()
 
     # Now we can seed the pod
     rprint(f"[steel_blue]Seeding [/]{pod}[steel_blue] pod")

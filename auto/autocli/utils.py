@@ -28,8 +28,24 @@ def load_config():
     return config
 
 
-# Read Config and provide globally
-CONFIG = load_config()
+def run_command_inside_pod(pod, command):
+    """Run a command inside a pod"""
+
+    # Verify this pod is installed and running
+    pod_name = get_full_pod_name(pod)
+    if not pod_name:
+        declare_error(f"[bright_cyan]{pod}[/bright_cyan] pod is not running")
+
+    # Get the pod config and the init command
+    config = get_pod_config(pod)
+
+    # Init the database
+    if config:
+        command = f"kubectl exec -ti {pod_name} -- /mnt/code/{pod}/{command}"
+        run_and_wait(command, capture_output=False)
+
+    else:
+        declare_error(f"  !! {pod} could [red]NOT[/red] run command")
 
 
 def declare_error(error_msg: str):
@@ -323,7 +339,10 @@ def get_pod_config(pod):
 
     # Local Vars
     config = {}
-    config_file = CONFIG["code"] + "/" + pod + "/.auto/config.yaml"
+
+    # Read Config and provide globally
+    auto_config = load_config()
+    config_file = auto_config["code"] + "/" + pod + "/.auto/config.yaml"
 
     # Does the config file exist?
     if not os.path.isfile(config_file):
