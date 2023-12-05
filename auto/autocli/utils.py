@@ -12,12 +12,24 @@ from time import sleep
 import yaml
 from rich import print as rprint
 
+
+def load_config():
+    """Load the global auto config"""
+
+    # Local vars
+    config = {}
+
+    # Read Config and provide the data
+    with open(
+        os.path.expanduser("~") + "/.auto/config/local.yaml", encoding="utf-8"
+    ) as yaml_file:
+        config = yaml.safe_load(yaml_file)
+
+    return config
+
+
 # Read Config and provide globally
-CONFIG = {}
-with open(
-    os.path.expanduser("~") + "/.auto/config/local.yaml", encoding="utf-8"
-) as yaml_file:
-    CONFIG = yaml.safe_load(yaml_file)
+CONFIG = load_config()
 
 
 def declare_error(error_msg: str):
@@ -25,25 +37,6 @@ def declare_error(error_msg: str):
 
     rprint(f"\n [red]:x: Error[/red]: {error_msg}")
     sys.exit()
-
-
-def retrieve_pod_config(pod: str):
-    """Retrieve and return the `auto` config file in the pod"""
-
-    # Local Vars
-    config = {}
-    config_file = CONFIG["code"] + "/" + pod + "/.auto/config.yaml"
-
-    # Does the config file exist?
-    if not os.path.isfile(config_file):
-        declare_error(f"Config file not found at: {config_file}")
-
-    # Load the config file for this pod
-    configparser.ConfigParser()
-    with open(config_file, encoding="utf-8") as config_handle:
-        config = yaml.safe_load(config_handle)
-
-    return config
 
 
 def run_and_wait(cmd: str, capture_output=True, check_result="") -> int:
@@ -323,3 +316,22 @@ def pull_repo(repo, code_folder):
 
     # Now change back to the previous cwd so everything is copacetic
     os.chdir(cwd)
+
+
+def get_pod_config(pod):
+    """Get the individual config for a pod"""
+
+    # Local Vars
+    config = {}
+    config_file = CONFIG["code"] + "/" + pod + "/.auto/config.yaml"
+
+    # Does the config file exist?
+    if not os.path.isfile(config_file):
+        declare_error(f"Config file not found at: {config_file}")
+
+    # Load the config file for this pod
+    configparser.ConfigParser()
+    with open(config_file, encoding="utf-8") as config_handle:
+        config = yaml.safe_load(config_handle)
+
+    return config

@@ -33,7 +33,7 @@ You can install it with the following commands:
 ```bash
 git clone git@github.com:DevOcho/auto.git
 cd auto
-make && make install
+./install_auto.sh
 ```
 
 The `auto` install will update your `~/.bashrc` file to add itself to your path

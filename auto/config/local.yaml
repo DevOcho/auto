@@ -10,17 +10,19 @@ pods:
 # We will pre-load the following images into the local k3s container registry
 registry:
   - image: mysql:8.0
-  - image: proxysql/proxysql:2.3.2
-  - image: minio/minio:RELEASE.2022-09-17T00-09-45Z
+  #- image: proxysql/proxysql:2.3.2
+  #- image: minio/minio:RELEASE.2022-09-17T00-09-45Z
 
-# Database config
-mysql:
-  - active: true
-    databases:
-      - name: dev_training
 
-minio:
-  - active: true
+# System Pods (for use with every pod)
+system-pods:
 
-proxysql:
-  - active: true
+  # Database config
+  - pod: mysql
+    name: mysql
+    active: false  # set this to true if you want it to start even when not asked for
+    commands:
+      - kubectl apply -f ~/.auto/k3s/mysql/pv.yaml
+      - kubectl apply -f ~/.auto/k3s/mysql/pvc.yaml
+      - kubectl apply -f ~/.auto/k3s/mysql/deployment.yaml
+      - kubectl apply -f ~/.auto/k3s/mysql/service.yaml
