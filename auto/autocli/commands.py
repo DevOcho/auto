@@ -1,7 +1,7 @@
 """Auto Commands
 
-  --dry-run     This is for automated testing and visually testing the output
-  --offline     This disables steps that require internet so you can work without Internet
+  * `--dry-run`     This is for automated testing and visually testing the output
+  * `--offline`     This disables steps that require internet so you can work without Internet
 """
 
 import click
@@ -10,17 +10,23 @@ from rich import print as rprint
 from rich.progress import Progress
 
 # Global settings for click
-CONTEXT_SETTINGS = dict(help_option_names=["-h", "--help"], ignore_unknown_options=True)
+CONTEXT_SETTINGS = {
+    "help_option_names": ["-h", "--help"],
+    "ignore_unknown_options": True,
+}
 
 
 @click.group(context_settings=CONTEXT_SETTINGS)
-@click.version_option(version="0.1.0")
-def greet():
+@click.version_option(version="0.2.0")
+def auto():
     """Commandline utility to assist with creating/deleting clusters and
-    starting/stopping pods."""
+    starting/stopping pods.
+
+    This function is used to group all of the commands together.
+    """
 
 
-@greet.command()
+@auto.command()
 @click.pass_context
 @click.argument("pod", required=False)
 @click.option("--dry-run", is_flag=True, default=False)
@@ -102,7 +108,7 @@ def start(self, pod, dry_run, offline):  # pylint: disable=unused-argument
         core.start_pod(pod)
 
 
-@greet.command()
+@auto.command()
 @click.pass_context
 @click.argument("pod", required=False)
 @click.option("--dry-run", is_flag=True, default=False)
@@ -130,7 +136,7 @@ def stop(self, pod, dry_run, delete_cluster):  # pylint: disable=unused-argument
             progress.update(task, advance=50)
 
 
-@greet.command()
+@auto.command()
 @click.pass_context
 @click.argument("pod", required=True)
 def restart(self, pod):  # pylint: disable=unused-argument
@@ -141,7 +147,7 @@ def restart(self, pod):  # pylint: disable=unused-argument
     core.restart_pod(pod)
 
 
-@greet.command()
+@auto.command()
 @click.pass_context
 @click.argument("pod", required=True)
 def seed(self, pod):  # pylint: disable=unused-argument
@@ -156,18 +162,24 @@ def seed(self, pod):  # pylint: disable=unused-argument
     core.seed_pod(pod)
 
 
-@greet.command()
+@auto.command()
 @click.pass_context
 @click.argument("pod", required=True)
 def init(self, pod):  # pylint: disable=unused-argument
-    """Init a pod's databases"""
+    """Init a pod's databases.
+
+    `auto` can run a script to initialize your database inside the pod
+
+    It will look for the the `db-init` config entry and then run that.
+    if it doesn't see an entry it will let you know.
+    """
 
     # Let's do this
     rprint(f"[steel_blue]Initializing [/]{pod}[steel_blue] pod database")
     core.init_pod_db(pod)
 
 
-@greet.command()
+@auto.command()
 @click.pass_context
 def mysql(self):  # pylint: disable=unused-argument
     """Connect to the mysql database"""
@@ -176,7 +188,7 @@ def mysql(self):  # pylint: disable=unused-argument
     core.connect_to_mysql()
 
 
-@greet.command()
+@auto.command()
 @click.argument("pod")
 @click.pass_context
 def logs(self, pod):  # pylint: disable=unused-argument
@@ -186,11 +198,21 @@ def logs(self, pod):  # pylint: disable=unused-argument
     core.output_logs(pod)
 
 
-@greet.command()
+@auto.command()
 @click.argument("pod")
 @click.pass_context
 def tag(self, pod):  # pylint: disable=unused-argument
     """Build, Tag, and Load a pod container image in the local repository"""
+
+    # Build, Tag, and load pod in local repository
+    core.tag_pod_docker_image(pod)
+
+
+@auto.command()
+@click.argument("pod")
+@click.pass_context
+def upgrade(self, pod):  # pylint: disable=unused-argument
+    """Remove container registry, create it again, then repopulate it, then restart the cluster"""
 
     # Build, Tag, and load pod in local repository
     core.tag_pod_docker_image(pod)

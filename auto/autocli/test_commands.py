@@ -3,10 +3,10 @@ from autocli import commands
 from click.testing import CliRunner
 
 
-def test_greet():
-    """Test the greet command function in auto"""
+def test_auto():
+    """Test the auto command function in auto"""
     runner = CliRunner()
-    result = runner.invoke(commands.greet)
+    result = runner.invoke(commands.auto)
     assert result.exit_code == 0
 
 

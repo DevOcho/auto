@@ -17,7 +17,7 @@ def main():
     # Print a fancy header
     fig = Figlet(font="small")
     print(fig.renderText("auto"))
-    commands.greet()
+    commands.auto()
 
 
 if __name__ == "__main__":

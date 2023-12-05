@@ -8,6 +8,9 @@ flake8
 gitpython
 isort
 mccabe
+mkdocs
+mkdocs-material
+mkdocstrings-python
 myst-parser
 pre-commit
 pyfiglet
@@ -16,7 +19,5 @@ pytest
 pytest-cov
 pyupgrade
 rich
-sphinx
-sphinx-theme
 toml
 types-toml

@@ -1,0 +1,16 @@
+site_name: Auto CLI - Technical Documentation
+
+theme:
+  name: "material"
+  features:
+    - navigation.instant
+  logo: assets/devocho-log-white-web-optimized.png
+  favicon: assets/favicon.ico
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [bread]

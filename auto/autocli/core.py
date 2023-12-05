@@ -70,7 +70,6 @@ def populate_registry():
 
     # Now we need to build and load the pods
     for pod in CONFIG["pods"]:
-
         # What is the name of this pod?
         pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
 
@@ -107,7 +106,6 @@ def start_cluster(progress, task):
     # Verify the cluster isn't already running
     bash_command = """/usr/local/bin/k3d cluster list"""
     if utils.run_and_wait(bash_command, check_result="k3s-default"):
-
         # Is the cluster running or stopped?
         if utils.run_and_wait(bash_command, check_result="0/1"):
             bash_command = """k3d cluster start"""
@@ -295,7 +293,6 @@ def create_databases():
     # Let's create the mysql databases
     for system_pod in CONFIG["system-pods"]:
         if system_pod["pod"]["name"] == "mysql":
-
             # Let's wait for the MySQL pod to start
             if utils.wait_for_pod_status("mysql", "Running"):
                 rprint("       [green]MySQL running")
@@ -402,15 +399,24 @@ def seed_pod(pod):
 def init_pod_db(pod):
     """Run the initdb.py script inside a pod's container"""
 
-    # Let's see which pod we need to execute commands against
+    # Verify this pod is installed and running
     pod_name = utils.get_full_pod_name(pod)
+    if not pod_name:
+        utils.declare_error(f"[bright_cyan]{pod}[/bright_cyan] pod is not running")
 
-    # Setup the schema
-    command = f"kubectl exec -ti {pod_name} -- ./initdb.py"
-    utils.run_and_wait(command, capture_output=False)
+    # Get the pod config and the init command
+    config = utils.retrieve_pod_config(pod)
+    init_command = config["init-command"]
 
-    # Tell the user we did it
-    rprint(f"  -- {pod} database initialized")
+    # Init the database
+    if config:
+        command = f"kubectl exec -ti {pod_name} -- {init_command}"
+        utils.run_and_wait(command, capture_output=False)
+
+        # Tell the user we did it
+        rprint(f"  -- {pod} database initialized")
+    else:
+        utils.declare_error(f"  !! {pod} could [red]NOT[/red] be initialized")
 
 
 def verify_dependencies():
