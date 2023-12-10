@@ -1,14 +1,15 @@
 # `auto`
+
 Easily manage your k3s/k3d local development environment using k8s YAML
 configs or helm charts.
 
-`auto` sets up a k3s environment utilizing k3d (k3s in docker).  It then
-uses your config files to create your environment.  At DevOcho we have the goal
+`auto` sets up a loccal k3s environment utilizing k3d (k3s in docker).  It then
+uses config files to create your environment.  At DevOcho we have the goal
 of a sub 10 minute start up for a developer joining a project.  `auto` helps us
 achieve that goal.  We explain our process a bit more at the bottom of
-the README.  One amazing benefit of this 10 minute start, is if anything
-obscure breaks, the developer is typically able to recover the entire
-local development environment in 10 minutes.  This is a huge boost to
+the README.  One amazing benefit of this less than 10 minute start, is that
+if anything obscure breaks, the developer is typically able to recover the
+entire local development environment in 10 minutes.  This is a huge boost to
 productivity.
 
 
@@ -16,6 +17,7 @@ productivity.
 
 - [ ] Create `auto status` to show where things are
 - [ ] Create `auto update` to update to the latest version of auto
+- [ ] Create `auto migrations` run database migrations in a pod
 
 
 ## Install `auto`
@@ -56,8 +58,14 @@ This is what we did in your .bashrc file:
 export PATH="$PATH:/home/$USER/.auto"
 ```
 
-If you are using a shell other than Bash, you will want to add the .auto folder
-to your path.
+If you are using a shell other than Bash, you will want to add the `~/.auto`
+folder to your path.
+
+You can verify `auto` is installed with the following command:
+
+```bash
+auto --version
+```
 
 
 ## Quickstart
@@ -68,9 +76,25 @@ Once you've installed `auto` you can get up and running with the following steps
 
 The install process installed a config folder for you.  Inside the config
 folder is the `local.yaml` file.  The `local.yaml` file tells `auto` about
-your desired local environment.  `auto` checks the `[pods]` section to see
-which pods you want to run in your local k3s cluster.  We assume each pod
-is in it's own separate git repository.
+your desired local environment.
+
+#### The local code folder
+
+You need to edit the `code` folder in the `~/.auto/config/local.yaml` file to
+be a location that you want your project code to go.  By default this is
+`~/source`.  If this isn't where you want things then you need to change it.
+This is what I have set for mine:
+
+```bash
+# The code folder is where we will download all of your pod code repositories
+code: /home/rogue/source/devocho
+```
+
+#### Adding Your Pods
+
+`auto` checks the `[pods]` section to see which pods you want to run in
+your local k3s cluster.  We assume each pod is in it's own separate git
+repository.
 
 Below is an example to show you how to setup a pod:
 
@@ -124,6 +148,8 @@ Once you have the config files ready, you can start the cluster and pods with th
 auto start
 ```
 
+The technical documentation has many more specifics you might enjoy.
+
 ## Usage
 
 You can get basic help by running `auto --help`.  For more in-depth assistance
@@ -156,18 +182,18 @@ working on the config or Dockerfile.
 Start a MySQL shell to the service MySQL pod in your cluster.  Nice for creating
 databases or quick debugging.
 
-### `auto init`
+### `auto init <pod>`
 
 This is a convenience method for running an initialize script in your pod that
 can reset the database back to it's initial configuration (before seed data
 and before migrations).
 
-### `auto seed`
+### `auto seed <pod>`
 
 This is a convenience method for running a database seed script in your pod
 that will provide test data.
 
-### `auto tag`
+### `auto tag <pod>`
 
 This will build the local pod image, tag it, and upload it to the local
 repository.

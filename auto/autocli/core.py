@@ -255,7 +255,7 @@ def install_system_pods():
 
     # Get all the system pods that are active in the global config
     for pod in CONFIG["system-pods"]:
-        if pod["active"]:
+        if pod["pod"]["active"]:
             if pod not in pod_list:
                 pod_list.append(pod)
 
@@ -264,13 +264,14 @@ def install_system_pods():
         # Load the pod config to see what system pods it wants
         pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
         pod_config = utils.get_pod_config(pod_name)
-        for pod in pod_config["system-pods"]:
-            if pod["name"] not in pod_list:
-                pod_list.append(pod["name"])
+        if "system-pods" in pod_config:
+            for pod in pod_config["system-pods"]:
+                if "name" in pod and pod["name"] not in pod_list:
+                    pod_list.append(pod["name"])
 
     # Now let's start the ones that we found
     for pod in CONFIG["system-pods"]:
-        if pod["name"] in pod_list:
+        if "name" in pod and pod["name"] in pod_list:
             rprint("  -- Starting: " + pod["name"])
             for command in pod["commands"]:
                 try:
