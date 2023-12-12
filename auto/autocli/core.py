@@ -1,6 +1,7 @@
 """Imports"""
 import os
 import re
+import shutil
 import time
 
 import requests
@@ -461,3 +462,31 @@ def pull_and_build_pods():
         utils.pull_repo(pod, code_folder)
 
     return CONFIG["pods"]
+
+
+def install_config_from_repo(repo):
+    """Install an auto parent config from a repository"""
+
+    # Local vars
+    user_path = os.path.expanduser("~")
+
+    # Tell the user
+    rprint(f"Installing Parent Config: [bright_cyan]{repo}[/]")
+
+    # If there is already a file there let's back it up
+    if os.path.isfile(user_path + "/.auto/config/local.yaml"):
+        shutil.move(
+            user_path + "/.auto/config/local.yaml",
+            user_path + "/.auto/config/local.yaml.bak",
+        )
+
+    # Pull the parent repo
+    code_repo = {"repo": repo}
+    utils.pull_repo(code_repo, CONFIG["code"])
+
+    # Copy the file to the ~/.auto/config/local.yaml folder
+    parent_folder = repo.split("/")[-1:][0].replace(".git", "")
+    shutil.copy(
+        CONFIG["code"] + "/" + parent_folder + "/local.yaml",
+        user_path + "/.auto/config/local.yaml",
+    )

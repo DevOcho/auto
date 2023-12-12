@@ -9,6 +9,7 @@
 """Modules"""
 from autocli import commands
 from pyfiglet import Figlet
+from rich import print as rprint
 
 
 def main():
@@ -16,7 +17,7 @@ def main():
 
     # Print a fancy header
     fig = Figlet(font="small")
-    print(fig.renderText("auto"))
+    rprint("[dodger_blue2]" + fig.renderText("auto"))
     commands.auto()
 
 

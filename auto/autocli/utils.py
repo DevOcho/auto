@@ -19,6 +19,11 @@ def load_config():
     # Local vars
     config = {}
 
+    if not os.path.isfile(os.path.expanduser("~") + "/.auto/config/local.yaml"):
+        declare_error(
+            "No local.yaml file available. Perhaps you didn't run the installer?"
+        )
+
     # Read Config and provide the data
     with open(
         os.path.expanduser("~") + "/.auto/config/local.yaml", encoding="utf-8"
