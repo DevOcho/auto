@@ -219,3 +219,14 @@ def upgrade(self, pod):  # pylint: disable=unused-argument
 
     # Build, Tag, and load pod in local repository
     core.tag_pod_docker_image(pod)
+
+
+@auto.command()
+@click.pass_context
+@click.argument("git_repo", required=True)
+def install(self, git_repo):  # pylint: disable=unused-argument
+    """Install "parent" configuration file from git repo"""
+
+    # This will download a repo and then copy the local.yaml file
+    # into the auto config folder
+    core.install_config_from_repo(git_repo)

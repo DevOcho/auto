@@ -17,12 +17,14 @@ productivity.
 
 - [ ] Create `auto status` to show where things are
 - [ ] Create `auto update` to update to the latest version of auto
+- [ ] Create `auto install` to install config from a parent repo
 - [ ] Create `auto migrations` run database migrations in a pod
+- [ ] Use `pyinstaller` to create a single file instead of installing python reqs
 
 
 ## Install `auto`
 
-The following insructions are assuming Linux or Windows WSL running Bash.
+The following instructions are assuming Linux or Windows WSL2 running Bash.
 
 ### Dependencies
 You will need a Linux system with the following pre-installed:
