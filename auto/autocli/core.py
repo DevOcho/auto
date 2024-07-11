@@ -252,29 +252,12 @@ def install_system_pods():
     """Install all of the system pods in the cluster"""
 
     # Local Vars
-    pod_list = []
 
-    # Get all the system pods that are active in the global config
+    # Let's start the ones that we found
     for pod in CONFIG["system-pods"]:
         if pod["pod"]["active"]:
-            if pod not in pod_list:
-                pod_list.append(pod)
-
-    # Now get the requested system pods from the pod configs
-    for pod in CONFIG["pods"]:
-        # Load the pod config to see what system pods it wants
-        pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
-        pod_config = utils.get_pod_config(pod_name)
-        if "system-pods" in pod_config:
-            for pod in pod_config["system-pods"]:
-                if "name" in pod and pod["name"] not in pod_list:
-                    pod_list.append(pod["name"])
-
-    # Now let's start the ones that we found
-    for pod in CONFIG["system-pods"]:
-        if "name" in pod and pod["name"] in pod_list:
-            rprint("  -- Starting: " + pod["name"])
-            for command in pod["commands"]:
+            rprint("  -- Starting: " + pod["pod"]["name"])
+            for command in pod["pod"]["commands"]:
                 try:
                     utils.run_and_wait(command)
                 except Exception:  # pylint: disable=broad-except
