@@ -82,7 +82,7 @@ def start(self, pod, dry_run, offline):  # pylint: disable=unused-argument
             # STEP 6: Load system containers
             rprint("[deep_sky_blue1]Loading system pods...")
             if not dry_run:
-                # Load system containers and system containers requested by pods
+                # Load system containers
                 core.install_system_pods()
 
                 if new_cluster:
@@ -189,6 +189,15 @@ def mysql(self):  # pylint: disable=unused-argument
 
     # Let's connect to the MySQL database inside the k3s cluster
     core.connect_to_mysql()
+
+
+@auto.command()
+@click.pass_context
+def minio(self):  # pylint: disable=unused-argument
+    """Open Connection to MinIO Server"""
+
+    # Start a port-forward to the minio host
+    core.connect_to_minio()
 
 
 @auto.command()

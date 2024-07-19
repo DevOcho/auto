@@ -25,9 +25,12 @@ spec:
       - name: minio
         # Pulls the default Minio image from Docker Hub
         image: k3d-registry.local:12345/minio/minio:RELEASE.2024-07-10T18-41-49Z
+        command:
+        - /bin/bash
+        - -c
         args:
-        - server
-        - /storage
+        - minio server /storage --console-address :9090
+        #- /storage
         env:
         # Minio access key and secret key
         - name: MINIO_ROOT_USER

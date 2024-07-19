@@ -132,10 +132,6 @@ def start_cluster(progress, task):
     if utils.wait_for_pod_status("helm", "Complete"):
         progress.update(task, advance=5)
 
-    # We run this twice because there are two pods
-    if utils.wait_for_pod_status("helm", "Complete"):
-        progress.update(task, advance=6)
-
     # Let's remove the completed helm containers
     bash_command = """kubectl delete pod -n kube-system \
                       --field-selector=status.phase==Succeeded"""
@@ -251,9 +247,7 @@ def install_pods_in_cluster() -> None:
 def install_system_pods():
     """Install all of the system pods in the cluster"""
 
-    # Local Vars
-
-    # Let's start the ones that we found
+    # Let's start the ones that we find that are "active"
     for pod in CONFIG["system-pods"]:
         if pod["pod"]["active"]:
             rprint("  -- Starting: " + pod["pod"]["name"])
@@ -262,6 +256,10 @@ def install_system_pods():
                     utils.run_and_wait(command)
                 except Exception:  # pylint: disable=broad-except
                     rprint(f"    [red]Error running {command}")
+
+            # MinIO has some extra setup stuff needed to use it
+            if pod["pod"]["name"] == "minio":
+                utils.setup_minio()
 
 
 def install_mysql_in_cluster() -> None:
@@ -286,36 +284,56 @@ def install_mysql_in_cluster() -> None:
 
 def create_databases():
     """Create the databases"""
-    rprint("  -- Creating Databases")
+    rprint("  -- Creating Databases and Buckets")
 
-    # Let's create the mysql databases
+    # Let's confirm mysql is running
     for system_pod in CONFIG["system-pods"]:
         if system_pod["pod"]["name"] == "mysql":
             # Let's wait for the MySQL pod to start
             if utils.wait_for_pod_status("mysql", "Running"):
                 rprint("       [green]MySQL running")
-                # I haven't thought of a better way to handle this
                 # The pod is running but I need to give MySQL a few seconds to
-                # start inside the pod.  Probably should just keep trying to run
-                # a command until it succeeds?
-                time.sleep(5)
+                # start inside the pod.  5 seconds seems to be enough
+                time.sleep(5)  # This would be better as a health check
 
-            # Create the databases requested in each of the pods
-            for pod in CONFIG["pods"]:
-                pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
-                pod_config = utils.get_pod_config(pod_name)
-                for system_pod in pod_config["system-pods"]:
-                    for database in system_pod["databases"]:
-                        utils.create_mysql_database(database["name"])
-                        rprint(
-                            f"      *  Created database: [bright_cyan]{database['name']}"
-                        )
+    # Create the databases requested in each of the pods
+    for pod in CONFIG["pods"]:
+        pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
+        pod_config = utils.get_pod_config(pod_name)
+        for system_pod in pod_config["system-pods"]:
+            if system_pod["name"] == "mysql":
+                for database in system_pod["databases"]:
+                    utils.create_mysql_database(database["name"])
+                    rprint(
+                        f"      *  Created MySQL database: [bright_cyan]{database['name']}"
+                    )
+            elif system_pod["name"] == "minio":
+                for bucket in system_pod["buckets"]:
+                    utils.create_minio_bucket(bucket["name"])
+                    rprint(
+                        f"      *  Created MinIO bucket: [bright_cyan]{database['name']}"
+                    )
 
 
 def connect_to_mysql() -> None:
     """Connect to the MySQL cluster inside the k3s cluster"""
 
     utils.connect_to_db()
+
+
+def connect_to_minio() -> None:
+    """Open a port=forward and print a nice message to inform user"""
+
+    # Helpful Message
+    rprint("Open a browser and visit: http://127.0.0.1:9090/")
+    rprint("Press ctrl+c to exit")
+    rprint("")
+    rprint("Username: minio")
+    rprint("Password: minio123")
+    rprint("")
+
+    # The port forward
+    utils.connect_to_minio()
 
 
 def tag_pod_docker_image(pod) -> None:

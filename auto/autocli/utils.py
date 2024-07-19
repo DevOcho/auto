@@ -180,6 +180,23 @@ def connect_to_db() -> None:
     subprocess.run(args, shell=True, check=True)
 
 
+def connect_to_minio() -> None:
+    """This opens the port-forward to MinIO to allow dev access"""
+
+    # Determine which pod to exec against and build the command
+    pod_name = get_full_pod_name("minio").strip("\n")
+
+    # The command we are going to run
+    cmd = f"kubectl port-forward {pod_name} 9000 9090"
+
+    # Make this command safe to run
+    cmd = shlex.quote(cmd)
+    args = shlex.split(cmd)
+
+    # Run the command and return the output
+    subprocess.run(args, shell=True, check=True)
+
+
 def create_mysql_database(database, retries=0):
     """Create a database inside mysql"""
 
@@ -209,6 +226,33 @@ def create_mysql_database(database, retries=0):
             create_mysql_database(database, retries=retries)
         else:
             rprint(f"  [red]FAILED: Could not create database[/] {database}")
+
+
+def create_minio_bucket(bucket):
+    """Create a bucket in MinIO"""
+
+    container_cmds = [
+        f"mc mb --quiet myminio/{bucket}",
+        f"mc anonymous --quiet set download myminio/{bucket}",
+    ]
+    pod_name = get_full_pod_name("minio").strip("\n")
+
+    if pod_name:
+        for cmd in container_cmds:
+            cmd = f"kubectl exec -it {pod_name} -- {cmd}"
+
+            # Make this command safe to run
+            cmd = shlex.quote(cmd)
+            args = shlex.split(cmd)
+
+            # Run the command and return the output
+            subprocess.run(
+                args,
+                shell=True,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.STDOUT,
+            )
 
 
 def check_docker():
@@ -359,3 +403,35 @@ def get_pod_config(pod):
         config = yaml.safe_load(config_handle)
 
     return config
+
+
+def setup_minio(retries=5):
+    """Setup the credentials and configure and deploy nginx"""
+
+    container_cmds = [
+        "mc alias -q set myminio http://minio.default.svc.cluster.local:9000 minio minio123"
+    ]
+    pod_name = get_full_pod_name("minio").strip("\n")
+
+    if pod_name:
+        # Let's run the commands in the container to setup the access creds
+        for container_cmd in container_cmds:
+            full_cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
+
+            # Make this command safe to run
+            full_cmd = shlex.quote(full_cmd)
+            cmd_with_args = shlex.split(full_cmd)
+
+            # Run the command and return the output
+            subprocess.run(
+                cmd_with_args,
+                shell=True,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.STDOUT,
+            )
+
+    else:
+        if retries > 1:
+            sleep(3)
+            setup_minio(retries - 1)
