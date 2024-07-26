@@ -139,6 +139,19 @@ command-args: --set ingress.enabled=true
 # Database commands
 seed-command: seed_db.py
 init-command: init_db.py
+
+# Configuration for the system-pods
+system-pods:
+
+  # We need a MySQL database
+  - name: mysql
+    databases:
+      - name: www
+
+  # We need a MinIO bucket
+  - name: minio
+    buckets:
+       - name: www
 ```
 
 You can see the repository for this example "portal" pod here:

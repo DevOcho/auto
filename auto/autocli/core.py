@@ -67,6 +67,9 @@ def populate_registry():
 
     # Now we need to build and load the pods
     for pod in CONFIG["pods"]:
+        # Check each pod
+        skip_version = False
+
         # What is the name of this pod?
         pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
 
@@ -300,19 +303,20 @@ def create_databases():
     for pod in CONFIG["pods"]:
         pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
         pod_config = utils.get_pod_config(pod_name)
-        for system_pod in pod_config["system-pods"]:
-            if system_pod["name"] == "mysql":
-                for database in system_pod["databases"]:
-                    utils.create_mysql_database(database["name"])
-                    rprint(
-                        f"      *  Created MySQL database: [bright_cyan]{database['name']}"
-                    )
-            elif system_pod["name"] == "minio":
-                for bucket in system_pod["buckets"]:
-                    utils.create_minio_bucket(bucket["name"])
-                    rprint(
-                        f"      *  Created MinIO bucket: [bright_cyan]{database['name']}"
-                    )
+        if "system-pods" in pod_config:
+            for system_pod in pod_config["system-pods"]:
+                if system_pod["name"] == "mysql":
+                    for database in system_pod["databases"]:
+                        utils.create_mysql_database(database["name"])
+                        rprint(
+                            f"      *  Created MySQL database: [bright_cyan]{database['name']}"
+                        )
+                elif system_pod["name"] == "minio":
+                    for bucket in system_pod["buckets"]:
+                        utils.create_minio_bucket(bucket["name"])
+                        rprint(
+                            f"      *  Created MinIO bucket: [bright_cyan]{database['name']}"
+                        )
 
 
 def connect_to_mysql() -> None:
