@@ -233,7 +233,8 @@ def create_minio_bucket(bucket):
 
     container_cmds = [
         f"mc mb --quiet myminio/{bucket}",
-        f"mc anonymous --quiet set download myminio/{bucket}",
+        f"mc anonymous --quiet set none myminio/{bucket}",  # disable file list
+        f"mc anonymous --quiet set download myminio/{bucket}/*",  # enable full path access
     ]
     pod_name = get_full_pod_name("minio").strip("\n")
 

@@ -1,4 +1,5 @@
 """ Imports """
+
 from autocli import commands
 from click.testing import CliRunner
 
