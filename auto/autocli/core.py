@@ -141,6 +141,8 @@ def start_cluster(progress, task):
                       --field-selector=status.phase==Succeeded"""
     if utils.run_and_wait(bash_command):
         print("     = Pods finished starting.  Removed completed setup pods.")
+    if utils.run_and_wait(bash_command):
+        print("     = Pods finished starting.  Removed completed setup pods.")
 
     # Tell them this is a new cluster
     return True
@@ -316,7 +318,7 @@ def create_databases():
                     for bucket in system_pod["buckets"]:
                         utils.create_minio_bucket(bucket["name"])
                         rprint(
-                            f"      *  Created MinIO bucket: [bright_cyan]{database['name']}"
+                            f"      *  Created MinIO bucket: [bright_cyan]{bucket['name']}"
                         )
 
 
@@ -449,6 +451,9 @@ def verify_dependencies():
 
     # Check for k3d and kubectl
     utils.check_k8s()
+
+    # Check for helm
+    utils.check_helm()
 
     # Check for hosts entries
     utils.check_registry_host_entry()

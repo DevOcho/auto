@@ -309,6 +309,19 @@ def check_k8s():
         )
 
 
+def check_helm():
+    """Look for the things necessary to run helm"""
+
+    # check for the helm command
+    bash_command = """helm version"""
+    if not run_and_wait(bash_command, check_result="clean"):
+        declare_error(
+            """The `helm` command doesn't appear to be installed!
+             Please visit https://helm.sh/docs/intro/install/ for installation instructions.
+          """
+        )
+
+
 def check_registry_host_entry():
     """Check that appropriate host entries are made"""
 
