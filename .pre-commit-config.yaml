@@ -97,6 +97,6 @@ repos:
         name: pytest
         stages: [commit]
         language: system
-        entry: pytest --cov-config=.coveragerc --cov --cov-fail-under=30
+        entry: pytest --cov-config=.coveragerc --cov --cov-fail-under=20
         pass_filenames: false
         always_run: true

@@ -501,3 +501,19 @@ def install_config_from_repo(repo):
         CONFIG["code"] + "/" + parent_folder + "/local.yaml",
         user_path + "/.auto/config/local.yaml",
     )
+
+
+def migrate_with_smalls(pod):
+    """Run the database migrations in a pod with smalls"""
+
+    # Run the command inside the pod
+    command = "./smalls.py migrate"
+    utils.run_command_inside_pod(pod, command)
+
+
+def rollback_with_smalls(pod, number):
+    """Run the database rollback in a pod with smalls"""
+
+    # Run the command inside the pod
+    command = f"./smalls.py rollback {number}"
+    utils.run_command_inside_pod(pod, command)

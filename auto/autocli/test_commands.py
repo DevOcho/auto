@@ -16,3 +16,10 @@ def test_start():
     runner = CliRunner()
     result = runner.invoke(commands.start, ["--dry-run"])
     assert result.exit_code == 0
+
+
+def test_stop():
+    """Test the stop command"""
+    runner = CliRunner()
+    result = runner.invoke(commands.stop, ["--dry-run"])
+    assert result.exit_code == 0

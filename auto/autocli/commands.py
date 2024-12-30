@@ -17,7 +17,7 @@ CONTEXT_SETTINGS = {
 
 
 @click.group(context_settings=CONTEXT_SETTINGS)
-@click.version_option(version="0.2.0")
+@click.version_option(version="0.3.0")
 def auto():
     """Commandline utility to assist with creating/deleting clusters and
     starting/stopping pods.
@@ -228,6 +228,27 @@ def upgrade(self, pod):  # pylint: disable=unused-argument
 
     # Build, Tag, and load pod in local repository
     core.tag_pod_docker_image(pod)
+
+
+@auto.command()
+@click.argument("pod")
+@click.pass_context
+def migrate(self, pod):  # pylint: disable=unused-argument
+    """Run database migrations in a pod (using smalls)"""
+
+    # Build, Tag, and load pod in local repository
+    core.migrate_with_smalls(pod)
+
+
+@auto.command()
+@click.argument("pod")
+@click.argument("number")
+@click.pass_context
+def rollback(self, pod, number):  # pylint: disable=unused-argument
+    """Rollback database migrations in a pod (using smalls)"""
+
+    # Build, Tag, and load pod in local repository
+    core.rollback_with_smalls(pod, number)
 
 
 @auto.command()
