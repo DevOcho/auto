@@ -208,6 +208,20 @@ and before migrations).
 This is a convenience method for running a database seed script in your pod
 that will provide test data.
 
+### `auto migrate <pod>`
+
+If you use the DevOcho `smalls` migration script in your application, this
+will run it inside a pod as a convenience method.
+
+### `auto rollback <pod> <number>`
+
+If you use the DevOcho `smalls` migration script in your application, this
+will run the rollback feature inside a pod as a convenience method.
+
+Example: ```auto rollback training 0123```
+
+The above example will rollback the database to the 0123 migration.
+
 ### `auto tag <pod>`
 
 This will build the local pod image, tag it, and upload it to the local
