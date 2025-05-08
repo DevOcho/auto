@@ -8,9 +8,59 @@ import subprocess
 import sys
 from subprocess import CalledProcessError
 from time import sleep
-
 import yaml
 from rich import print as rprint
+from typing import Callable, Any, Dict, Optional
+import time
+import json 
+
+def wait_for_condition(
+    resource_type: str,
+    condition_fn: Callable[[Any], bool],
+    namespace: str = "",
+    timeout: int = 120
+) -> None:
+    """Wait for Kubernetes resource condition"""
+    start = time.time()
+    while time.time() - start < timeout:
+        cmd = ["kubectl", "get", resource_type, "-o", "json"]
+        if namespace:
+            cmd += ["-n", namespace]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        items = json.loads(result.stdout).get("items", [])
+        
+        if all(condition_fn(item) for item in items):
+            return
+        
+        time.sleep(2)
+    raise TimeoutError(f"Condition not met for {resource_type} after {timeout}s")
+
+def get_pod_status(pod_name: str) -> Optional[Dict[str, Any]]:
+    """Get detailed pod status as JSON dictionary"""
+    result = subprocess.run(
+        ["kubectl", "get", "pod", pod_name, "-o", "json"],
+        capture_output=True,
+        text=True,
+        check=False
+    )
+    try:
+        return json.loads(result.stdout) if result.returncode == 0 else None
+    except json.JSONDecodeError:
+        return None
+
+def wait_for_pod_ready(pod_name: str, timeout: int = 120) -> None:
+    """Wait for pod to reach ready state"""
+    start = time.time()
+    while time.time() - start < timeout:
+        status = get_pod_status(pod_name)
+        if status and any(
+            c["ready"] for c in status["status"].get("conditions", [])
+        ):
+            return
+        time.sleep(2)
+    raise TimeoutError(f"Pod {pod_name} not ready after {timeout}s")
+
 
 
 def load_config():
@@ -111,13 +161,12 @@ def run_async(cmd: str) -> bytes:
 
 def verify_pod_is_installed(pod: str) -> bool:
     """Verify there is still a pod in the cluster"""
-
-    # Get the full name of the pod
-    pod_name = get_full_pod_name(pod)
-
-    # If we found a pod by name or we see it in the kubectl get pods command
+    pod_name = get_full_pod_name(pod)    # If we found a pod by name or we see it in the kubectl get pods command
     # the pod is still "installed" in k3s
-    return pod_name or run_and_wait("""kubectl get pods""", check_result=pod)
+    return bool(
+        pod_name or 
+        run_and_wait("kubectl get pods", check_result=pod)
+    )
 
 
 def wait_for_pod_status(podname: str, status: str, max_wait_time=60) -> None:

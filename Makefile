@@ -16,8 +16,9 @@ init:
 	@pre-commit install
 
 
-# This install script should be safe to run multiple times
+# This install script should be safe to run multiple time
 install:
-	@echo ""
-	@printf "Installing ${BLUE}auto${NC}\n"
-	@./install_auto.sh
+    pyinstaller --onefile auto/auto.py -n auto
+    
+install: build
+    cp dist/auto ~/.auto/

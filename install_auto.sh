@@ -31,23 +31,10 @@ mv ~/.auto/auto.py ~/.auto/auto
 echo " - Removed python extension"
 
 # Add the line to the ~/.bashrc file to make sure it is in our path
-if ! [[ `env | grep PATH | grep 'auto'` ]]
-then
-    echo '';\
-    echo "Updating path to include auto folder";\
-    echo '' >> ~/.bashrc;\
-    echo '# Adding auto to the path' >> ~/.bashrc;\
-    echo 'export PATH="$PATH:/home/$USER/.auto"' >> ~/.bashrc;\
-    echo 'IMPORTANT: Any open terminals will need to be restarted for this to take effect!';\
-    echo '           or you can type "source ~/.bashrc" in the terminal';\
-
-    # Now set an ENV var for the code directory
-    #CODE_DIR=$(pwd)
-    #echo '';\
-    #echo "Setting Auto Code Directory to $CODE_DIR";\
-    #echo '' >> ~/.bashrc;\
-    #echo '# Auto Code Directory' >> ~/.bashrc;\
-    #echo "export AUTO_CODE=$CODE_DIR" >> ~/.bashrc;\
+if ! [[ "$PATH" =~ "$HOME/.auto" ]]; then
+    echo 'Adding auto to PATH'
+    echo -e "\n# auto CLI path\nexport PATH=\"\$PATH:$HOME/.auto\"" >> ~/.bashrc
+    echo 'Restart terminals or run: source ~/.bashrc'
 fi
 
 printf "\nYou now have ${BLUE}auto${NC} installed.\n"
