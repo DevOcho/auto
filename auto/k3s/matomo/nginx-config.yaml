@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: matomo-nginx-config
+  namespace: default
+data:
+  nginx.conf: |
+    server {
+        listen 80;
+        server_name matomo.example.com;
+        root /var/www/html;
+        index index.php;
+
+        location / {
+            try_files $uri $uri/ /index.php?$args;
+        }
+
+        location ~ \.php$ {
+            include fastcgi_params;
+            fastcgi_pass 127.0.0.1:9000;
+            fastcgi_index index.php;
+            fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        }
+
+        location ~* \.(jpg|jpeg|png|gif|ico|css|js|woff|woff2|ttf|svg|eot|otf)$ {
+            expires max;
+            log_not_found off;
+        }
+    }
