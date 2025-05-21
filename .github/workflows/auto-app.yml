@@ -55,19 +55,19 @@ jobs:
         path: dist/auto
         if-no-files-found: error
 
-    #- name: Create GitHub Release
-      #if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      #uses: softprops/action-gh-release@v2
-      #with:
-        #tag_name: v0.4.${{ github.run_number }}
-        #name: Release v0.4.${{ github.run_number }}
-        #draft: false
-        #prerelease: false
-        #files: |
-          #dist/auto
-          #README.md
-          #auto/config/*
-          #auto/helm/*
-          #auto/k3s/*
+    - name: Create GitHub Release
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v0.4.${{ github.run_number }}
+        name: Release v0.4.${{ github.run_number }}
+        draft: false
+        prerelease: false
+        files: |
+          dist/auto
+          README.md
+          auto/config/*
+          auto/helm/*
+          auto/k3s/*
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
