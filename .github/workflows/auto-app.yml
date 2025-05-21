@@ -2,6 +2,8 @@ name: Python application
 
 on:
   push:
+    tags:
+      - 'v*.*.*'
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
@@ -20,7 +22,7 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: "3.12"
-        cache: 'pip'  # Cache pip dependencies
+        cache: 'pip'
 
     - name: Create and activate virtual environment
       run: |
@@ -48,26 +50,37 @@ jobs:
     - name: List dist directory
       run: ls -l dist/
 
+    - name: Create distribution directory
+      run: |
+        # Create a temporary directory to stage the release files
+        mkdir -p release/auto-${{ github.ref_name }}
+        # Copy the auto executable
+        cp dist/auto release/auto-${{ github.ref_name}}/
+        # Copy the config and k3s directories (preserving structure)
+        cp -r auto/config release/auto-${{ github.ref_name }}/
+        cp -r auto/k3s release/auto-${{ github.ref_name }}/
+
+    - name: Create tar.gz archive
+      run: |
+        tar -czvf auto-${{ github.ref_name }}.tar.gz -C release auto-${{ github.ref_name }}
+
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: auto-executable
-        path: dist/auto
+        path: auto-${{ github.ref_name }}.tar.gz
         if-no-files-found: error
 
     - name: Create GitHub Release
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: v0.4.${{ github.run_number }}
-        name: Release v0.4.${{ github.run_number }}
+        tag_name: v${{ github.ref_name }}
+        name: Release v${{ github.ref_name }}
         draft: false
         prerelease: false
         files: |
-          dist/auto
+          auto-${{ github.ref_name }}.tar.gz
           README.md
-          auto/config/*
-          auto/helm/*
-          auto/k3s/*
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
