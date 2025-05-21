@@ -56,6 +56,7 @@ jobs:
         # Copy the config and k3s directories (preserving structure)
         cp -r auto/config release/auto-${{ github.ref_name }}/
         cp -r auto/k3s release/auto-${{ github.ref_name }}/
+        cp -r README.md release/auto-${{ github.ref_name }}/
 
     - name: Create tar.gz archive
       run: |
@@ -64,20 +65,18 @@ jobs:
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: auto-executable
+        name: auto-${{ github.ref_name }}.tar.gz
         path: auto-${{ github.ref_name }}.tar.gz
         if-no-files-found: error
 
     - name: Create GitHub Release
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: v${{ github.ref_name }}
-        name: Release v${{ github.ref_name }}
+        tag_name: ${{ github.ref_name }}
+        name: Release ${{ github.ref_name }}
         draft: false
         prerelease: false
         files: |
           auto-${{ github.ref_name }}.tar.gz
-          README.md
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
