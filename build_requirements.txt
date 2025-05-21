@@ -1,0 +1,8 @@
+click >= 8.0.0
+dulwich
+gitpython
+pyfiglet
+requests
+rich
+smalls
+toml
