@@ -7,7 +7,7 @@ on:
     branches: [ "main" ]
 
 permissions:
-  contents: write  # Required for creating releases and uploading artifacts
+  contents: write
 
 jobs:
   build:
@@ -17,9 +17,10 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set up Python 3.12
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v5
       with:
         python-version: "3.12"
+        cache: 'pip'  # Cache pip dependencies
 
     - name: Create and activate virtual environment
       run: |
@@ -44,6 +45,9 @@ jobs:
         source venv/bin/activate
         pyinstaller --onefile --name auto --add-data "venv/lib/python3.12/site-packages/pyfiglet/fonts:pyfiglet/fonts" ./auto/auto.py
 
+    - name: List dist directory
+      run: ls -l dist/
+
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
@@ -51,14 +55,19 @@ jobs:
         path: dist/auto
         if-no-files-found: error
 
-    - name: Create GitHub Release
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: v0.4.${{ github.run_number }}
-        name: Release v0.4.${{ github.run_number }}
-        draft: false
-        prerelease: false
-        files: dist/auto
+    #- name: Create GitHub Release
+      #if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      #uses: softprops/action-gh-release@v2
+      #with:
+        #tag_name: v0.4.${{ github.run_number }}
+        #name: Release v0.4.${{ github.run_number }}
+        #draft: false
+        #prerelease: false
+        #files: |
+          #dist/auto
+          #README.md
+          #auto/config/*
+          #auto/helm/*
+          #auto/k3s/*
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
