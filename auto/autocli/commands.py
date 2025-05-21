@@ -17,7 +17,7 @@ CONTEXT_SETTINGS = {
 
 
 @click.group(context_settings=CONTEXT_SETTINGS)
-@click.version_option(version="0.4.14")
+@click.version_option(version="0.4.15")
 def auto():
     """Commandline utility to assist with creating/deleting clusters and
     starting/stopping pods.
