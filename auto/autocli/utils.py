@@ -21,8 +21,10 @@ def load_config():
 
     if not os.path.isfile(os.path.expanduser("~") + "/.auto/config/local.yaml"):
         declare_error(
-            "No local.yaml file available. Perhaps you didn't run the installer?"
+            "No local.yaml file available. Creating a default.", exit_auto=False
         )
+        # Initialize a config file
+        create_initial_config()
 
     # Read Config and provide the data
     with open(
@@ -31,6 +33,44 @@ def load_config():
         config = yaml.safe_load(yaml_file)
 
     return config
+
+
+def create_initial_config():
+    """Create a default config file if none is present"""
+
+    home_folder = os.path.expanduser("~")
+
+    default_config = f"""
+---
+# The code folder is where you want us to download all of your pod code repositories
+code: {home_folder}/source/devocho
+
+# Each repo listed here will be run as a pod in k3s
+pods:
+  - repo: git@github.com:DevOcho/portal.git
+    branch: main
+
+# These are the system pods.  They use the config that comes with auto.
+system-pods:
+  - pod:
+      name: mysql
+      active: false
+      commands:
+        [
+          "kubectl apply -f ~/.auto/k3s/mysql/pv.yaml",
+          "kubectl apply -f ~/.auto/k3s/mysql/pvc.yaml",
+          "kubectl apply -f ~/.auto/k3s/mysql/deployment.yaml",
+          "kubectl apply -f ~/.auto/k3s/mysql/service.yaml",
+        ]
+      databases:
+        - name: portal
+"""
+
+    if not os.path.isfile(os.path.expanduser("~") + "/.auto/config/local.yaml"):
+        with open(
+            os.path.expanduser("~") + "/.auto/config/local.yaml", "w", encoding="utf-8"
+        ) as config_file:
+            config_file.write(default_config)
 
 
 def run_command_inside_pod(pod, command):

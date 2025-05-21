@@ -211,13 +211,25 @@ def start_pod(pod) -> None:
                 command = f"""{pod_config['command']} """
             command += f"""--description \"{pod_config['desc']}\" """
             command += f"""{pod_config['name']} {code_dir}/{pod_name}/.auto/helm"""
+            utils.run_and_wait(command)
 
         # They are using kubectl apply
         else:
+            # We need to run these commands in their code folder for this repo
+            original_dir = os.getcwd()
+            print(original_dir)
+            os.chdir(code_dir + "/" + pod_name)
+            print(code_dir + "/" + pod_name)
+            rprint(f"{pod_config['command']} {pod_config['command_args']}")
             command = f"{pod_config['command']} {pod_config['command_args']}"
 
-        # Run the pod install command
-        utils.run_and_wait(command)
+            # Run the pod install command
+            utils.run_and_wait(command)
+
+            # Change back to the directory they were in
+            os.chdir(original_dir)
+
+        # Tell them everything is ok
         rprint(f"     * [bright_cyan]: {pod_name}[/] installed")
 
 
