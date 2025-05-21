@@ -42,7 +42,7 @@ jobs:
     - name: Build with pyinstaller
       run: |
         source venv/bin/activate
-        pyinstaller --onefile --name auto --add-data "venv/lib/python3.12/site-packages/pyfiglet/fonts:pyfiglet/fonts" auto.py
+        pyinstaller --onefile --name auto --add-data "venv/lib/python3.12/site-packages/pyfiglet/fonts:pyfiglet/fonts" ./auto/auto.py
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
