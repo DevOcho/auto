@@ -28,7 +28,7 @@ echo " - Directory ~/.auto created"
 if [ -f ~/.auto/config/local.yaml ]; then
     echo " - Previous install detected"
     echo "   = Saving local.yaml"
-    cp -f ~/.auto/config/local.yaml /tmp/local.yaml.bak
+    cp -f ~/.auto/config/local.yaml ${TEMP_DIR}/local.yaml.bak
 fi
 
 # Download the latest release tar.gz from GitHub
@@ -49,15 +49,16 @@ if [ -z "${EXTRACTED_DIR}" ]; then
     exit 1
 fi
 
+ls -lah ${TEMP_DIR}
+
 # Copy the contents of auto into the new directory
-cp -r auto/* ~/.auto/.
+cp -r ${EXTRACTED_DIR}/* ~/.auto/.
 printf " - Contents of ${BLUE}auto${NC} installed\n"
 
 # If we saved the local.yaml lets put it back
-if [ -f "/tmp/local.yaml.bak" ]; then
+if [ -f "${TEMP_DIR}/local.yaml.bak" ]; then
     echo " - Restored local.yaml"
-    cp -f /tmp/local.yaml.bak ~/.auto/config/local.yaml
-    rm -f /tmp/local.yaml.bak
+    cp -f ${TEMP_DIR}/local.yaml.bak ~/.auto/config/local.yaml
 fi
 
 # Clean up temporary directory

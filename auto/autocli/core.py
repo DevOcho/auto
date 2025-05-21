@@ -3,6 +3,7 @@
 import os
 import re
 import shutil
+import sys
 import time
 
 import requests
@@ -446,17 +447,24 @@ def init_pod_db(pod):
 def verify_dependencies():
     """Verify the system has what it needs to run auto"""
 
+    # If there are errors let's get a count of them
+    errors = 0
+
     # Check for the docker daemon running and command being available
-    utils.check_docker()
+    errors += utils.check_docker()
 
     # Check for k3d and kubectl
-    utils.check_k8s()
+    errors += utils.check_k8s()
 
     # Check for helm
-    utils.check_helm()
+    errors += utils.check_helm()
 
     # Check for hosts entries
-    utils.check_registry_host_entry()
+    errors += utils.check_registry_host_entry()
+
+    if errors:
+        rprint(f"[red]There were {errors} so we stopped the command[/red]")
+        sys.exit(1)
 
 
 def pull_and_build_pods():

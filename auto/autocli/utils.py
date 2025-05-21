@@ -53,11 +53,14 @@ def run_command_inside_pod(pod, command):
         declare_error(f"  !! {pod} could [red]NOT[/red] run command")
 
 
-def declare_error(error_msg: str):
+def declare_error(error_msg: str, exit_auto: bool = True) -> None:
     """Print an error message and exit"""
 
     rprint(f"\n [red]:x: Error[/red]: {error_msg}")
-    sys.exit()
+
+    # If they want us to exit then let's stop everything
+    if exit_auto:
+        sys.exit()
 
 
 def run_and_wait(cmd: str, capture_output=True, check_result="") -> int:
@@ -259,13 +262,19 @@ def create_minio_bucket(bucket):
 def check_docker():
     """Make sure docker exists and the service is running"""
 
+    # Error count
+    errors = 0
+
     # Verify docker is installed
     bash_command = """which docker"""
     if not run_and_wait(bash_command, check_result="docker"):
         declare_error(
             """Docker is missing!
-               [yellow]We didn't see docker on your system.  You'll need docker installed to continue"""
+               [yellow]We didn't see docker on your system.  You'll need docker installed to continue""",
+            exit_auto=False,
         )
+
+        errors += 1
 
     # Verify docker is running
     bash_command = """ps aux"""
@@ -273,8 +282,10 @@ def check_docker():
         declare_error(
             """Docker Daemon doesn't appear to be running.
         Please run the following command:
-          `sudo service docker start`"""
+          `sudo service docker start`""",
+            exit_auto=False,
         )
+        errors += 1
 
     # Verify the `docker` command is available to this user
     bash_command = """docker ps"""
@@ -283,12 +294,19 @@ def check_docker():
             """The `docker` command doesn't appear to be working!
              Perhaps you need to run the post install steps:
                https://docs.docker.com/engine/install/linux-postinstall/
-          """
+          """,
+            exit_auto=False,
         )
+        errors += 1
+
+    return errors
 
 
 def check_k8s():
     """Look for the things necessary to run k3s via k3d"""
+
+    # Error count
+    errors = 0
 
     # check for the k3d command
     bash_command = """k3d cluster list"""
@@ -296,8 +314,10 @@ def check_k8s():
         declare_error(
             """The `k3d` command doesn't appear to be installed!
              Please visit https://k3d.io for installation instructions.
-          """
+          """,
+            exit_auto=False,
         )
+        errors += 1
 
     # check for the kubectl command
     bash_command = """kubectl get --help"""
@@ -305,12 +325,19 @@ def check_k8s():
         declare_error(
             """The `kubectl` command doesn't appear to be installed!
              Please install it to continue.
-          """
+          """,
+            exit_auto=False,
         )
+        errors += 1
+
+    return errors
 
 
 def check_helm():
     """Look for the things necessary to run helm"""
+
+    # Error count
+    errors = 0
 
     # check for the helm command
     bash_command = """helm version"""
@@ -318,19 +345,28 @@ def check_helm():
         declare_error(
             """The `helm` command doesn't appear to be installed!
              Please visit https://helm.sh/docs/intro/install/ for installation instructions.
-          """
+          """,
+            exit_auto=False,
         )
+        errors += 1
+
+    return errors
 
 
 def check_registry_host_entry():
     """Check that appropriate host entries are made"""
 
+    # Error count
+    errors = 0
+
     # check for the k3d-registry.local host entry
-    if not check_host_entry("k3d-registry"):
-        sys.exit()
+    if not check_host_entry("k3d-registry", exit_auto=False):
+        errors += 1
+
+    return errors
 
 
-def check_host_entry(host):
+def check_host_entry(host, exit_auto: bool = True):
     """Check that a host entry for the pod has been made"""
 
     # check for the k3d-registry.local host entry
@@ -340,7 +376,8 @@ def check_host_entry(host):
             f"""No registry entry in /etc/hosts !
        Please add the following to your /etc/hosts file
        127.0.0.1      {host}.local
-          """
+          """,
+            exit_auto=exit_auto,
         )
 
         return False
