@@ -4,5 +4,4 @@ gitpython
 pyfiglet
 requests
 rich
-smalls
 toml
