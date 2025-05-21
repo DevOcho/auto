@@ -44,9 +44,7 @@ NOTE: `auto` is installed for a user and not installed system wide.
 You can install it with the following commands:
 
 ```bash
-git clone git@github.com:DevOcho/auto.git
-cd auto
-./install_auto.sh
+curl -fsSL https://www.devocho.com/auto.sh | bash
 ```
 
 The `auto` install will update your `~/.bashrc` file to add itself to your path

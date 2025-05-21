@@ -4,7 +4,23 @@
 # Local vars
 BLUE='\033[0;36m'
 NC='\033[0m'
+REPO="devocho/auto"
+TEMP_DIR=$(mktemp -d)
 
+# Function to check if a command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Check for required tools
+for cmd in curl tar; do
+    if ! command_exists "$cmd"; then
+        echo "Error: $cmd is required but not installed."
+        exit 1
+    fi
+done
+
+# Create ~/.auto directory
 mkdir -p ~/.auto
 echo " - Directory ~/.auto created"
 
@@ -13,6 +29,24 @@ if [ -f ~/.auto/config/local.yaml ]; then
     echo " - Previous install detected"
     echo "   = Saving local.yaml"
     cp -f ~/.auto/config/local.yaml /tmp/local.yaml.bak
+fi
+
+# Download the latest release tar.gz from GitHub
+echo " - Downloading latest release from GitHub..."
+LATEST_URL="https://api.github.com/repos/${REPO}/releases/latest"
+if ! curl -sL -o "${TEMP_DIR}/auto-latest.tar.gz" \
+    $(curl -sL "${LATEST_URL}" | grep "browser_download_url" | grep "auto-.*\.tar\.gz" | cut -d '"' -f 4); then
+    echo "Error: Failed to download the latest release."
+    exit 1
+fi
+
+# Extract the tar.gz file
+echo " - Extracting release..."
+tar -xzf "${TEMP_DIR}/auto-latest.tar.gz" -C "${TEMP_DIR}"
+EXTRACTED_DIR=$(ls -d ${TEMP_DIR}/auto-*/ | head -n 1)
+if [ -z "${EXTRACTED_DIR}" ]; then
+    echo "Error: Could not find extracted directory."
+    exit 1
 fi
 
 # Copy the contents of auto into the new directory
@@ -26,9 +60,12 @@ if [ -f "/tmp/local.yaml.bak" ]; then
     rm -f /tmp/local.yaml.bak
 fi
 
-# Remove the python extension
-mv ~/.auto/auto.py ~/.auto/auto
-echo " - Removed python extension"
+# Clean up temporary directory
+rm -rf "${TEMP_DIR}"
+
+# Ensure the auto command is executable
+chmod +x ~/.auto/auto
+echo " - Ensured auto is executable"
 
 # Add the line to the ~/.bashrc file to make sure it is in our path
 if ! [[ `env | grep PATH | grep 'auto'` ]]
