@@ -121,11 +121,17 @@ def start_cluster(progress, task):
     print("  -- Creating cluster (this will take a minute)")
     load_bal_port = 8088
     code_dir = CONFIG["code"]
+    # I'm opening port 8088 and 3306 outside the cluster for access to the sites
+    # and mysql.  This means you can't run a mysql instance on your host on the
+    # same port.
     bash_command = f"""/usr/local/bin/k3d cluster create \
                        --volume {code_dir}:/mnt/code \
                        --registry-use k3d-registry.local:12345 \
                        --registry-config ~/.auto/k3s/registries.yaml \
-                       --api-port 6550 -p "{load_bal_port}:80@loadbalancer" \
+                       --k3s-arg "--disable=traefik@server:0"
+                       --api-port 6550 \
+                       -p "3306:3306@loadbalancer" \
+                       -p "{load_bal_port}:80@loadbalancer" \
                        --agents 1"""
 
     # We want to let the k3d pods finish running so we can remove the temporary ones
@@ -133,19 +139,13 @@ def start_cluster(progress, task):
         print("     = Cluster Started.  Waiting for Pods to finish starting...")
         progress.update(task, advance=6)
 
-    # When we see "Complete" then we know it's done
-    if utils.wait_for_pod_status("helm", "Complete"):
-        progress.update(task, advance=5)
-
-    # Let's remove the completed helm containers
-    bash_command = """kubectl delete pod -n kube-system \
-                      --field-selector=status.phase==Succeeded"""
+    # We want to install the nginx ingress
+    user_path = os.path.expanduser("~")
+    bash_command = f"kubectl apply -f {user_path}/.auto/k3s/nginx-ingress/deploy.yaml"
     if utils.run_and_wait(bash_command):
-        print("     = Pods finished starting.  Removed completed setup pods.")
-    if utils.run_and_wait(bash_command):
-        print("     = Pods finished starting.  Removed completed setup pods.")
+        print("     = Nginx Ingress installed in cluster")
+        progress.update(task, advance=2)
 
-    # Tell them this is a new cluster
     return True
 
 
@@ -217,9 +217,7 @@ def start_pod(pod) -> None:
         else:
             # We need to run these commands in their code folder for this repo
             original_dir = os.getcwd()
-            print(original_dir)
             os.chdir(code_dir + "/" + pod_name)
-            print(code_dir + "/" + pod_name)
             rprint(f"{pod_config['command']} {pod_config['command_args']}")
             command = f"{pod_config['command']} {pod_config['command_args']}"
 

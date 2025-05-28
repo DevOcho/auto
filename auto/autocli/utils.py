@@ -464,6 +464,15 @@ def pull_repo(repo, code_folder):
                 rprint(
                     f"[yellow]       :warning: Could not clone {repo['repo']} for unknown reasons"
                 )
+            else:
+                os.chdir(repo_local_dir)
+                cmd = f"git checkout {repo['branch']}"
+                if not run_and_wait(cmd):
+                    rprint(
+                        f"[yellow]       :warning: Could not change to branch {repo['branch']}"
+                    )
+                os.chdir(cwd)
+
         except CalledProcessError:
             rprint(f"[yellow]       :warning: Could not clone {repo['repo']}")
             rprint(
