@@ -3,6 +3,8 @@ kind: Ingress
 metadata:
   name: mysql
 spec:
+  ingressClassName:
+    nginx
   rules:
   - host: mysql.local
     http:

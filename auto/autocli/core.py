@@ -128,10 +128,10 @@ def start_cluster(progress, task):
                        --volume {code_dir}:/mnt/code \
                        --registry-use k3d-registry.local:12345 \
                        --registry-config ~/.auto/k3s/registries.yaml \
-                       --k3s-arg "--disable=traefik@server:0"
+                       --k3s-arg "--disable=traefik@server:0" \
                        --api-port 6550 \
-                       -p "3306:3306@loadbalancer" \
                        -p "{load_bal_port}:80@loadbalancer" \
+                       -p "3306:3306@loadbalancer" \
                        --agents 1"""
 
     # We want to let the k3d pods finish running so we can remove the temporary ones
@@ -145,6 +145,14 @@ def start_cluster(progress, task):
     if utils.run_and_wait(bash_command):
         print("     = Nginx Ingress installed in cluster")
         progress.update(task, advance=2)
+
+    # Let's remove the completed nginx job containers
+    if utils.wait_for_pod_status("ingress-nginx-admission-create", "Complete"):
+        progress.update(task, advance=5)
+    bash_command = """kubectl delete pod -n ingress-nginx \
+                      --field-selector=status.phase==Succeeded"""
+    if utils.run_and_wait(bash_command):
+        print("     = Pods finished starting.  Removed completed setup pods.")
 
     return True
 
@@ -183,7 +191,6 @@ def start_pod(pod) -> None:
     """Start a single pod"""
 
     # Local Vars
-    os.path.expanduser("~")
     code_dir = CONFIG["code"]
 
     # If we get a dictionary we have to find the pod name from the repo name
