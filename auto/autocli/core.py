@@ -131,7 +131,7 @@ def start_cluster(progress, task):
                        --k3s-arg "--disable=traefik@server:0" \
                        --api-port 6550 \
                        -p "{load_bal_port}:80@loadbalancer" \
-                       -p "3306:3306@loadbalancer" \
+                       -p "3306:30036@loadbalancer" \
                        --agents 1"""
 
     # We want to let the k3d pods finish running so we can remove the temporary ones
