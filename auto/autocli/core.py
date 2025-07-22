@@ -5,6 +5,7 @@ import re
 import shutil
 import sys
 import time
+from pathlib import Path
 
 import requests
 import yaml
@@ -192,6 +193,7 @@ def start_pod(pod) -> None:
 
     # Local Vars
     code_dir = CONFIG["code"]
+    success = False
 
     # If we get a dictionary we have to find the pod name from the repo name
     if isinstance(pod, dict):
@@ -205,8 +207,15 @@ def start_pod(pod) -> None:
 
     # If we aren't running let's start via helm install or kubectl apply
     else:
-        # Get the pod config
-        config_file_path = code_dir + "/" + pod_name + "/.auto/config.yaml"
+        config_file_path = Path(code_dir) / pod_name / ".auto" / "config.yaml"
+
+        if not config_file_path.is_file():
+            utils.declare_error(
+                f"[bold red]Error: Configuration file not found at: {config_file_path}[/bold red]",
+                exit_auto=True,
+            )
+            return
+
         with open(config_file_path, encoding="utf-8") as pod_yaml:
             pod_config = yaml.safe_load(pod_yaml)
 
@@ -218,7 +227,11 @@ def start_pod(pod) -> None:
                 command = f"""{pod_config['command']} """
             command += f"""--description \"{pod_config['desc']}\" """
             command += f"""{pod_config['name']} {code_dir}/{pod_name}/.auto/helm"""
-            utils.run_and_wait(command)
+            success = utils.run_and_wait(command)
+            if not success:
+                utils.declare_error(
+                    "[bold red]Error starting pod via helm", exit_auto=True
+                )
 
         # They are using kubectl apply
         else:
@@ -229,7 +242,11 @@ def start_pod(pod) -> None:
             command = f"{pod_config['command']} {pod_config['command_args']}"
 
             # Run the pod install command
-            utils.run_and_wait(command)
+            success = utils.run_and_wait(command)
+            if not success:
+                utils.declare_error(
+                    "[bold red]Error starting pod via kubectl apply", exit_auto=True
+                )
 
             # Change back to the directory they were in
             os.chdir(original_dir)
