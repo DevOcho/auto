@@ -362,6 +362,10 @@ def connect_to_mysql() -> None:
 
     utils.connect_to_db()
 
+def connect_to_postgres() -> None:
+    """Connect to the PostgreSQL cluster inside the k3s cluster"""
+
+    utils.connect_to_db_postgres()
 
 def connect_to_minio() -> None:
     """Open a port=forward and print a nice message to inform user"""
