@@ -223,6 +223,24 @@ def connect_to_db() -> None:
     subprocess.run(args, shell=True, check=True)
 
 
+def connect_to_db_postgres() -> None:
+    """Get the full name of the pod for a k3s pod by application name"""
+
+    # The command we will send to the mysql pod
+    container_cmd = "psql -U root postgres"
+
+    # Determine which pod to exec against and build the command
+    pod_name = get_full_pod_name("postgres").strip("\n")
+    cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
+
+    # Make this command safe to run
+    cmd = shlex.quote(cmd)
+    args = shlex.split(cmd)
+
+    # Run the command and return the output
+    subprocess.run(args, shell=True, check=True)
+
+
 def connect_to_minio() -> None:
     """This opens the port-forward to MinIO to allow dev access"""
 

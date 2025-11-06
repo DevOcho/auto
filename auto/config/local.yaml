@@ -1,6 +1,6 @@
 ---
 # The code folder is where you want us to download all of your pod code repositories
-code: /home/rogue/source/devocho
+code: /home/${USER}/source/devocho
 
 # Each repo listed here will be run as a pod in k3s
 pods:
@@ -17,35 +17,36 @@ registry:
 system-pods:
 
   # Database config
-  - pod: mysql
-    name: mysql
-    active: false  # set this to true if you want it to start
-    commands:
-      - kubectl apply -f ~/.auto/k3s/mysql/pv.yaml
-      - kubectl apply -f ~/.auto/k3s/mysql/pvc.yaml
-      - kubectl apply -f ~/.auto/k3s/mysql/deployment.yaml
-      - kubectl apply -f ~/.auto/k3s/mysql/service.yaml
+  - pod:
+      name: mysql
+      active: false  # set this to true if you want it to start
+      commands:
+        - kubectl apply -f ~/.auto/k3s/mysql/pv.yaml
+        - kubectl apply -f ~/.auto/k3s/mysql/pvc.yaml
+        - kubectl apply -f ~/.auto/k3s/mysql/deployment.yaml
+        - kubectl apply -f ~/.auto/k3s/mysql/service.yaml
+        - kubectl apply -f ~/.auto/k3s/mysql/ingress.yaml
 
   # Minio config
-  - pod: minio
-    name: minio
-    active: false # set this to true if you want it to start
-    commands:
-      - kubectl apply -f ~/.auto/k3s/minio/pv.yaml
-      - kubectl apply -f ~/.auto/k3s/minio/pvc.yaml
-      - kubectl apply -f ~/.auto/k3s/minio/deployment.yaml
-      - kubectl apply -f ~/.auto/k3s/minio/service.yaml
-      - kubectl apply -f ~/.auto/k3s/minio/ingress.yaml
+  - pod:
+      name: minio
+      active: false # set this to true if you want it to start
+      commands:
+        - kubectl apply -f ~/.auto/k3s/minio/pv.yaml
+        - kubectl apply -f ~/.auto/k3s/minio/pvc.yaml
+        - kubectl apply -f ~/.auto/k3s/minio/deployment.yaml
+        - kubectl apply -f ~/.auto/k3s/minio/service.yaml
+        - kubectl apply -f ~/.auto/k3s/minio/ingress.yaml
 
   # Matomo config
-  - pod: matomo
-    name: matomo
-    active: false # set this to true if you want it to start
-    commands:
-      - kubectl apply -f ~/.auto/k3s/matomo/pv.yaml
-      - kubectl apply -f ~/.auto/k3s/matomo/pvc.yaml
-      - kubectl apply -f ~/.auto/k3s/matomo/db-secret.yaml
-      - kubectl apply -f ~/.auto/k3s/matomo/nginx-config.yaml
-      - kubectl apply -f ~/.auto/k3s/matomo/deployment.yaml
-      - kubectl apply -f ~/.auto/k3s/matomo/service.yaml
-      - kubectl apply -f ~/.auto/k3s/matomo/ingress.yaml
+  - pod:
+      name: matomo
+      active: false # set this to true if you want it to start
+      commands:
+        - kubectl apply -f ~/.auto/k3s/matomo/pv.yaml
+        - kubectl apply -f ~/.auto/k3s/matomo/pvc.yaml
+        - kubectl apply -f ~/.auto/k3s/matomo/db-secret.yaml
+        - kubectl apply -f ~/.auto/k3s/matomo/nginx-config.yaml
+        - kubectl apply -f ~/.auto/k3s/matomo/deployment.yaml
+        - kubectl apply -f ~/.auto/k3s/matomo/service.yaml
+        - kubectl apply -f ~/.auto/k3s/matomo/ingress.yaml
