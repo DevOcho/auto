@@ -17,7 +17,7 @@ CONTEXT_SETTINGS = {
 
 
 @click.group(context_settings=CONTEXT_SETTINGS)
-@click.version_option(version="0.4.20")
+@click.version_option(version="0.4.21")
 def auto():
     """Commandline utility to assist with creating/deleting clusters and
     starting/stopping pods.
@@ -190,6 +190,7 @@ def mysql(self):  # pylint: disable=unused-argument
     # Let's connect to the MySQL database inside the k3s cluster
     core.connect_to_mysql()
 
+
 @auto.command()
 @click.pass_context
 def postgres(self):  # pylint: disable=unused-argument
@@ -197,6 +198,7 @@ def postgres(self):  # pylint: disable=unused-argument
 
     # Let's connect to the MySQL database inside the k3s cluster
     core.connect_to_postgres()
+
 
 @auto.command()
 @click.pass_context
