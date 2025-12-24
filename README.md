@@ -3,7 +3,7 @@
 Easily manage your k3s/k3d local development environment using k8s YAML
 configs or helm charts.
 
-`auto` sets up a loccal k3s environment utilizing k3d (k3s in docker).  It then
+`auto` sets up a local k3s environment utilizing k3d (k3s in docker).  It then
 uses config files to create your environment.  At DevOcho we have the goal
 of a sub 10 minute start up for a developer joining a project.  `auto` helps us
 achieve that goal.  We explain our process a bit more at the bottom of

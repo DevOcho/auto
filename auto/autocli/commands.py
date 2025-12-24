@@ -184,6 +184,29 @@ def init(self, pod):  # pylint: disable=unused-argument
 
 @auto.command()
 @click.pass_context
+@click.option("--namespace", "-n", default="default", help="Namespace to show pods for")
+@click.option(
+    "--all-namespaces",
+    "-a",
+    is_flag=True,
+    default=False,
+    help="Show pods from all namespaces",
+)
+@click.option(
+    "--watch",
+    "-w",
+    is_flag=True,
+    default=False,
+    help="Watch the status (refresh every 3s)",
+)
+def status(self, namespace, all_namespaces, watch):  # pylint: disable=unused-argument
+    """Show the status of the cluster and pods"""
+
+    core.show_status(namespace, all_namespaces, watch)
+
+
+@auto.command()
+@click.pass_context
 def mysql(self):  # pylint: disable=unused-argument
     """Connect to the mysql database"""
 

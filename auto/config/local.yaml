@@ -10,6 +10,8 @@ pods:
 # We will pre-load the following images into the local k3s container registry
 registry:
   - image: mysql:8.0
+  - image: minio:RELEASE.2025-04-08T15-41-24Z
+  - image: matomo:5.3.1-fpm-alpine
 
 # System Pods (for use with every pod)
 system-pods:
@@ -23,3 +25,27 @@ system-pods:
       - kubectl apply -f ~/.auto/k3s/mysql/pvc.yaml
       - kubectl apply -f ~/.auto/k3s/mysql/deployment.yaml
       - kubectl apply -f ~/.auto/k3s/mysql/service.yaml
+
+  # Minio config
+  - pod: minio
+    name: minio
+    active: false # set this to true if you want it to start
+    commands:
+      - kubectl apply -f ~/.auto/k3s/minio/pv.yaml
+      - kubectl apply -f ~/.auto/k3s/minio/pvc.yaml
+      - kubectl apply -f ~/.auto/k3s/minio/deployment.yaml
+      - kubectl apply -f ~/.auto/k3s/minio/service.yaml
+      - kubectl apply -f ~/.auto/k3s/minio/ingress.yaml
+
+  # Matomo config
+  - pod: matomo
+    name: matomo
+    active: false # set this to true if you want it to start
+    commands:
+      - kubectl apply -f ~/.auto/k3s/matomo/pv.yaml
+      - kubectl apply -f ~/.auto/k3s/matomo/pvc.yaml
+      - kubectl apply -f ~/.auto/k3s/matomo/db-secret.yaml
+      - kubectl apply -f ~/.auto/k3s/matomo/nginx-config.yaml
+      - kubectl apply -f ~/.auto/k3s/matomo/deployment.yaml
+      - kubectl apply -f ~/.auto/k3s/matomo/service.yaml
+      - kubectl apply -f ~/.auto/k3s/matomo/ingress.yaml

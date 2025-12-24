@@ -449,3 +449,14 @@ def setup_minio(retries=5):
         if retries > 1:
             sleep(3)
             setup_minio(retries - 1)
+
+
+def run_and_return(cmd: str) -> str:
+    """Run a Bash command and return the output as a string"""
+
+    # Run the command and return the output
+    try:
+        output = subprocess.run(cmd, capture_output=True, shell=True, check=True)
+        return output.stdout.decode("utf-8").strip()
+    except CalledProcessError:
+        return ""
