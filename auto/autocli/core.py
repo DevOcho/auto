@@ -11,7 +11,6 @@ from autocli import utils
 from rich import print as rprint
 from rich.console import Console, Group
 from rich.live import Live
-from rich.table import Table
 from rich.text import Text
 
 # Read Config and provide globally
@@ -481,11 +480,11 @@ def show_status(namespace="default", all_namespaces=False, watch=False):
         items.append(Text(""))  # Spacer
 
         # 1. Check K3d Cluster
-        c_stat, c_style = _get_cluster_status()
+        c_stat, c_style = utils.get_cluster_status()
         items.append(Text.assemble(" Cluster:  ", (c_stat, c_style)))
 
         # 2. Check Registry
-        r_stat, r_style = _get_registry_status()
+        r_stat, r_style = utils.get_registry_status()
         items.append(Text.assemble(" Registry: ", (r_stat, r_style)))
 
         # If the cluster is stopped, we can't show pods
@@ -508,7 +507,7 @@ def show_status(namespace="default", all_namespaces=False, watch=False):
         items.append(Text(table_title, style="deep_sky_blue1"))
 
         # Build the table using helper
-        items.append(_build_pod_table(namespace, all_namespaces))
+        items.append(utils.build_pod_table(namespace, all_namespaces))
 
         return Group(*items)
 
@@ -585,111 +584,3 @@ def rollback_with_smalls(pod, number):
     # Run the command inside the pod
     command = f"./smalls.py rollback {number}"
     utils.run_command_inside_pod(pod, command)
-
-
-# Helpers =====================================================================
-def _get_cluster_status():
-    """Helper to check K3d cluster status"""
-    status = "Stopped"
-    style = "red"
-
-    # Check if k3d is even installed and lists the cluster
-    if utils.run_and_wait("k3d cluster list", check_result="NAME"):
-        # Check if running (1/1 servers running)
-        if utils.run_and_wait("k3d cluster list", check_result="1/1"):
-            status = "Running"
-            style = "green"
-    return status, style
-
-
-def _get_registry_status():
-    """Helper to check Docker registry status"""
-    status = "Stopped"
-    style = "red"
-    if utils.run_and_wait("docker ps", check_result="k3d-registry.local"):
-        status = "Running"
-        style = "green"
-    return status, style
-
-
-def _build_pod_table(namespace, all_namespaces):
-    """Helper to build the pods table"""
-    table = Table(show_header=True, header_style="bold magenta", expand=True)
-
-    if all_namespaces:
-        table.add_column("Namespace", style="dim")
-
-    table.add_column("Pod Name")
-    table.add_column("Ready")
-    table.add_column("Status")
-    table.add_column("Restarts", justify="right")
-    table.add_column("Age", justify="right")
-
-    # Build the command based on arguments
-    if all_namespaces:
-        cmd = "kubectl get pods --all-namespaces --no-headers"
-    else:
-        cmd = f"kubectl get pods -n {namespace} --no-headers"
-
-    output = utils.run_and_return(cmd)
-
-    if not output:
-        return Text(" No pods found.", style="italic")
-
-    for line in output.splitlines():
-        parts = line.split()
-
-        # Handle parsing differences between -A and -n
-        if all_namespaces:
-            # Columns: NAMESPACE NAME READY STATUS RESTARTS AGE
-            if len(parts) < 6:
-                continue
-            ns, name, ready, status, restarts, age = (
-                parts[0],
-                parts[1],
-                parts[2],
-                parts[3],
-                parts[4],
-                parts[5],
-            )
-        else:
-            # Columns: NAME READY STATUS RESTARTS AGE
-            if len(parts) < 5:
-                continue
-            ns = namespace
-            name, ready, status, restarts, age = (
-                parts[0],
-                parts[1],
-                parts[2],
-                parts[3],
-                parts[4],
-            )
-
-        # Clean up Age column (remove leading parenthesis)
-        age = age.lstrip("(")
-
-        # Colorize Status
-        status_style = "green"
-        if status not in ["Running", "Completed"]:
-            status_style = "yellow"
-        if "Error" in status or "Crash" in status or "ImagePullBackOff" in status:
-            status_style = "red"
-
-        # Add row to table
-        row_data = []
-        if all_namespaces:
-            row_data.append(ns)
-
-        row_data.extend(
-            [
-                name,
-                ready,
-                f"[{status_style}]{status}[/{status_style}]",
-                restarts,
-                age,
-            ]
-        )
-
-        table.add_row(*row_data)
-
-    return table

@@ -11,6 +11,8 @@ from time import sleep
 
 import yaml
 from rich import print as rprint
+from rich.table import Table
+from rich.text import Text
 
 
 def load_config():
@@ -460,3 +462,110 @@ def run_and_return(cmd: str) -> str:
         return output.stdout.decode("utf-8").strip()
     except CalledProcessError:
         return ""
+
+
+def get_cluster_status():
+    """Helper to check K3d cluster status"""
+    status = "Stopped"
+    style = "red"
+
+    # Check if k3d is even installed and lists the cluster
+    if run_and_wait("k3d cluster list", check_result="NAME"):
+        # Check if running (1/1 servers running)
+        if run_and_wait("k3d cluster list", check_result="1/1"):
+            status = "Running"
+            style = "green"
+    return status, style
+
+
+def get_registry_status():
+    """Helper to check Docker registry status"""
+    status = "Stopped"
+    style = "red"
+    if run_and_wait("docker ps", check_result="k3d-registry.local"):
+        status = "Running"
+        style = "green"
+    return status, style
+
+
+def build_pod_table(namespace, all_namespaces):
+    """Helper to build the pods table"""
+    table = Table(show_header=True, header_style="bold magenta", expand=True)
+
+    if all_namespaces:
+        table.add_column("Namespace", style="dim")
+
+    table.add_column("Pod Name")
+    table.add_column("Ready")
+    table.add_column("Status")
+    table.add_column("Restarts", justify="right")
+    table.add_column("Age", justify="right")
+
+    # Build the command based on arguments
+    if all_namespaces:
+        cmd = "kubectl get pods --all-namespaces --no-headers"
+    else:
+        cmd = f"kubectl get pods -n {namespace} --no-headers"
+
+    output = run_and_return(cmd)
+
+    if not output:
+        return Text(" No pods found.", style="italic")
+
+    for line in output.splitlines():
+        parts = line.split()
+
+        # Handle parsing differences between -A and -n
+        if all_namespaces:
+            # Columns: NAMESPACE NAME READY STATUS RESTARTS AGE
+            if len(parts) < 6:
+                continue
+            ns, name, ready, status, restarts, age = (
+                parts[0],
+                parts[1],
+                parts[2],
+                parts[3],
+                parts[4],
+                parts[5],
+            )
+        else:
+            # Columns: NAME READY STATUS RESTARTS AGE
+            if len(parts) < 5:
+                continue
+            ns = namespace
+            name, ready, status, restarts, age = (
+                parts[0],
+                parts[1],
+                parts[2],
+                parts[3],
+                parts[4],
+            )
+
+        # Clean up Age column (remove leading parenthesis)
+        age = age.lstrip("(")
+
+        # Colorize Status
+        status_style = "green"
+        if status not in ["Running", "Completed"]:
+            status_style = "yellow"
+        if "Error" in status or "Crash" in status or "ImagePullBackOff" in status:
+            status_style = "red"
+
+        # Add row to table
+        row_data = []
+        if all_namespaces:
+            row_data.append(ns)
+
+        row_data.extend(
+            [
+                name,
+                ready,
+                f"[{status_style}]{status}[/{status_style}]",
+                restarts,
+                age,
+            ]
+        )
+
+        table.add_row(*row_data)
+
+    return table
