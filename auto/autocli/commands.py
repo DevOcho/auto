@@ -4,6 +4,8 @@
   * `--offline`     This disables steps that require internet so you can work without Internet
 """
 
+import os
+
 import click
 from autocli import core, utils
 from rich import print as rprint
@@ -26,6 +28,44 @@ def auto():
     """
 
 
+def _setup_https_certificates(pods):
+    """Helper to setup HTTPS certificates interactively"""
+    rprint("[deep_sky_blue1]Setting up HTTPS certificates...[/]")
+    # Check dependencies first
+    utils.check_mkcert()
+
+    # Calculate specific domains for pods
+    pod_domains = []
+    for repo in pods:
+        p_name = repo["repo"].split("/")[-1:][0].replace(".git", "")
+        pod_domains.append(f"{p_name}.local")
+
+    # Create certs interactively
+    cert_path = os.path.expanduser("~") + "/.auto/certs"
+    key_file, cert_file = utils.create_local_certs(
+        cert_path, additional_domains=pod_domains
+    )
+    rprint(" :white_heavy_check_mark:[green] Certificates Ready")
+    return key_file, cert_file
+
+
+def _print_access_hints(pods, use_https):
+    """Helper to print access hints at the end of start"""
+    # Let's give them a hint on how they can get started
+    print()
+    rprint("[italic]Hint: Some items may still be starting in k3s.")
+    rprint("[italic]You can access your pod(s) via the following URLs:")
+
+    # Determine protocol and port based on config
+    protocol = "https" if use_https else "http"
+    port_suffix = "" if use_https else ":8088"
+
+    for repo in pods:
+        pod_name = repo["repo"].split("/")[-1:][0].replace(".git", "")
+        if utils.check_host_entry(pod_name):
+            rprint(f"[italic]  {protocol}://{pod_name}.local{port_suffix}/")
+
+
 @auto.command()
 @click.pass_context
 @click.argument("pod", required=False)
@@ -36,7 +76,14 @@ def start(self, pod, dry_run, offline):  # pylint: disable=unused-argument
 
     # Local Vars
     new_cluster = False
-    pods = []
+    pods = core.CONFIG.get("pods", [])
+    key_file = ""
+    cert_file = ""
+    use_https = core.CONFIG.get("https", False)
+
+    # HTTPS Cert Setup (interactive steps must happen before Progress bar)
+    if not pod and use_https and not dry_run:
+        key_file, cert_file = _setup_https_certificates(pods)
 
     if not pod:
         # Let's run the steps with a progress bar
@@ -75,7 +122,9 @@ def start(self, pod, dry_run, offline):  # pylint: disable=unused-argument
             # STEP 5: Start the k3s cluster
             rprint("[deep_sky_blue1]Cluster")
             if not dry_run:
-                new_cluster = core.start_cluster(progress, task)
+                new_cluster = core.start_cluster(
+                    progress, task, key_file=key_file, cert_file=cert_file
+                )
             rprint(" :white_heavy_check_mark:[green] Cluster Ready")
             progress.update(task, advance=33)
 
@@ -97,14 +146,7 @@ def start(self, pod, dry_run, offline):  # pylint: disable=unused-argument
             rprint(" :white_heavy_check_mark:[green] Pods Loaded")
             progress.update(task, advance=34)
 
-            # Let's give them a hint on how they can get started
-            print()
-            rprint("[italic]Hint: Some items may still be starting in k3s.")
-            rprint("[italic]You can access your pod(s) via the following URLs:")
-            for repo in pods:
-                pod_name = repo["repo"].split("/")[-1:][0].replace(".git", "")
-                if utils.check_host_entry(pod_name):
-                    rprint(f"[italic]  http://{pod_name}.local:8088/")
+            _print_access_hints(pods, use_https)
     else:
         rprint(f"[steel_blue]Starting[/] {pod}")
         core.start_pod(pod)
@@ -180,29 +222,6 @@ def init(self, pod):  # pylint: disable=unused-argument
     # Let's do this
     rprint(f"[steel_blue]Initializing [/]{pod}[steel_blue] pod database")
     core.init_pod_db(pod)
-
-
-@auto.command()
-@click.pass_context
-@click.option("--namespace", "-n", default="default", help="Namespace to show pods for")
-@click.option(
-    "--all-namespaces",
-    "-a",
-    is_flag=True,
-    default=False,
-    help="Show pods from all namespaces",
-)
-@click.option(
-    "--watch",
-    "-w",
-    is_flag=True,
-    default=False,
-    help="Watch the status (refresh every 3s)",
-)
-def status(self, namespace, all_namespaces, watch):  # pylint: disable=unused-argument
-    """Show the status of the cluster and pods"""
-
-    core.show_status(namespace, all_namespaces, watch)
 
 
 @auto.command()
@@ -283,3 +302,26 @@ def install(self, git_repo):  # pylint: disable=unused-argument
     # This will download a repo and then copy the local.yaml file
     # into the auto config folder
     core.install_config_from_repo(git_repo)
+
+
+@auto.command()
+@click.pass_context
+@click.option("--namespace", "-n", default="default", help="Namespace to show pods for")
+@click.option(
+    "--all-namespaces",
+    "-a",
+    is_flag=True,
+    default=False,
+    help="Show pods from all namespaces",
+)
+@click.option(
+    "--watch",
+    "-w",
+    is_flag=True,
+    default=False,
+    help="Watch the status (refresh every 3s)",
+)
+def status(self, namespace, all_namespaces, watch):  # pylint: disable=unused-argument
+    """Show the status of the cluster and pods"""
+
+    core.show_status(namespace, all_namespaces, watch)
