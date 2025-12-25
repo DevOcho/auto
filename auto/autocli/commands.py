@@ -18,6 +18,46 @@ CONTEXT_SETTINGS = {
 }
 
 
+def get_pod_names(ctx, param, incomplete):  # pylint: disable=unused-argument
+    """Generate list of pods for shell autocompletion"""
+    # Check for config file existence to avoid error printing/exit in utils.load_config
+    config_path = os.path.expanduser("~/.auto/config/local.yaml")
+    if not os.path.isfile(config_path):
+        return []
+
+    try:
+        # We suppress output here to avoid breaking the shell completion display
+        config = utils.load_config()
+        pods = []
+        for item in config.get("pods", []):
+            # Logic to extract pod name from repo string
+            # e.g. git@github.com:DevOcho/portal.git -> portal
+            if isinstance(item, dict) and "repo" in item:
+                p_name = item["repo"].split("/")[-1:][0].replace(".git", "")
+                if p_name.startswith(incomplete):
+                    pods.append(p_name)
+        return sorted(pods)
+    except Exception:  # pylint: disable=broad-except
+        return []
+
+
+def get_namespaces(ctx, param, incomplete):  # pylint: disable=unused-argument
+    """Generate list of namespaces for shell autocompletion"""
+    try:
+        # Get namespaces from kubectl
+        # We rely on utils.run_and_return which is safe and captures output
+        output = utils.run_and_return(
+            "kubectl get ns -o jsonpath='{.items[*].metadata.name}'"
+        )
+        if not output:
+            return []
+
+        namespaces = output.split()
+        return [ns for ns in namespaces if ns.startswith(incomplete)]
+    except Exception:  # pylint: disable=broad-except
+        return []
+
+
 @click.group(context_settings=CONTEXT_SETTINGS)
 @click.version_option(version="0.3.0")
 def auto():
@@ -107,7 +147,7 @@ def _print_access_hints(pods, use_https):
 
 @auto.command()
 @click.pass_context
-@click.argument("pod", required=False)
+@click.argument("pod", required=False, shell_complete=get_pod_names)
 @click.option("--dry-run", is_flag=True, default=False)
 @click.option("--offline", is_flag=True, default=False)
 def start(self, pod, dry_run, offline):  # pylint: disable=unused-argument
@@ -193,7 +233,7 @@ def start(self, pod, dry_run, offline):  # pylint: disable=unused-argument
 
 @auto.command()
 @click.pass_context
-@click.argument("pod", required=False)
+@click.argument("pod", required=False, shell_complete=get_pod_names)
 @click.option("--dry-run", is_flag=True, default=False)
 @click.option("--delete-cluster", is_flag=True, default=False)
 def stop(self, pod, dry_run, delete_cluster):  # pylint: disable=unused-argument
@@ -221,7 +261,7 @@ def stop(self, pod, dry_run, delete_cluster):  # pylint: disable=unused-argument
 
 @auto.command()
 @click.pass_context
-@click.argument("pod", required=True)
+@click.argument("pod", required=True, shell_complete=get_pod_names)
 def restart(self, pod):  # pylint: disable=unused-argument
     """Restart (stop / start) a pod"""
 
@@ -232,7 +272,7 @@ def restart(self, pod):  # pylint: disable=unused-argument
 
 @auto.command()
 @click.pass_context
-@click.argument("pod", required=True)
+@click.argument("pod", required=True, shell_complete=get_pod_names)
 def seed(self, pod):  # pylint: disable=unused-argument
     """Seed a pod's databases"""
 
@@ -248,7 +288,7 @@ def seed(self, pod):  # pylint: disable=unused-argument
 
 @auto.command()
 @click.pass_context
-@click.argument("pod", required=True)
+@click.argument("pod", required=True, shell_complete=get_pod_names)
 def init(self, pod):  # pylint: disable=unused-argument
     """Init a pod's databases.
 
@@ -282,7 +322,7 @@ def minio(self):  # pylint: disable=unused-argument
 
 
 @auto.command()
-@click.argument("pod")
+@click.argument("pod", shell_complete=get_pod_names)
 @click.pass_context
 def logs(self, pod):  # pylint: disable=unused-argument
     """Output logs for a pod to the terminal"""
@@ -292,7 +332,7 @@ def logs(self, pod):  # pylint: disable=unused-argument
 
 
 @auto.command()
-@click.argument("pod")
+@click.argument("pod", shell_complete=get_pod_names)
 @click.pass_context
 def tag(self, pod):  # pylint: disable=unused-argument
     """Build, Tag, and Load a pod container image in the local repository"""
@@ -302,7 +342,7 @@ def tag(self, pod):  # pylint: disable=unused-argument
 
 
 @auto.command()
-@click.argument("pod")
+@click.argument("pod", shell_complete=get_pod_names)
 @click.pass_context
 def upgrade(self, pod):  # pylint: disable=unused-argument
     """Remove container registry, create it again, then repopulate it, then restart the cluster"""
@@ -312,7 +352,7 @@ def upgrade(self, pod):  # pylint: disable=unused-argument
 
 
 @auto.command()
-@click.argument("pod")
+@click.argument("pod", shell_complete=get_pod_names)
 @click.pass_context
 def migrate(self, pod):  # pylint: disable=unused-argument
     """Run database migrations in a pod (using smalls)"""
@@ -322,7 +362,7 @@ def migrate(self, pod):  # pylint: disable=unused-argument
 
 
 @auto.command()
-@click.argument("pod")
+@click.argument("pod", shell_complete=get_pod_names)
 @click.argument("number")
 @click.pass_context
 def rollback(self, pod, number):  # pylint: disable=unused-argument
@@ -345,7 +385,13 @@ def install(self, git_repo):  # pylint: disable=unused-argument
 
 @auto.command()
 @click.pass_context
-@click.option("--namespace", "-n", default="default", help="Namespace to show pods for")
+@click.option(
+    "--namespace",
+    "-n",
+    default="default",
+    help="Namespace to show pods for",
+    shell_complete=get_namespaces,
+)
 @click.option(
     "--all-namespaces",
     "-a",
