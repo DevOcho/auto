@@ -1,0 +1,25 @@
+# Developing Auto
+
+
+## AI assistant
+
+
+
+```bash
+cat PROMPT.md
+
+find . -type d \( -name ".git" -o -name "__pycache__" -o -name ".pytest_cache" -o -name "build" -o -name "dist" -o -name "bin" -o -name "lib" -o -name "assets" \) -prune -o -type f \( -name "*.py" -o -name "*.yaml" -o -name "*.yml" -o -name "*.sh" -o -name "Makefile" -o -name "*.txt" -o -name "*.md" -o -name "*.cnf" -o -name "*.spec" \) -exec printf '\n\n================================================================================\nFILE: {}\n================================================================================\n' \; -exec cat {} \;
+
+tree -I 'bin|lib|.git|__pycache__|*.pyc'
+```
+
+
+## Deployment
+
+We use github actions to create an exec file.  You can trigger that by pushing
+a new tag version to the repo.
+
+```bash
+git tag X.Y.Z
+git push tags
+```

@@ -4,6 +4,7 @@ import configparser
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from subprocess import CalledProcessError
@@ -11,6 +12,8 @@ from time import sleep
 
 import yaml
 from rich import print as rprint
+from rich.table import Table
+from rich.text import Text
 
 
 def load_config():
@@ -103,20 +106,27 @@ def declare_error(error_msg: str, exit_auto: bool = True) -> None:
         sys.exit()
 
 
-def run_and_wait(cmd: str, capture_output=True, check_result="") -> int:
+def run_and_wait(
+    cmd: str,
+    capture_output=True,
+    check_result="",
+    cwd=None,
+    suppress_error=False,
+    _retry_count=0,
+) -> int:
     """Run a Bash command and wait for it to finish"""
 
     # Local vars
     found = 0
 
-    # Make this command safe to run
-    cmd = shlex.quote(cmd)
-    args = shlex.split(cmd)
-
     # Run the command and return the output
     try:
         output = subprocess.run(
-            args, capture_output=capture_output, shell=True, check=True
+            cmd,
+            capture_output=capture_output,
+            shell=True,
+            check=True,
+            cwd=cwd,  # Allow running in specific directory
         )
 
         if check_result:
@@ -132,7 +142,37 @@ def run_and_wait(cmd: str, capture_output=True, check_result="") -> int:
         # Get to this point implies success
         return 1
 
-    except CalledProcessError:
+    except CalledProcessError as error:
+        # Check for kubectl connection issues to auto-heal
+        err_text = error.stderr.decode("utf-8") if error.stderr else ""
+        if "kubectl" in cmd and (
+            "connection refused" in err_text or "server was refused" in err_text
+        ):
+            if _retry_count < 3:
+                # Attempt to fix connectivity by refreshing kubeconfig
+                # We use subprocess directly to avoid recursion loops
+                subprocess.run(
+                    "k3d kubeconfig merge k3s-default --kubeconfig-switch-context",
+                    shell=True,
+                    capture_output=True,
+                    check=False,
+                )
+                sleep(2)
+                # Retry the original command
+                return run_and_wait(
+                    cmd,
+                    capture_output,
+                    check_result,
+                    cwd,
+                    suppress_error,
+                    _retry_count + 1,
+                )
+
+        # If we captured output and errors are not suppressed, print the error.
+        if capture_output and err_text and not suppress_error:
+            rprint(f"\n[red]Command failed:[/red] {cmd}")
+            # Use standard print to avoid rich parsing error contents as tags
+            print(err_text)
         return 0
 
 
@@ -163,6 +203,20 @@ def verify_pod_is_installed(pod: str) -> bool:
     return pod_name or run_and_wait("""kubectl get pods""", check_result=pod)
 
 
+def verify_cluster_connection(retries=10) -> bool:
+    """Verify that kubectl can connect to the cluster"""
+    cmd = "kubectl cluster-info"
+    for _ in range(retries):
+        try:
+            # We assume capture_output=True inside run_and_wait is fine here,
+            # but we use subprocess directly to avoid loop recursion logging
+            subprocess.run(cmd, capture_output=True, shell=True, check=True)
+            return True
+        except CalledProcessError:
+            sleep(2)
+    return False
+
+
 def wait_for_pod_status(podname: str, status: str, max_wait_time=60) -> None:
     """Check for a pod to be complete and then return"""
 
@@ -170,23 +224,45 @@ def wait_for_pod_status(podname: str, status: str, max_wait_time=60) -> None:
     pod_complete = 0
     cycles = 0  # Each cycle is a half a second
 
-    while not pod_complete or cycles < max_wait_time:
-        # Get the pod(s) in question
-        bash_command = f"""kubectl get pods --all-namespaces | grep {podname} || true"""
-        results = subprocess.run(
-            bash_command, capture_output=True, shell=True, check=True
-        )
+    while not pod_complete and cycles < max_wait_time:
+        # Get the pod(s) in question.
+        # We DO NOT use grep here so we can detect if kubectl itself fails.
+        bash_command = "kubectl get pods --all-namespaces"
 
-        # Look for the pod and the status to see if it's ready
-        result_lines = results.stdout.splitlines()
-        for line in result_lines:
-            line_str = line.decode("utf-8")
-            if re.search(podname, line_str):
-                if re.search(status, line_str):
-                    pod_complete = 1
+        try:
+            results = subprocess.run(
+                bash_command, capture_output=True, shell=True, check=True
+            )
+
+            # Look for the pod and the status to see if it's ready
+            result_lines = results.stdout.splitlines()
+            for line in result_lines:
+                line_str = line.decode("utf-8")
+                if re.search(podname, line_str):
+                    if re.search(status, line_str):
+                        pod_complete = 1
+        except CalledProcessError:
+            pass
 
         cycles += 1
         sleep(0.5)
+
+
+def wait_for_mysql_socket(retries=30) -> bool:
+    """Wait for MySQL socket to be available inside the pod"""
+    pod_name = get_full_pod_name("mysql").strip("\n")
+    if not pod_name:
+        return False
+
+    for _ in range(retries):
+        # We use a real query to test connectivity, not just admin ping
+        cmd = f'kubectl exec {pod_name} -- mysql -uroot -ppassword -e "SELECT 1"'
+        try:
+            subprocess.run(cmd, capture_output=True, shell=True, check=True)
+            return True
+        except CalledProcessError:
+            sleep(1)
+    return False
 
 
 def get_full_pod_name(pod) -> str:
@@ -271,20 +347,28 @@ def create_mysql_database(database, retries=0):
         cmd = shlex.quote(cmd)
         args = shlex.split(cmd)
 
-        # Run the command and return the output
-        subprocess.run(args, shell=True, check=True)
+        try:
+            # Run the command silently.
+            # We capture output to suppress "ERROR 2002" messages during startup.
+            subprocess.run(
+                args,
+                shell=True,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except CalledProcessError:
+            if retries < 10:  # Increased retries to 10 (approx 30s) for slower startups
+                sleep(3)
+                create_mysql_database(database, retries=retries + 1)
+            else:
+                rprint(f"  [red]FAILED: Could not create database[/] {database}")
 
-    # If we don't get the pod_name then we need to wait and try again
     else:
-        if retries:
-            retries += 1
-        else:
-            retries = 1
-
-        # We will try up to three times, waiting 3 seconds per time.
-        if retries < 4:
+        # If pod_name not found, wait and retry
+        if retries < 10:
             sleep(3)
-            create_mysql_database(database, retries=retries)
+            create_mysql_database(database, retries=retries + 1)
         else:
             rprint(f"  [red]FAILED: Could not create database[/] {database}")
 
@@ -553,3 +637,195 @@ def setup_minio(retries=5):
         if retries > 1:
             sleep(3)
             setup_minio(retries - 1)
+
+
+def run_and_return(cmd: str) -> str:
+    """Run a Bash command and return the output as a string"""
+
+    # Run the command and return the output
+    try:
+        output = subprocess.run(cmd, capture_output=True, shell=True, check=True)
+        return output.stdout.decode("utf-8").strip()
+    except CalledProcessError:
+        return ""
+
+
+def get_cluster_status():
+    """Helper to check K3d cluster status"""
+    status = "Stopped"
+    style = "red"
+
+    # Check if k3d is even installed and lists the cluster
+    if run_and_wait("k3d cluster list", check_result="NAME"):
+        # Check if running (1/1 servers running)
+        if run_and_wait("k3d cluster list", check_result="1/1"):
+            status = "Running"
+            style = "green"
+    return status, style
+
+
+def get_registry_status():
+    """Helper to check Docker registry status"""
+    status = "Stopped"
+    style = "red"
+    if run_and_wait("docker ps", check_result="k3d-registry.local"):
+        status = "Running"
+        style = "green"
+    return status, style
+
+
+def build_pod_table(namespace, all_namespaces):
+    """Helper to build the pods table"""
+    table = Table(show_header=True, header_style="bold magenta", expand=True)
+
+    if all_namespaces:
+        table.add_column("Namespace", style="dim")
+
+    table.add_column("Pod Name")
+    table.add_column("Ready")
+    table.add_column("Status")
+    table.add_column("Restarts", justify="right")
+    table.add_column("Age", justify="right")
+
+    # Build the command based on arguments
+    if all_namespaces:
+        cmd = "kubectl get pods --all-namespaces --no-headers"
+    else:
+        cmd = f"kubectl get pods -n {namespace} --no-headers"
+
+    output = run_and_return(cmd)
+
+    if not output:
+        return Text(" No pods found.", style="italic")
+
+    for line in output.splitlines():
+        parts = line.split()
+
+        # Handle parsing differences between -A and -n
+        if all_namespaces:
+            # Columns: NAMESPACE NAME READY STATUS RESTARTS AGE
+            if len(parts) < 6:
+                continue
+            ns, name, ready, status, restarts, age = (
+                parts[0],
+                parts[1],
+                parts[2],
+                parts[3],
+                parts[4],
+                parts[5],
+            )
+        else:
+            # Columns: NAME READY STATUS RESTARTS AGE
+            if len(parts) < 5:
+                continue
+            ns = namespace
+            name, ready, status, restarts, age = (
+                parts[0],
+                parts[1],
+                parts[2],
+                parts[3],
+                parts[4],
+            )
+
+        # Clean up Age column (remove leading parenthesis)
+        age = age.lstrip("(")
+
+        # Colorize Status
+        status_style = "green"
+        if status not in ["Running", "Completed"]:
+            status_style = "yellow"
+        if "Error" in status or "Crash" in status or "ImagePullBackOff" in status:
+            status_style = "red"
+
+        # Add row to table
+        row_data = []
+        if all_namespaces:
+            row_data.append(ns)
+
+        row_data.extend(
+            [
+                name,
+                ready,
+                f"[{status_style}]{status}[/{status_style}]",
+                restarts,
+                age,
+            ]
+        )
+
+        table.add_row(*row_data)
+
+    return table
+
+
+def check_certutil():
+    """Check if libnss3-tools is installed"""
+    if not shutil.which("certutil"):
+        declare_error(
+            "certutil is not installed (required for mkcert).\n"
+            "  Please install it:\n"
+            "  - Ubuntu/Debian: sudo apt install libnss3-tools\n"
+            "  - Fedora: sudo dnf install nss-tools\n"
+            "  - Arch: sudo pacman -S nss"
+        )
+
+
+def check_mkcert():
+    """Check if mkcert is installed"""
+    if not shutil.which("mkcert"):
+        declare_error(
+            "mkcert is not installed. Please install it to use HTTPS.\n"
+            "  See: https://github.com/FiloSottile/mkcert"
+        )
+    # Also check for certutil so we don't fail partially
+    check_certutil()
+
+
+def create_local_certs(cert_path, additional_domains=None):
+    """Create local certificates using mkcert"""
+
+    if additional_domains is None:
+        additional_domains = []
+
+    # Create the directory if it doesn't exist
+    if not os.path.isdir(cert_path):
+        os.makedirs(cert_path)
+
+    key_file = os.path.join(cert_path, "key.pem")
+    cert_file = os.path.join(cert_path, "cert.pem")
+
+    # Install the local CA
+    # Try silently first (success if already installed or no sudo needed)
+    try:
+        subprocess.run(
+            "mkcert -install",
+            shell=True,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except CalledProcessError:
+        # If silent fail, run interactively (likely needs sudo password)
+        rprint("  -- Installing local CA (may prompt for password)")
+        os.system("mkcert -install")
+
+    # Generate the certs
+    # We suppress output here unless it fails
+    domain_args = " ".join(additional_domains)
+    cmd = (
+        f"mkcert -key-file {key_file} -cert-file {cert_file} "
+        f"'*.local' localhost 127.0.0.1 ::1 {domain_args}"
+    )
+
+    try:
+        subprocess.run(
+            cmd,
+            shell=True,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+    except CalledProcessError as e:
+        rprint("[red]Error generating certificates:[/red]")
+        print(e.stderr.decode())
+
+    return key_file, cert_file
