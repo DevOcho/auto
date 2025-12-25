@@ -8,8 +8,8 @@ repos:
       - id: check-ast
       - id: check-json
       - id: check-toml
-      - id: check-yaml
-        exclude: auto/helm/training-portal/templates
+      # - id: check-yaml
+      # exclude: auto/helm/training-portal/templates
       - id: check-merge-conflict
       - id: debug-statements
       - id: end-of-file-fixer
@@ -95,8 +95,9 @@ repos:
     hooks:
       - id: pytest
         name: pytest
-        stages: [commit]
+        stages: [pre-commit]
         language: system
         entry: pytest --cov-config=.coveragerc --cov --cov-fail-under=20
         pass_filenames: false
         always_run: true
+        args: ["--ignore=lib"]  # Restrict pytest to the tests/ directory

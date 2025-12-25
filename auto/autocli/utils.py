@@ -24,8 +24,10 @@ def load_config():
 
     if not os.path.isfile(os.path.expanduser("~") + "/.auto/config/local.yaml"):
         declare_error(
-            "No local.yaml file available. Perhaps you didn't run the installer?"
+            "No local.yaml file available. Creating a default.", exit_auto=False
         )
+        # Initialize a config file
+        create_initial_config()
 
     # Read Config and provide the data
     with open(
@@ -34,6 +36,44 @@ def load_config():
         config = yaml.safe_load(yaml_file)
 
     return config
+
+
+def create_initial_config():
+    """Create a default config file if none is present"""
+
+    home_folder = os.path.expanduser("~")
+
+    default_config = f"""
+---
+# The code folder is where you want us to download all of your pod code repositories
+code: {home_folder}/source/devocho
+
+# Each repo listed here will be run as a pod in k3s
+pods:
+  - repo: git@github.com:DevOcho/portal.git
+    branch: main
+
+# These are the system pods.  They use the config that comes with auto.
+system-pods:
+  - pod:
+      name: mysql
+      active: false
+      commands:
+        [
+          "kubectl apply -f ~/.auto/k3s/mysql/pv.yaml",
+          "kubectl apply -f ~/.auto/k3s/mysql/pvc.yaml",
+          "kubectl apply -f ~/.auto/k3s/mysql/deployment.yaml",
+          "kubectl apply -f ~/.auto/k3s/mysql/service.yaml",
+        ]
+      databases:
+        - name: portal
+"""
+
+    if not os.path.isfile(os.path.expanduser("~") + "/.auto/config/local.yaml"):
+        with open(
+            os.path.expanduser("~") + "/.auto/config/local.yaml", "w", encoding="utf-8"
+        ) as config_file:
+            config_file.write(default_config)
 
 
 def run_command_inside_pod(pod, command):
@@ -56,11 +96,14 @@ def run_command_inside_pod(pod, command):
         declare_error(f"  !! {pod} could [red]NOT[/red] run command")
 
 
-def declare_error(error_msg: str):
+def declare_error(error_msg: str, exit_auto: bool = True) -> None:
     """Print an error message and exit"""
 
     rprint(f"\n [red]:x: Error[/red]: {error_msg}")
-    sys.exit()
+
+    # If they want us to exit then let's stop everything
+    if exit_auto:
+        sys.exit()
 
 
 def run_and_wait(
@@ -256,6 +299,24 @@ def connect_to_db() -> None:
     subprocess.run(args, shell=True, check=True)
 
 
+def connect_to_db_postgres() -> None:
+    """Get the full name of the pod for a k3s pod by application name"""
+
+    # The command we will send to the mysql pod
+    container_cmd = "psql -U root postgres"
+
+    # Determine which pod to exec against and build the command
+    pod_name = get_full_pod_name("postgres").strip("\n")
+    cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
+
+    # Make this command safe to run
+    cmd = shlex.quote(cmd)
+    args = shlex.split(cmd)
+
+    # Run the command and return the output
+    subprocess.run(args, shell=True, check=True)
+
+
 def connect_to_minio() -> None:
     """This opens the port-forward to MinIO to allow dev access"""
 
@@ -343,13 +404,19 @@ def create_minio_bucket(bucket):
 def check_docker():
     """Make sure docker exists and the service is running"""
 
+    # Error count
+    errors = 0
+
     # Verify docker is installed
     bash_command = """which docker"""
     if not run_and_wait(bash_command, check_result="docker"):
         declare_error(
             """Docker is missing!
-               [yellow]We didn't see docker on your system.  You'll need docker installed to continue"""
+               [yellow]We didn't see docker on your system.  You'll need docker installed to continue""",
+            exit_auto=False,
         )
+
+        errors += 1
 
     # Verify docker is running
     bash_command = """ps aux"""
@@ -357,8 +424,10 @@ def check_docker():
         declare_error(
             """Docker Daemon doesn't appear to be running.
         Please run the following command:
-          `sudo service docker start`"""
+          `sudo service docker start`""",
+            exit_auto=False,
         )
+        errors += 1
 
     # Verify the `docker` command is available to this user
     bash_command = """docker ps"""
@@ -367,12 +436,19 @@ def check_docker():
             """The `docker` command doesn't appear to be working!
              Perhaps you need to run the post install steps:
                https://docs.docker.com/engine/install/linux-postinstall/
-          """
+          """,
+            exit_auto=False,
         )
+        errors += 1
+
+    return errors
 
 
 def check_k8s():
     """Look for the things necessary to run k3s via k3d"""
+
+    # Error count
+    errors = 0
 
     # check for the k3d command
     bash_command = """k3d cluster list"""
@@ -380,8 +456,10 @@ def check_k8s():
         declare_error(
             """The `k3d` command doesn't appear to be installed!
              Please visit https://k3d.io for installation instructions.
-          """
+          """,
+            exit_auto=False,
         )
+        errors += 1
 
     # check for the kubectl command
     bash_command = """kubectl get --help"""
@@ -389,12 +467,19 @@ def check_k8s():
         declare_error(
             """The `kubectl` command doesn't appear to be installed!
              Please install it to continue.
-          """
+          """,
+            exit_auto=False,
         )
+        errors += 1
+
+    return errors
 
 
 def check_helm():
     """Look for the things necessary to run helm"""
+
+    # Error count
+    errors = 0
 
     # check for the helm command
     bash_command = """helm version"""
@@ -402,19 +487,28 @@ def check_helm():
         declare_error(
             """The `helm` command doesn't appear to be installed!
              Please visit https://helm.sh/docs/intro/install/ for installation instructions.
-          """
+          """,
+            exit_auto=False,
         )
+        errors += 1
+
+    return errors
 
 
 def check_registry_host_entry():
     """Check that appropriate host entries are made"""
 
+    # Error count
+    errors = 0
+
     # check for the k3d-registry.local host entry
-    if not check_host_entry("k3d-registry"):
-        sys.exit()
+    if not check_host_entry("k3d-registry", exit_auto=False):
+        errors += 1
+
+    return errors
 
 
-def check_host_entry(host):
+def check_host_entry(host, exit_auto: bool = True):
     """Check that a host entry for the pod has been made"""
 
     # check for the k3d-registry.local host entry
@@ -424,7 +518,8 @@ def check_host_entry(host):
             f"""No registry entry in /etc/hosts !
        Please add the following to your /etc/hosts file
        127.0.0.1      {host}.local
-          """
+          """,
+            exit_auto=exit_auto,
         )
 
         return False
@@ -471,6 +566,15 @@ def pull_repo(repo, code_folder):
                 rprint(
                     f"[yellow]       :warning: Could not clone {repo['repo']} for unknown reasons"
                 )
+            else:
+                os.chdir(repo_local_dir)
+                cmd = f"git checkout {repo['branch']}"
+                if not run_and_wait(cmd):
+                    rprint(
+                        f"[yellow]       :warning: Could not change to branch {repo['branch']}"
+                    )
+                os.chdir(cwd)
+
         except CalledProcessError:
             rprint(f"[yellow]       :warning: Could not clone {repo['repo']}")
             rprint(

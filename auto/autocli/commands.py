@@ -324,6 +324,15 @@ def mysql(self):  # pylint: disable=unused-argument
 
 @auto.command()
 @click.pass_context
+def postgres(self):  # pylint: disable=unused-argument
+    """Connect to the postgres database"""
+
+    # Let's connect to the MySQL database inside the k3s cluster
+    core.connect_to_postgres()
+
+
+@auto.command()
+@click.pass_context
 def minio(self):  # pylint: disable=unused-argument
     """Open Connection to MinIO Server"""
 

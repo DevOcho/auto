@@ -41,9 +41,7 @@ NOTE: `auto` is installed for a user and not installed system wide.
 You can install it with the following commands:
 
 ```bash
-git clone git@github.com:DevOcho/auto.git
-cd auto
-./install_auto.sh
+curl -fsSL https://www.devocho.com/auto.sh | bash
 ```
 
 The `auto` install will update your `~/.bashrc` file to add itself to your path
@@ -82,7 +80,6 @@ For automatic installation, you can use the `--install` flag:
 auto autocomplete --shell bash --install
 source ~/.bashrc
 ```
-
 
 ## Quickstart
 
@@ -150,7 +147,6 @@ file that tells auto how you want it to run.  Here is an example of a
 web application pod using a helm chart:
 
 ```yaml
-
 ---
 # Portal information
 name: portal
@@ -208,8 +204,8 @@ On the first run, `auto start` may prompt you for your `sudo` password to instal
 
 ## Usage
 
-You can get basic help by running `auto --help`.  For more in-depth assistance
-read the official docs.  Thanks for your interest!
+You can get basic help by running `auto --help`.
+Thanks for your interest!
 
 `<pod>` is the short name of the pod.  For example, the portal above might be
 fully named "portal-596d876cff-pc99c".  When you see `<pod>` you can just use
@@ -272,7 +268,6 @@ The above example will rollback the database to the 0123 migration.
 This will build the local pod image, tag it, and upload it to the local
 repository.
 
-
 ## Sharing the auto configs with your team
 
 One frequent question we get is how do you share the auto configs with
@@ -289,7 +284,7 @@ different microservices.
 When a new software developer is joining the group, they will simply do
 the following:
 
-1. Install Auto (although we probably did that for them)
+1. Install Auto
 2. Clone the "parent" repository with the auto config
 3. Run `make && make install` which loads the config in the ~/.auto/config folder
 4. Run `auto start`

@@ -4,7 +4,9 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
+from pathlib import Path
 
 import requests
 import yaml
@@ -225,13 +227,16 @@ def start_cluster(progress, task, key_file="", cert_file=""):
         rprint("  -- [bold green]HTTPS Enabled[/]: Binding ports 80/443")
 
     code_dir = CONFIG["code"]
-    # We disable Traefik here so we can install Nginx Ingress later
+    # I'm opening port 8088 and 3306 outside the cluster for access to the sites
+    # and mysql.  This means you can't run a mysql instance on your host on the
+    # same port.
     bash_command = f"""/usr/local/bin/k3d cluster create \
                        --volume {code_dir}:/mnt/code \
                        --registry-use k3d-registry.local:12345 \
                        --registry-config ~/.auto/k3s/registries.yaml \
                        {load_bal_config} \
                        --k3s-arg "--disable=traefik@server:0" \
+                       -p "3306:30036@loadbalancer" \
                        --agents 1"""
 
     # Attempt creation.
@@ -257,15 +262,14 @@ def start_cluster(progress, task, key_file="", cert_file=""):
     if utils.wait_for_pod_status("ingress-nginx-controller", "Running"):
         progress.update(task, advance=5)
 
-    # Let's remove the completed helm containers
-    bash_command = """kubectl delete pod -n kube-system \
+    # Let's remove the completed nginx job containers
+    if utils.wait_for_pod_status("ingress-nginx-admission-create", "Complete"):
+        progress.update(task, advance=5)
+    bash_command = """kubectl delete pod -n ingress-nginx \
                       --field-selector=status.phase==Succeeded"""
     if utils.run_and_wait(bash_command):
         print("     = Pods finished starting.  Removed completed setup pods.")
-    if utils.run_and_wait(bash_command):
-        print("     = Pods finished starting.  Removed completed setup pods.")
 
-    # Tell them this is a new cluster
     return True
 
 
@@ -288,6 +292,7 @@ def delete_cluster(progress, task) -> None:
 
     # Run delete
     utils.run_and_wait(bash_command)
+    time.sleep(2)  # Give docker a moment to cleanup
 
     # Verify deletion by looping
     # If k3d cluster list still returns 'k3s-default', we wait.
@@ -348,11 +353,55 @@ def _recover_pvc_conflict(pod_name):
         time.sleep(1)
 
 
+def _build_install_command(pod_config, pod_name, code_dir):
+    """Helper to construct the installation command"""
+    release_name = pod_config.get("name", pod_name)
+    is_helm = False
+
+    # If they are using helm
+    if re.search("helm", pod_config["command"]):
+        is_helm = True
+        cmd_args = pod_config.get("command-args", "")
+        desc = pod_config.get("desc", "")
+        helm_path = f"{code_dir}/{pod_name}/.auto/helm"
+
+        # Construct helm command
+        command = f'{pod_config["command"]} {cmd_args} --description "{desc}" {release_name} {helm_path}'
+    else:
+        # They are using kubectl apply
+        command = f"{pod_config['command']} {pod_config['command_args']}"
+
+    return command, is_helm, release_name
+
+
+def _execute_pod_install(command, pod_folder, pod_name, is_helm, release_name):
+    """Helper to execute the installation command with retries"""
+    # FIRST ATTEMPT: Run silently to avoid scary error messages for known issues
+    if utils.run_and_wait(command, cwd=pod_folder, suppress_error=True):
+        rprint(f"     * [bright_cyan]: {pod_name}[/] installed")
+    else:
+        # If failed, attempt auto-fix silently
+        _recover_pvc_conflict(pod_name)
+
+        # If it was Helm, try to uninstall the partial/failed release before retrying
+        if is_helm:
+            utils.run_and_wait(
+                f"helm uninstall {release_name}",
+                capture_output=True,
+                suppress_error=True,
+            )
+
+        # RETRY INSTALLATION
+        if utils.run_and_wait(command, cwd=pod_folder):
+            rprint(f"     * [bright_cyan]: {pod_name}[/] installed")
+        else:
+            rprint(f"     * [red]: {pod_name}[/] failed to install")
+
+
 def start_pod(pod) -> None:
     """Start a single pod"""
 
     # Local Vars
-    os.path.expanduser("~")
     code_dir = CONFIG["code"]
 
     # If we get a dictionary we have to find the pod name from the repo name
@@ -364,43 +413,30 @@ def start_pod(pod) -> None:
     # Is this pod already running?
     if utils.run_and_wait("""kubectl get pods""", check_result=pod_name):
         rprint(f"       * {pod_name}: [steel_blue]already running")
+        return
 
     # If we aren't running let's start via helm install or kubectl apply
-    else:
-        # Get the pod config
-        config_file_path = code_dir + "/" + pod_name + "/.auto/config.yaml"
-        with open(config_file_path, encoding="utf-8") as pod_yaml:
-            pod_config = yaml.safe_load(pod_yaml)
+    config_file_path = Path(code_dir) / pod_name / ".auto" / "config.yaml"
 
-        # Prepare execution directory (repo folder)
-        pod_folder = os.path.join(code_dir, pod_name)
+    if not config_file_path.is_file():
+        utils.declare_error(
+            f"[bold red]Error: Configuration file not found at: {config_file_path}[/bold red]",
+            exit_auto=True,
+        )
+        return
 
-        # If they are using helm
-        if re.search("helm", pod_config["command"]):
-            if "command-args" in pod_config:
-                command = f"""{pod_config['command']} {pod_config['command-args']} """
-            else:
-                command = f"""{pod_config['command']} """
-            command += f"""--description \"{pod_config['desc']}\" """
-            command += f"""{pod_config['name']} {code_dir}/{pod_name}/.auto/helm"""
+    with open(config_file_path, encoding="utf-8") as pod_yaml:
+        pod_config = yaml.safe_load(pod_yaml)
 
-        # They are using kubectl apply
-        else:
-            command = f"{pod_config['command']} {pod_config['command_args']}"
+    # Prepare execution directory (repo folder)
+    pod_folder = os.path.join(code_dir, pod_name)
 
-        # Run the pod install command inside the repo directory
-        # FIRST ATTEMPT: Run silently to avoid scary error messages for known issues
-        if utils.run_and_wait(command, cwd=pod_folder, suppress_error=True):
-            rprint(f"     * [bright_cyan]: {pod_name}[/] installed")
-        else:
-            # If failed, attempt auto-fix silently
-            _recover_pvc_conflict(pod_name)
+    command, is_helm, release_name = _build_install_command(
+        pod_config, pod_name, code_dir
+    )
 
-            # RETRY INSTALLATION
-            if utils.run_and_wait(command, cwd=pod_folder):
-                rprint(f"     * [bright_cyan]: {pod_name}[/] installed")
-            else:
-                rprint(f"     * [red]: {pod_name}[/] failed to install")
+    # Run the pod install command inside the repo directory
+    _execute_pod_install(command, pod_folder, pod_name, is_helm, release_name)
 
 
 def restart_pod(pod) -> None:
@@ -487,6 +523,24 @@ def install_mysql_in_cluster() -> None:
         rprint("       [green]Started MySQL")
 
 
+def _process_pod_databases(pod_config):
+    """Helper to process database creation for a single pod config"""
+    if "system-pods" in pod_config:
+        for system_pod in pod_config["system-pods"]:
+            if system_pod["name"] == "mysql":
+                for database in system_pod["databases"]:
+                    utils.create_mysql_database(database["name"])
+                    rprint(
+                        f"      *  Created MySQL database: [bright_cyan]{database['name']}"
+                    )
+            elif system_pod["name"] == "minio":
+                for bucket in system_pod["buckets"]:
+                    utils.create_minio_bucket(bucket["name"])
+                    rprint(
+                        f"      *  Created MinIO bucket: [bright_cyan]{bucket['name']}"
+                    )
+
+
 def create_databases():
     """Create the databases"""
     rprint("  -- Creating Databases and Buckets")
@@ -509,26 +563,19 @@ def create_databases():
     for pod in CONFIG["pods"]:
         pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
         pod_config = utils.get_pod_config(pod_name)
-        if "system-pods" in pod_config:
-            for system_pod in pod_config["system-pods"]:
-                if system_pod["name"] == "mysql":
-                    for database in system_pod["databases"]:
-                        utils.create_mysql_database(database["name"])
-                        rprint(
-                            f"      *  Created MySQL database: [bright_cyan]{database['name']}"
-                        )
-                elif system_pod["name"] == "minio":
-                    for bucket in system_pod["buckets"]:
-                        utils.create_minio_bucket(bucket["name"])
-                        rprint(
-                            f"      *  Created MinIO bucket: [bright_cyan]{bucket['name']}"
-                        )
+        _process_pod_databases(pod_config)
 
 
 def connect_to_mysql() -> None:
     """Connect to the MySQL cluster inside the k3s cluster"""
 
     utils.connect_to_db()
+
+
+def connect_to_postgres() -> None:
+    """Connect to the PostgreSQL cluster inside the k3s cluster"""
+
+    utils.connect_to_db_postgres()
 
 
 def connect_to_minio() -> None:
@@ -649,17 +696,24 @@ def init_pod_db(pod):
 def verify_dependencies():
     """Verify the system has what it needs to run auto"""
 
+    # If there are errors let's get a count of them
+    errors = 0
+
     # Check for the docker daemon running and command being available
-    utils.check_docker()
+    errors += utils.check_docker()
 
     # Check for k3d and kubectl
-    utils.check_k8s()
+    errors += utils.check_k8s()
 
     # Check for helm
-    utils.check_helm()
+    errors += utils.check_helm()
 
     # Check for hosts entries
-    utils.check_registry_host_entry()
+    errors += utils.check_registry_host_entry()
+
+    if errors:
+        rprint(f"[red]There were {errors} so we stopped the command[/red]")
+        sys.exit(1)
 
     # If HTTPS is enabled, check for mkcert and certutil
     if CONFIG.get("https", False):
