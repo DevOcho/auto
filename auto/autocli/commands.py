@@ -28,6 +28,45 @@ def auto():
     """
 
 
+@auto.command()
+@click.option("--shell", default="bash", help="Shell type (bash, zsh, or fish).")
+@click.option(
+    "--install",
+    "do_install",
+    is_flag=True,
+    help="Automatically append to shell config (use with caution).",
+)
+def autocomplete(shell, do_install):
+    """Display instructions to enable shell autocomplete (or install it)."""
+    if shell == "bash":
+        eval_line = 'eval "$(_AUTO_COMPLETE=bash_source auto)"'
+        config_file = "~/.bashrc"
+    elif shell == "zsh":
+        eval_line = 'eval "$(_AUTO_COMPLETE=zsh_source auto)"'
+        config_file = "~/.zshrc"
+    elif shell == "fish":
+        eval_line = "eval (env _AUTO_COMPLETE=fish_source auto)"
+        config_file = "~/.config/fish/config.fish"
+    else:
+        raise click.BadOptionUsage("--shell", f"Unsupported shell: {shell}")
+
+    click.echo(
+        f'To enable {shell} completion for "auto", add this line to {config_file}:'
+    )
+    click.echo(eval_line)
+    click.echo(f'\nThen reload your shell (e.g., "source {config_file}").')
+    click.echo('Once set up, tab after "auto" to see commands, options, etc.')
+
+    if do_install:
+        click.confirm(
+            f"\nAppend to {config_file} now? (This modifies your file)", abort=True
+        )
+        # Note: os is imported at module level, no need to re-import
+        with open(os.path.expanduser(config_file), "a", encoding="utf-8") as f:
+            f.write(f"\n# Autocomplete for auto CLI\n{eval_line}\n")
+        click.echo(f'Added to {config_file}. Run "source {config_file}" to activate.')
+
+
 def _setup_https_certificates(pods):
     """Helper to setup HTTPS certificates interactively"""
     rprint("[deep_sky_blue1]Setting up HTTPS certificates...[/]")

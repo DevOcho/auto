@@ -3,6 +3,7 @@
 import os
 import re
 import shutil
+import subprocess
 import time
 
 import requests
@@ -233,8 +234,10 @@ def start_cluster(progress, task, key_file="", cert_file=""):
                        --k3s-arg "--disable=traefik@server:0" \
                        --agents 1"""
 
-    # Attempt creation. capture_output=False so user sees error if it fails (e.g. port conflict)
-    if not utils.run_and_wait(bash_command, capture_output=False):
+    # Attempt creation.
+    # Changed capture_output to True to suppress verbose k3d INFO logs.
+    # run_and_wait will automatically print the output if the command fails.
+    if not utils.run_and_wait(bash_command, capture_output=True):
         utils.declare_error("Failed to create k3d cluster. Check logs above.")
         return False
 
@@ -283,20 +286,32 @@ def delete_cluster(progress, task) -> None:
     # Explicitly target k3s-default
     bash_command = """/usr/local/bin/k3d cluster delete k3s-default"""
 
-    # Run delete. If it fails (cluster doesn't exist), we continue gracefully.
+    # Run delete
     utils.run_and_wait(bash_command)
 
     # Verify deletion by looping
     # If k3d cluster list still returns 'k3s-default', we wait.
+    # We use capture_output=True so we can check the text result cleanly.
     for _ in range(30):
-        if not utils.run_and_wait(
-            "/usr/local/bin/k3d cluster list",
-            check_result="k3s-default",
-            capture_output=True,
-        ):
-            # Cluster is gone
-            break
-        time.sleep(1)
+        try:
+            # We run subprocess directly here to differentiate between "command failed"
+            # and "text not found".
+            result = subprocess.run(
+                "/usr/local/bin/k3d cluster list",
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            # If the command succeeded (k3d is running) but 'k3s-default' is NOT in output
+            if result.returncode == 0 and "k3s-default" not in result.stdout:
+                break
+
+            # If the command failed (e.g. docker daemon busy), we wait and retry
+            time.sleep(1)
+        except (OSError, subprocess.SubprocessError):
+            time.sleep(1)
 
     progress.update(task, advance=50)
 
@@ -665,7 +680,7 @@ def show_status(namespace="default", all_namespaces=False, watch=False):
         items = []
 
         # Header
-        items.append(Text("\nAuto Environment Status", style="deep_sky_blue1 bold"))
+        items.append(Text("Auto Status", style="deep_sky_blue1 bold"))
         items.append(Text(""))  # Spacer
 
         # 1. Check K3d Cluster

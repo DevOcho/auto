@@ -7,6 +7,8 @@
 ################################################################################
 
 """Modules"""
+import os
+
 from autocli import commands
 from pyfiglet import Figlet
 from rich import print as rprint
@@ -15,9 +17,13 @@ from rich import print as rprint
 def main():
     """This is the iniatial step of the `auto` cli"""
 
-    # Print a fancy header
-    fig = Figlet(font="small")
-    rprint("[dodger_blue2]" + fig.renderText("auto"))
+    if "_AUTO_COMPLETE" in os.environ:
+        # Skip banner and let Click handle completion
+        pass
+    else:
+        # Print a fancy header
+        fig = Figlet(font="small")
+        rprint("[dodger_blue2]" + fig.renderText("auto"))
     commands.auto()
 
 

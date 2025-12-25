@@ -287,10 +287,17 @@ def create_mysql_database(database, retries=0):
         args = shlex.split(cmd)
 
         try:
-            # Run the command and return the output
-            subprocess.run(args, shell=True, check=True)
+            # Run the command silently.
+            # We capture output to suppress "ERROR 2002" messages during startup.
+            subprocess.run(
+                args,
+                shell=True,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         except CalledProcessError:
-            if retries < 4:
+            if retries < 10:  # Increased retries to 10 (approx 30s) for slower startups
                 sleep(3)
                 create_mysql_database(database, retries=retries + 1)
             else:
@@ -298,7 +305,7 @@ def create_mysql_database(database, retries=0):
 
     else:
         # If pod_name not found, wait and retry
-        if retries < 4:
+        if retries < 10:
             sleep(3)
             create_mysql_database(database, retries=retries + 1)
         else:
@@ -683,20 +690,38 @@ def create_local_certs(cert_path, additional_domains=None):
     cert_file = os.path.join(cert_path, "cert.pem")
 
     # Install the local CA
-    rprint("  -- Installing local CA (may prompt for password)")
-    # Using os.system to allow interactive sudo prompt to break through rich progress bar
-    os.system("mkcert -install")
+    # Try silently first (success if already installed or no sudo needed)
+    try:
+        subprocess.run(
+            "mkcert -install",
+            shell=True,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except CalledProcessError:
+        # If silent fail, run interactively (likely needs sudo password)
+        rprint("  -- Installing local CA (may prompt for password)")
+        os.system("mkcert -install")
 
     # Generate the certs
-    rprint("  -- Generating certificates for *.local, localhost, and pod domains")
-
-    # Construct command with specific domains
+    # We suppress output here unless it fails
     domain_args = " ".join(additional_domains)
     cmd = (
         f"mkcert -key-file {key_file} -cert-file {cert_file} "
         f"'*.local' localhost 127.0.0.1 ::1 {domain_args}"
     )
 
-    run_and_wait(cmd)
+    try:
+        subprocess.run(
+            cmd,
+            shell=True,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+    except CalledProcessError as e:
+        rprint("[red]Error generating certificates:[/red]")
+        print(e.stderr.decode())
 
     return key_file, cert_file
