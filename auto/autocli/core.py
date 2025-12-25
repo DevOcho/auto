@@ -788,3 +788,60 @@ def rollback_with_smalls(pod, number):
     # Run the command inside the pod
     command = f"./smalls.py rollback {number}"
     utils.run_command_inside_pod(pod, command)
+
+
+def list_cluster_images():
+    """Scan running pods and print a YAML list of images for local.yaml"""
+
+    rprint("  -- Scanning cluster for images...")
+
+    # 1. Get images from all containers and initContainers
+    # We use a set to automatically handle deduplication
+    found_images = set()
+
+    # JSONPath to grab both standard containers and init containers
+    cmd = (
+        "kubectl get pods --all-namespaces "
+        "-o jsonpath='{range .items[*]}{.spec.containers[*].image} "
+        '{.spec.initContainers[*].image}{"\\n"}{end}\''
+    )
+
+    output = utils.run_and_return(cmd)
+
+    if not output:
+        rprint("     [yellow]No images found (is the cluster running?)[/]")
+        return
+
+    # 2. Process the images
+    # We need to filter out the user's local pods (portal, www, etc) because
+    # those shouldn't be pulled from a registry, they are built locally.
+    local_pod_names = []
+    for p in CONFIG.get("pods", []):
+        if "repo" in p:
+            name = p["repo"].split("/")[-1:][0].replace(".git", "")
+            local_pod_names.append(name)
+
+    raw_list = output.split()
+    for image in raw_list:
+        # Strip the local registry prefix if present (e.g. k3d-registry.local:12345/mysql:8.0 -> mysql:8.0)
+        clean_image = image.replace("k3d-registry.local:12345/", "")
+
+        # Filter out local pods (naive check: if image starts with pod name)
+        is_local_project = False
+        for pod_name in local_pod_names:
+            # Check if image is exactly the pod name or pod_name:tag
+            if clean_image == pod_name or clean_image.startswith(f"{pod_name}:"):
+                is_local_project = True
+                break
+
+        if not is_local_project:
+            found_images.add(clean_image)
+
+    # 3. Print the result
+    rprint(f"     [green]Found {len(found_images)} unique upstream images.[/]")
+    rprint("\n[bold]Copy this into your ~/.auto/config/local.yaml:[/bold]\n")
+
+    print("registry:")
+    for img in sorted(found_images):
+        print(f"  - image: {img}")
+    print()

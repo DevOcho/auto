@@ -59,13 +59,23 @@ def get_namespaces(ctx, param, incomplete):  # pylint: disable=unused-argument
 
 
 @click.group(context_settings=CONTEXT_SETTINGS)
-@click.version_option(version="0.3.0")
+@click.version_option(version="0.5.0")
 def auto():
     """Commandline utility to assist with creating/deleting clusters and
     starting/stopping pods.
 
     This function is used to group all of the commands together.
     """
+
+
+@auto.command(name="images")
+@click.pass_context
+def images(self):  # pylint: disable=unused-argument
+    """List unique container images running in the cluster (formatted for local.yaml).
+
+    This helps populate the 'registry' section of your config to speed up startups.
+    """
+    core.list_cluster_images()
 
 
 @auto.command()
