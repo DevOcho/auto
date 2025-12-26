@@ -489,19 +489,30 @@ def output_logs(pod):
     pod_name = utils.get_full_pod_name(pod)
 
     if not pod_name:
-        utils.declare_error("Pod not found: {pod}")
+        utils.declare_error(f"Pod not found: {pod}")
+
+    # Dynamically find the Node IP (often the source of the health check)
+    node_ip = utils.run_and_return(
+        "kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"InternalIP\")].address}'"
+    )
 
     rprint(f"Printing logs for {pod_name}")
     rprint("[steel_blue]Press ^C to exit")
 
-    # Run `kubectl logs` on a pod but exclude the k8s healthchecks.
-    # the extra space at the end of the ip address is helpful because the health check
-    # ip address and the pod ip address might be similar (i.e. 10.42.1.1 and 10.42.1.10)
-    # by adding the space it let's the 10.42.1.10 show up in the output and suppresses
-    # the 10.42.1.1 healthcheck
-    os.system(
-        f'kubectl logs -f {pod_name} | grep -v "10.42.0.1 " | grep -v "10.42.1.1 "'
-    )
+    # Filter k3s health checks
+    filters = [
+        'grep --line-buffered -v "kube-probe"',
+        'grep --line-buffered -v "10.42.0.1"',
+        'grep --line-buffered -v "10.42.1.1"',
+    ]
+
+    if node_ip:
+        filters.append(f'grep --line-buffered -v "{node_ip}"')
+
+    filter_cmd = " | ".join(filters)
+
+    # Run kubectl logs piped through our filters
+    os.system(f"kubectl logs -f {pod_name} | {filter_cmd}")
 
 
 def seed_pod(pod):
