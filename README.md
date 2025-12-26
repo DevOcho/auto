@@ -86,7 +86,6 @@ auto autocomplete --shell bash --install
 source ~/.bashrc
 ```
 
-
 ## Quickstart
 
 Once you've installed `auto` you can get up and running with the following steps:
@@ -114,7 +113,7 @@ code: /home/rogue/source/devocho
 If you want your local cluster to run with SSL/HTTPS enabled, add the following line to your config:
 
 ```yaml
-# Do you want local to be https?
+# Enable https in local development?
 https: true
 ```
 

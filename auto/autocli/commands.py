@@ -4,6 +4,8 @@
   * `--offline`     This disables steps that require internet so you can work without Internet
 """
 
+import os
+
 import click
 from autocli import core, utils
 from rich import print as rprint
@@ -16,8 +18,48 @@ CONTEXT_SETTINGS = {
 }
 
 
+def get_pod_names(ctx, param, incomplete):  # pylint: disable=unused-argument
+    """Generate list of pods for shell autocompletion"""
+    # Check for config file existence to avoid error printing/exit in utils.load_config
+    config_path = os.path.expanduser("~/.auto/config/local.yaml")
+    if not os.path.isfile(config_path):
+        return []
+
+    try:
+        # We suppress output here to avoid breaking the shell completion display
+        config = utils.load_config()
+        pods = []
+        for item in config.get("pods", []):
+            # Logic to extract pod name from repo string
+            # e.g. git@github.com:DevOcho/portal.git -> portal
+            if isinstance(item, dict) and "repo" in item:
+                p_name = item["repo"].split("/")[-1:][0].replace(".git", "")
+                if p_name.startswith(incomplete):
+                    pods.append(p_name)
+        return sorted(pods)
+    except Exception:  # pylint: disable=broad-except
+        return []
+
+
+def get_namespaces(ctx, param, incomplete):  # pylint: disable=unused-argument
+    """Generate list of namespaces for shell autocompletion"""
+    try:
+        # Get namespaces from kubectl
+        # We rely on utils.run_and_return which is safe and captures output
+        output = utils.run_and_return(
+            "kubectl get ns -o jsonpath='{.items[*].metadata.name}'"
+        )
+        if not output:
+            return []
+
+        namespaces = output.split()
+        return [ns for ns in namespaces if ns.startswith(incomplete)]
+    except Exception:  # pylint: disable=broad-except
+        return []
+
+
 @click.group(context_settings=CONTEXT_SETTINGS)
-@click.version_option(version="0.4.21")
+@click.version_option(version="0.5.0")
 def auto():
     """Commandline utility to assist with creating/deleting clusters and
     starting/stopping pods.
@@ -26,9 +68,96 @@ def auto():
     """
 
 
+@auto.command(name="images")
+@click.pass_context
+def images(self):  # pylint: disable=unused-argument
+    """List unique container images running in the cluster (formatted for local.yaml).
+
+    This helps populate the 'registry' section of your config to speed up startups.
+    """
+    core.list_cluster_images()
+
+
+@auto.command()
+@click.option("--shell", default="bash", help="Shell type (bash, zsh, or fish).")
+@click.option(
+    "--install",
+    "do_install",
+    is_flag=True,
+    help="Automatically append to shell config (use with caution).",
+)
+def autocomplete(shell, do_install):
+    """Display instructions to enable shell autocomplete (or install it)."""
+    if shell == "bash":
+        eval_line = 'eval "$(_AUTO_COMPLETE=bash_source auto)"'
+        config_file = "~/.bashrc"
+    elif shell == "zsh":
+        eval_line = 'eval "$(_AUTO_COMPLETE=zsh_source auto)"'
+        config_file = "~/.zshrc"
+    elif shell == "fish":
+        eval_line = "eval (env _AUTO_COMPLETE=fish_source auto)"
+        config_file = "~/.config/fish/config.fish"
+    else:
+        raise click.BadOptionUsage("--shell", f"Unsupported shell: {shell}")
+
+    click.echo(
+        f'To enable {shell} completion for "auto", add this line to {config_file}:'
+    )
+    click.echo(eval_line)
+    click.echo(f'\nThen reload your shell (e.g., "source {config_file}").')
+    click.echo('Once set up, tab after "auto" to see commands, options, etc.')
+
+    if do_install:
+        click.confirm(
+            f"\nAppend to {config_file} now? (This modifies your file)", abort=True
+        )
+        # Note: os is imported at module level, no need to re-import
+        with open(os.path.expanduser(config_file), "a", encoding="utf-8") as f:
+            f.write(f"\n# Autocomplete for auto CLI\n{eval_line}\n")
+        click.echo(f'Added to {config_file}. Run "source {config_file}" to activate.')
+
+
+def _setup_https_certificates(pods):
+    """Helper to setup HTTPS certificates interactively"""
+    rprint("[deep_sky_blue1]Setting up HTTPS certificates...[/]")
+    # Check dependencies first
+    utils.check_mkcert()
+
+    # Calculate specific domains for pods
+    pod_domains = []
+    for repo in pods:
+        p_name = repo["repo"].split("/")[-1:][0].replace(".git", "")
+        pod_domains.append(f"{p_name}.local")
+
+    # Create certs interactively
+    cert_path = os.path.expanduser("~") + "/.auto/certs"
+    key_file, cert_file = utils.create_local_certs(
+        cert_path, additional_domains=pod_domains
+    )
+    rprint(" :white_heavy_check_mark:[green] Certificates Ready")
+    return key_file, cert_file
+
+
+def _print_access_hints(pods, use_https):
+    """Helper to print access hints at the end of start"""
+    # Let's give them a hint on how they can get started
+    print()
+    rprint("[italic]Hint: Some items may still be starting in k3s.")
+    rprint("[italic]You can access your pod(s) via the following URLs:")
+
+    # Determine protocol and port based on config
+    protocol = "https" if use_https else "http"
+    port_suffix = "" if use_https else ":8088"
+
+    for repo in pods:
+        pod_name = repo["repo"].split("/")[-1:][0].replace(".git", "")
+        if utils.check_host_entry(pod_name):
+            rprint(f"[italic]  {protocol}://{pod_name}.local{port_suffix}/")
+
+
 @auto.command()
 @click.pass_context
-@click.argument("pod", required=False)
+@click.argument("pod", required=False, shell_complete=get_pod_names)
 @click.option("--dry-run", is_flag=True, default=False)
 @click.option("--offline", is_flag=True, default=False)
 def start(self, pod, dry_run, offline):  # pylint: disable=unused-argument
@@ -36,7 +165,14 @@ def start(self, pod, dry_run, offline):  # pylint: disable=unused-argument
 
     # Local Vars
     new_cluster = False
-    pods = []
+    pods = core.CONFIG.get("pods", [])
+    key_file = ""
+    cert_file = ""
+    use_https = core.CONFIG.get("https", False)
+
+    # HTTPS Cert Setup (interactive steps must happen before Progress bar)
+    if not pod and use_https and not dry_run:
+        key_file, cert_file = _setup_https_certificates(pods)
 
     if not pod:
         # Let's run the steps with a progress bar
@@ -75,7 +211,9 @@ def start(self, pod, dry_run, offline):  # pylint: disable=unused-argument
             # STEP 5: Start the k3s cluster
             rprint("[deep_sky_blue1]Cluster")
             if not dry_run:
-                new_cluster = core.start_cluster(progress, task)
+                new_cluster = core.start_cluster(
+                    progress, task, key_file=key_file, cert_file=cert_file
+                )
             rprint(" :white_heavy_check_mark:[green] Cluster Ready")
             progress.update(task, advance=33)
 
@@ -97,14 +235,7 @@ def start(self, pod, dry_run, offline):  # pylint: disable=unused-argument
             rprint(" :white_heavy_check_mark:[green] Pods Loaded")
             progress.update(task, advance=34)
 
-            # Let's give them a hint on how they can get started
-            print()
-            rprint("[italic]Hint: Some items may still be starting in k3s.")
-            rprint("[italic]You can access your pod(s) via the following URLs:")
-            for repo in pods:
-                pod_name = repo["repo"].split("/")[-1:][0].replace(".git", "")
-                if utils.check_host_entry(pod_name):
-                    rprint(f"[italic]  http://{pod_name}.local:8088/")
+            _print_access_hints(pods, use_https)
     else:
         rprint(f"[steel_blue]Starting[/] {pod}")
         core.start_pod(pod)
@@ -112,7 +243,7 @@ def start(self, pod, dry_run, offline):  # pylint: disable=unused-argument
 
 @auto.command()
 @click.pass_context
-@click.argument("pod", required=False)
+@click.argument("pod", required=False, shell_complete=get_pod_names)
 @click.option("--dry-run", is_flag=True, default=False)
 @click.option("--delete-cluster", is_flag=True, default=False)
 def stop(self, pod, dry_run, delete_cluster):  # pylint: disable=unused-argument
@@ -140,7 +271,7 @@ def stop(self, pod, dry_run, delete_cluster):  # pylint: disable=unused-argument
 
 @auto.command()
 @click.pass_context
-@click.argument("pod", required=True)
+@click.argument("pod", required=True, shell_complete=get_pod_names)
 def restart(self, pod):  # pylint: disable=unused-argument
     """Restart (stop / start) a pod"""
 
@@ -151,7 +282,7 @@ def restart(self, pod):  # pylint: disable=unused-argument
 
 @auto.command()
 @click.pass_context
-@click.argument("pod", required=True)
+@click.argument("pod", required=True, shell_complete=get_pod_names)
 def seed(self, pod):  # pylint: disable=unused-argument
     """Seed a pod's databases"""
 
@@ -167,7 +298,7 @@ def seed(self, pod):  # pylint: disable=unused-argument
 
 @auto.command()
 @click.pass_context
-@click.argument("pod", required=True)
+@click.argument("pod", required=True, shell_complete=get_pod_names)
 def init(self, pod):  # pylint: disable=unused-argument
     """Init a pod's databases.
 
@@ -210,7 +341,7 @@ def minio(self):  # pylint: disable=unused-argument
 
 
 @auto.command()
-@click.argument("pod")
+@click.argument("pod", shell_complete=get_pod_names)
 @click.pass_context
 def logs(self, pod):  # pylint: disable=unused-argument
     """Output logs for a pod to the terminal"""
@@ -220,7 +351,7 @@ def logs(self, pod):  # pylint: disable=unused-argument
 
 
 @auto.command()
-@click.argument("pod")
+@click.argument("pod", shell_complete=get_pod_names)
 @click.pass_context
 def tag(self, pod):  # pylint: disable=unused-argument
     """Build, Tag, and Load a pod container image in the local repository"""
@@ -230,7 +361,7 @@ def tag(self, pod):  # pylint: disable=unused-argument
 
 
 @auto.command()
-@click.argument("pod")
+@click.argument("pod", shell_complete=get_pod_names)
 @click.pass_context
 def upgrade(self, pod):  # pylint: disable=unused-argument
     """Remove container registry, create it again, then repopulate it, then restart the cluster"""
@@ -240,7 +371,7 @@ def upgrade(self, pod):  # pylint: disable=unused-argument
 
 
 @auto.command()
-@click.argument("pod")
+@click.argument("pod", shell_complete=get_pod_names)
 @click.pass_context
 def migrate(self, pod):  # pylint: disable=unused-argument
     """Run database migrations in a pod (using smalls)"""
@@ -250,7 +381,7 @@ def migrate(self, pod):  # pylint: disable=unused-argument
 
 
 @auto.command()
-@click.argument("pod")
+@click.argument("pod", shell_complete=get_pod_names)
 @click.argument("number")
 @click.pass_context
 def rollback(self, pod, number):  # pylint: disable=unused-argument
@@ -269,3 +400,32 @@ def install(self, git_repo):  # pylint: disable=unused-argument
     # This will download a repo and then copy the local.yaml file
     # into the auto config folder
     core.install_config_from_repo(git_repo)
+
+
+@auto.command()
+@click.pass_context
+@click.option(
+    "--namespace",
+    "-n",
+    default="default",
+    help="Namespace to show pods for",
+    shell_complete=get_namespaces,
+)
+@click.option(
+    "--all-namespaces",
+    "-a",
+    is_flag=True,
+    default=False,
+    help="Show pods from all namespaces",
+)
+@click.option(
+    "--watch",
+    "-w",
+    is_flag=True,
+    default=False,
+    help="Watch the status (refresh every 3s)",
+)
+def status(self, namespace, all_namespaces, watch):  # pylint: disable=unused-argument
+    """Show the status of the cluster and pods"""
+
+    core.show_status(namespace, all_namespaces, watch)

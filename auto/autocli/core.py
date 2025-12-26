@@ -3,6 +3,7 @@
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -11,6 +12,9 @@ import requests
 import yaml
 from autocli import utils
 from rich import print as rprint
+from rich.console import Console, Group
+from rich.live import Live
+from rich.text import Text
 
 # Read Config and provide globally
 CONFIG = utils.load_config()
@@ -103,24 +107,125 @@ def populate_registry():
         tag_pod_docker_image(pod_name)
 
 
-def start_cluster(progress, task):
+def _install_nginx_ingress(use_https, key_file, cert_file):
+    """Install and configure Nginx Ingress Controller"""
+    rprint("     = Installing Nginx Ingress Controller...")
+    utils.run_and_wait(
+        "helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx",
+        capture_output=True,
+    )
+    utils.run_and_wait("helm repo update", capture_output=True)
+
+    # Build Helm command
+    helm_cmd = (
+        "helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx "
+        "--namespace ingress-nginx --create-namespace "
+        "--set controller.service.type=LoadBalancer "
+        "--set controller.watchIngressWithoutClass=true "
+        "--set controller.ingressClassResource.default=true "
+        "--set controller.admissionWebhooks.enabled=false "
+    )
+
+    # New cluster created, if HTTPS, inject secrets and config Nginx
+    if use_https and key_file and cert_file:
+        rprint("     = Configuring Cluster HTTPS (Nginx)")
+
+        # Create the namespace first (needed for secrets)
+        utils.run_and_wait(
+            "kubectl create namespace ingress-nginx", capture_output=True
+        )
+
+        # Create secrets in default and ingress-nginx namespaces
+        for ns in ["default", "ingress-nginx"]:
+            cmd = (
+                f"kubectl create secret tls local-tls --key {key_file} --cert {cert_file} "
+                f"-n {ns} --dry-run=client -o yaml | kubectl apply -f -"
+            )
+            utils.run_and_wait(cmd, capture_output=True)
+
+        # Add default cert arg
+        extra_args = "controller.extraArgs.default-ssl-certificate"
+        helm_cmd += f" --set {extra_args}=ingress-nginx/local-tls"
+
+    # Run the Helm install silently
+    if not utils.run_and_wait(helm_cmd, capture_output=True):
+        rprint("     [red]Error installing Nginx Ingress Controller[/red]")
+    else:
+        # Explicitly Patch the Deployment to FORCE the argument if Helm missed it
+        if use_https:
+            patch_cmd = (
+                "kubectl patch deployment ingress-nginx-controller -n ingress-nginx "
+                '--type=json -p=\'[{"op": "add", "path": '
+                '"/spec/template/spec/containers/0/args/-", '
+                '"value": "--default-ssl-certificate=ingress-nginx/local-tls"}]\''
+            )
+            utils.run_and_wait(patch_cmd, capture_output=True, suppress_error=True)
+
+        # Force restart Nginx pods to ensure they pick up the new certificate
+        utils.run_and_wait(
+            "kubectl rollout restart deployment ingress-nginx-controller -n ingress-nginx",
+            capture_output=True,
+        )
+
+
+def _verify_and_heal_connection():
+    """Check cluster connection and try to fix it if broken"""
+    if not utils.verify_cluster_connection():
+        rprint(
+            "     [yellow]Warning: Cluster connection failed. Refreshing context...[/yellow]"
+        )
+        utils.run_and_wait(
+            "k3d kubeconfig merge k3s-default --kubeconfig-switch-context"
+        )
+        if not utils.verify_cluster_connection():
+            utils.declare_error(
+                """Could not connect to the cluster. Please check your kubeconfig
+ or run 'auto stop' then 'auto start'."""
+            )
+
+
+def start_cluster(progress, task, key_file="", cert_file=""):
     """Start a K3D cluster and return if it is new (true) or existing (false)"""
 
-    # Verify the cluster isn't already running
+    # HTTPS Setup
+    use_https = CONFIG.get("https", False)
+    load_bal_config = '--api-port 6550 -p "8088:80@loadbalancer"'
+
+    if use_https:
+        load_bal_config = (
+            '--api-port 6550 -p "80:80@loadbalancer" -p "443:443@loadbalancer"'
+        )
+
+    # 1. CHECK EXISTING CLUSTER
     bash_command = """/usr/local/bin/k3d cluster list"""
     if utils.run_and_wait(bash_command, check_result="k3s-default"):
-        # Is the cluster running or stopped?
-        if utils.run_and_wait(bash_command, check_result="0/1"):
-            bash_command = """k3d cluster start"""
-            utils.run_and_wait(bash_command)
+        rprint("  -- Found existing cluster")
 
-        # Let them know this isn't a new cluster
+        # Ensure context is current
+        utils.run_and_wait(
+            "k3d kubeconfig merge k3s-default --kubeconfig-switch-context",
+            capture_output=True,
+        )
+
+        # Is the cluster stopped? (0/1 servers)
+        if utils.run_and_wait(bash_command, check_result="0/1"):
+            rprint("     = Cluster is stopped. Starting...")
+            bash_command = """k3d cluster start"""
+            if not utils.run_and_wait(bash_command):
+                utils.declare_error("Failed to start existing cluster.")
+
+        # Verify we can actually talk to it
+        _verify_and_heal_connection()
+
         return False
 
-    # The cluster hasn't already been created so I need to start one
+    # 2. CREATE NEW CLUSTER
     progress.update(task, advance=5)
     print("  -- Creating cluster (this will take a minute)")
-    load_bal_port = 8088
+
+    if use_https:
+        rprint("  -- [bold green]HTTPS Enabled[/]: Binding ports 80/443")
+
     code_dir = CONFIG["code"]
     # I'm opening port 8088 and 3306 outside the cluster for access to the sites
     # and mysql.  This means you can't run a mysql instance on your host on the
@@ -129,23 +234,33 @@ def start_cluster(progress, task):
                        --volume {code_dir}:/mnt/code \
                        --registry-use k3d-registry.local:12345 \
                        --registry-config ~/.auto/k3s/registries.yaml \
+                       {load_bal_config} \
                        --k3s-arg "--disable=traefik@server:0" \
-                       --api-port 6550 \
-                       -p "{load_bal_port}:80@loadbalancer" \
                        -p "3306:30036@loadbalancer" \
                        --agents 1"""
 
-    # We want to let the k3d pods finish running so we can remove the temporary ones
-    if utils.run_and_wait(bash_command):
-        print("     = Cluster Started.  Waiting for Pods to finish starting...")
-        progress.update(task, advance=6)
+    # Attempt creation.
+    # Changed capture_output to True to suppress verbose k3d INFO logs.
+    # run_and_wait will automatically print the output if the command fails.
+    if not utils.run_and_wait(bash_command, capture_output=True):
+        utils.declare_error("Failed to create k3d cluster. Check logs above.")
+        return False
 
-    # We want to install the nginx ingress
-    user_path = os.path.expanduser("~")
-    bash_command = f"kubectl apply -f {user_path}/.auto/k3s/nginx-ingress/deploy.yaml"
-    if utils.run_and_wait(bash_command):
-        print("     = Nginx Ingress installed in cluster")
-        progress.update(task, advance=2)
+    # Ensure context is set correctly immediately after creation
+    utils.run_and_wait("k3d kubeconfig merge k3s-default --kubeconfig-switch-context")
+
+    # Verify connection immediately
+    _verify_and_heal_connection()
+
+    print("     = Cluster Started.  Waiting for Pods to finish starting...")
+    progress.update(task, advance=6)
+
+    # Install and Configure Nginx
+    _install_nginx_ingress(use_https, key_file, cert_file)
+
+    # Wait for the Ingress Controller to be ready
+    if utils.wait_for_pod_status("ingress-nginx-controller", "Running"):
+        progress.update(task, advance=5)
 
     # Let's remove the completed nginx job containers
     if utils.wait_for_pod_status("ingress-nginx-admission-create", "Complete"):
@@ -171,8 +286,38 @@ def delete_cluster(progress, task) -> None:
     """Delete the cluster"""
 
     rprint("  -- Deleting cluster :skull::skull:")
-    bash_command = """/usr/local/bin/k3d cluster delete"""
+
+    # Explicitly target k3s-default
+    bash_command = """/usr/local/bin/k3d cluster delete k3s-default"""
+
+    # Run delete
     utils.run_and_wait(bash_command)
+    time.sleep(2)  # Give docker a moment to cleanup
+
+    # Verify deletion by looping
+    # If k3d cluster list still returns 'k3s-default', we wait.
+    # We use capture_output=True so we can check the text result cleanly.
+    for _ in range(30):
+        try:
+            # We run subprocess directly here to differentiate between "command failed"
+            # and "text not found".
+            result = subprocess.run(
+                "/usr/local/bin/k3d cluster list",
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            # If the command succeeded (k3d is running) but 'k3s-default' is NOT in output
+            if result.returncode == 0 and "k3s-default" not in result.stdout:
+                break
+
+            # If the command failed (e.g. docker daemon busy), we wait and retry
+            time.sleep(1)
+        except (OSError, subprocess.SubprocessError):
+            time.sleep(1)
+
     progress.update(task, advance=50)
 
 
@@ -236,12 +381,76 @@ def stop_pod(pod) -> None:
         utils.run_and_wait(f"helm uninstall {pod_name}")
 
 
+def _recover_pvc_conflict(pod_name):
+    """Helper to attempt fixing PVC conflicts"""
+    rprint("       [italic]Attempting to fix common PVC errors...[/]")
+
+    # Common fix: Delete conflicting 'code' PVC
+    # 1. Delete the deployment to release the volume claim lock
+    utils.run_and_wait(f"kubectl delete deployment {pod_name} --ignore-not-found=true")
+
+    # 2. Delete the conflicting PVC
+    utils.run_and_wait("kubectl delete pvc code --ignore-not-found=true")
+
+    # 3. Wait for PVC to be fully removed
+    for _ in range(15):
+        if not utils.run_and_wait(
+            "kubectl get pvc code", capture_output=True, suppress_error=True
+        ):
+            break
+        time.sleep(1)
+
+
+def _build_install_command(pod_config, pod_name, code_dir):
+    """Helper to construct the installation command"""
+    release_name = pod_config.get("name", pod_name)
+    is_helm = False
+
+    # If they are using helm
+    if re.search("helm", pod_config["command"]):
+        is_helm = True
+        cmd_args = pod_config.get("command-args", "")
+        desc = pod_config.get("desc", "")
+        helm_path = f"{code_dir}/{pod_name}/.auto/helm"
+
+        # Construct helm command
+        command = f'{pod_config["command"]} {cmd_args} --description "{desc}" {release_name} {helm_path}'
+    else:
+        # They are using kubectl apply
+        command = f"{pod_config['command']} {pod_config['command_args']}"
+
+    return command, is_helm, release_name
+
+
+def _execute_pod_install(command, pod_folder, pod_name, is_helm, release_name):
+    """Helper to execute the installation command with retries"""
+    # FIRST ATTEMPT: Run silently to avoid scary error messages for known issues
+    if utils.run_and_wait(command, cwd=pod_folder, suppress_error=True):
+        rprint(f"     * [bright_cyan]: {pod_name}[/] installed")
+    else:
+        # If failed, attempt auto-fix silently
+        _recover_pvc_conflict(pod_name)
+
+        # If it was Helm, try to uninstall the partial/failed release before retrying
+        if is_helm:
+            utils.run_and_wait(
+                f"helm uninstall {release_name}",
+                capture_output=True,
+                suppress_error=True,
+            )
+
+        # RETRY INSTALLATION
+        if utils.run_and_wait(command, cwd=pod_folder):
+            rprint(f"     * [bright_cyan]: {pod_name}[/] installed")
+        else:
+            rprint(f"     * [red]: {pod_name}[/] failed to install")
+
+
 def start_pod(pod) -> None:
     """Start a single pod"""
 
     # Local Vars
     code_dir = CONFIG["code"]
-    success = False
 
     # If we get a dictionary we have to find the pod name from the repo name
     if isinstance(pod, dict):
@@ -252,55 +461,30 @@ def start_pod(pod) -> None:
     # Is this pod already running?
     if utils.run_and_wait("""kubectl get pods""", check_result=pod_name):
         rprint(f"       * {pod_name}: [steel_blue]already running")
+        return
 
     # If we aren't running let's start via helm install or kubectl apply
-    else:
-        config_file_path = Path(code_dir) / pod_name / ".auto" / "config.yaml"
+    config_file_path = Path(code_dir) / pod_name / ".auto" / "config.yaml"
 
-        if not config_file_path.is_file():
-            utils.declare_error(
-                f"[bold red]Error: Configuration file not found at: {config_file_path}[/bold red]",
-                exit_auto=True,
-            )
-            return
+    if not config_file_path.is_file():
+        utils.declare_error(
+            f"[bold red]Error: Configuration file not found at: {config_file_path}[/bold red]",
+            exit_auto=True,
+        )
+        return
 
-        with open(config_file_path, encoding="utf-8") as pod_yaml:
-            pod_config = yaml.safe_load(pod_yaml)
+    with open(config_file_path, encoding="utf-8") as pod_yaml:
+        pod_config = yaml.safe_load(pod_yaml)
 
-        # If they are using helm
-        if re.search("helm", pod_config["command"]):
-            if "command-args" in pod_config:
-                command = f"""{pod_config['command']} {pod_config['command-args']} """
-            else:
-                command = f"""{pod_config['command']} """
-            command += f"""--description \"{pod_config['desc']}\" """
-            command += f"""{pod_config['name']} {code_dir}/{pod_name}/.auto/helm"""
-            success = utils.run_and_wait(command)
-            if not success:
-                utils.declare_error(
-                    "[bold red]Error starting pod via helm", exit_auto=True
-                )
+    # Prepare execution directory (repo folder)
+    pod_folder = os.path.join(code_dir, pod_name)
 
-        # They are using kubectl apply
-        else:
-            # We need to run these commands in their code folder for this repo
-            original_dir = os.getcwd()
-            os.chdir(code_dir + "/" + pod_name)
-            rprint(f"{pod_config['command']} {pod_config['command_args']}")
-            command = f"{pod_config['command']} {pod_config['command_args']}"
+    command, is_helm, release_name = _build_install_command(
+        pod_config, pod_name, code_dir
+    )
 
-            # Run the pod install command
-            success = utils.run_and_wait(command)
-            if not success:
-                utils.declare_error(
-                    "[bold red]Error starting pod via kubectl apply", exit_auto=True
-                )
-
-            # Change back to the directory they were in
-            os.chdir(original_dir)
-
-        # Tell them everything is ok
-        rprint(f"     * [bright_cyan]: {pod_name}[/] installed")
+    # Run the pod install command inside the repo directory
+    _execute_pod_install(command, pod_folder, pod_name, is_helm, release_name)
 
 
 def restart_pod(pod) -> None:
@@ -333,6 +517,25 @@ def install_pods_in_cluster() -> None:
         start_pod(pod)
 
 
+def _run_command_with_retry(command):
+    """Helper to run a command with retries"""
+    for _ in range(10):
+        try:
+            # Attempt to apply with suppressed errors for cleaner startup logs
+            success = utils.run_and_wait(
+                command, capture_output=True, suppress_error=True
+            )
+            if success:
+                break
+            time.sleep(2)
+        except Exception:  # pylint: disable=broad-except
+            pass
+    else:
+        # If we exhausted retries, try one last time WITH errors to show user
+        if not utils.run_and_wait(command):
+            rprint(f"    [red]Error running {command}")
+
+
 def install_system_pods():
     """Install all of the system pods in the cluster"""
 
@@ -341,10 +544,7 @@ def install_system_pods():
         if pod["pod"]["active"]:
             rprint("  -- Starting: " + pod["pod"]["name"])
             for command in pod["pod"]["commands"]:
-                try:
-                    utils.run_and_wait(command)
-                except Exception:  # pylint: disable=broad-except
-                    rprint(f"    [red]Error running {command}")
+                _run_command_with_retry(command)
 
             # MinIO has some extra setup stuff needed to use it
             if pod["pod"]["name"] == "minio":
@@ -371,6 +571,24 @@ def install_mysql_in_cluster() -> None:
         rprint("       [green]Started MySQL")
 
 
+def _process_pod_databases(pod_config):
+    """Helper to process database creation for a single pod config"""
+    if "system-pods" in pod_config:
+        for system_pod in pod_config["system-pods"]:
+            if system_pod["name"] == "mysql":
+                for database in system_pod["databases"]:
+                    utils.create_mysql_database(database["name"])
+                    rprint(
+                        f"      *  Created MySQL database: [bright_cyan]{database['name']}"
+                    )
+            elif system_pod["name"] == "minio":
+                for bucket in system_pod["buckets"]:
+                    utils.create_minio_bucket(bucket["name"])
+                    rprint(
+                        f"      *  Created MinIO bucket: [bright_cyan]{bucket['name']}"
+                    )
+
+
 def create_databases():
     """Create the databases"""
     rprint("  -- Creating Databases and Buckets")
@@ -381,28 +599,19 @@ def create_databases():
             # Let's wait for the MySQL pod to start
             if utils.wait_for_pod_status("mysql", "Running"):
                 rprint("       [green]MySQL running")
-                # The pod is running but I need to give MySQL a few seconds to
-                # start inside the pod.  5 seconds seems to be enough
-                time.sleep(5)  # This would be better as a health check
+
+                # Check for actual connectivity via socket before proceeding
+                if not utils.wait_for_mysql_socket():
+                    rprint(
+                        "       [red]MySQL failed to respond on socket after waiting."
+                    )
+                    return
 
     # Create the databases requested in each of the pods
     for pod in CONFIG["pods"]:
         pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
         pod_config = utils.get_pod_config(pod_name)
-        if "system-pods" in pod_config:
-            for system_pod in pod_config["system-pods"]:
-                if system_pod["name"] == "mysql":
-                    for database in system_pod["databases"]:
-                        utils.create_mysql_database(database["name"])
-                        rprint(
-                            f"      *  Created MySQL database: [bright_cyan]{database['name']}"
-                        )
-                elif system_pod["name"] == "minio":
-                    for bucket in system_pod["buckets"]:
-                        utils.create_minio_bucket(bucket["name"])
-                        rprint(
-                            f"      *  Created MinIO bucket: [bright_cyan]{bucket['name']}"
-                        )
+        _process_pod_databases(pod_config)
 
 
 def connect_to_mysql() -> None:
@@ -565,6 +774,74 @@ def verify_dependencies():
         rprint(f"[red]There were {errors} so we stopped the command[/red]")
         sys.exit(1)
 
+    # If HTTPS is enabled, check for mkcert and certutil
+    if CONFIG.get("https", False):
+        utils.check_mkcert()
+
+
+def show_status(namespace="default", all_namespaces=False, watch=False):
+    """Show the status of the cluster and pods"""
+
+    console = Console()
+
+    # Clear the terminal if watching so it starts at the top
+    if watch:
+        console.clear()
+
+    def generate_content():
+        """Generate the renderable content (Group) for the status"""
+        items = []
+
+        # Header
+        items.append(Text("Auto Status", style="deep_sky_blue1 bold"))
+        items.append(Text(""))  # Spacer
+
+        # 1. Check K3d Cluster
+        c_stat, c_style = utils.get_cluster_status()
+        items.append(Text.assemble(" Cluster:  ", (c_stat, c_style)))
+
+        # 2. Check Registry
+        r_stat, r_style = utils.get_registry_status()
+        items.append(Text.assemble(" Registry: ", (r_stat, r_style)))
+
+        # If the cluster is stopped, we can't show pods
+        if c_stat != "Running":
+            items.append(
+                Text(
+                    "\nCluster is stopped. Run 'auto start' to start it.",
+                    style="italic",
+                )
+            )
+            return Group(*items)
+
+        # 3. Pods Table
+        items.append(Text(""))  # Spacer
+        table_title = (
+            "Pods (All Namespaces)"
+            if all_namespaces
+            else f"Pods (Namespace: {namespace})"
+        )
+        items.append(Text(table_title, style="deep_sky_blue1"))
+
+        # Build the table using helper
+        items.append(utils.build_pod_table(namespace, all_namespaces))
+
+        return Group(*items)
+
+    # Main Execution Logic
+    if watch:
+        # Use Live to update in-place without strobe
+        with Live(generate_content(), console=console, refresh_per_second=4) as live:
+            while True:
+                try:
+                    time.sleep(3)
+                    live.update(generate_content())
+                except KeyboardInterrupt:
+                    break
+    else:
+        # Just print once
+        rprint(generate_content())
+
 
 def pull_and_build_pods():
     """Pull all git repos, then docker build, then upload the images to the local registry"""
@@ -624,3 +901,60 @@ def rollback_with_smalls(pod, number):
     # Run the command inside the pod
     command = f"./smalls.py rollback {number}"
     utils.run_command_inside_pod(pod, command)
+
+
+def list_cluster_images():
+    """Scan running pods and print a YAML list of images for local.yaml"""
+
+    rprint("  -- Scanning cluster for images...")
+
+    # 1. Get images from all containers and initContainers
+    # We use a set to automatically handle deduplication
+    found_images = set()
+
+    # JSONPath to grab both standard containers and init containers
+    cmd = (
+        "kubectl get pods --all-namespaces "
+        "-o jsonpath='{range .items[*]}{.spec.containers[*].image} "
+        '{.spec.initContainers[*].image}{"\\n"}{end}\''
+    )
+
+    output = utils.run_and_return(cmd)
+
+    if not output:
+        rprint("     [yellow]No images found (is the cluster running?)[/]")
+        return
+
+    # 2. Process the images
+    # We need to filter out the user's local pods (portal, www, etc) because
+    # those shouldn't be pulled from a registry, they are built locally.
+    local_pod_names = []
+    for p in CONFIG.get("pods", []):
+        if "repo" in p:
+            name = p["repo"].split("/")[-1:][0].replace(".git", "")
+            local_pod_names.append(name)
+
+    raw_list = output.split()
+    for image in raw_list:
+        # Strip the local registry prefix if present (e.g. k3d-registry.local:12345/mysql:8.0 -> mysql:8.0)
+        clean_image = image.replace("k3d-registry.local:12345/", "")
+
+        # Filter out local pods (naive check: if image starts with pod name)
+        is_local_project = False
+        for pod_name in local_pod_names:
+            # Check if image is exactly the pod name or pod_name:tag
+            if clean_image == pod_name or clean_image.startswith(f"{pod_name}:"):
+                is_local_project = True
+                break
+
+        if not is_local_project:
+            found_images.add(clean_image)
+
+    # 3. Print the result
+    rprint(f"     [green]Found {len(found_images)} unique upstream images.[/]")
+    rprint("\n[bold]Copy this into your ~/.auto/config/local.yaml:[/bold]\n")
+
+    print("registry:")
+    for img in sorted(found_images):
+        print(f"  - image: {img}")
+    print()

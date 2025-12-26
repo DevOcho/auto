@@ -242,13 +242,20 @@ def wait_for_pod_status(podname: str, status: str, max_wait_time=60) -> None:
             bash_command, capture_output=True, shell=True, check=True
         )
 
-        # Look for the pod and the status to see if it's ready
-        result_lines = results.stdout.splitlines()
-        for line in result_lines:
-            line_str = line.decode("utf-8")
-            if re.search(podname, line_str):
-                if re.search(status, line_str):
-                    pod_complete = 1
+        try:
+            results = subprocess.run(
+                bash_command, capture_output=True, shell=True, check=True
+            )
+
+            # Look for the pod and the status to see if it's ready
+            result_lines = results.stdout.splitlines()
+            for line in result_lines:
+                line_str = line.decode("utf-8")
+                if re.search(podname, line_str):
+                    if re.search(status, line_str):
+                        pod_complete = 1
+        except CalledProcessError:
+            pass
 
         cycles += 1
         sleep(0.5)

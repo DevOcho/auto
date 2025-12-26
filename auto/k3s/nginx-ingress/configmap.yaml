@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-conf
+data:
+  nginx.conf: |
+    server {
+     listen 80;
+     server_name localhost;
+     location / {
+       rewrite ^/$ /static/index.html break;
+       proxy_set_header Host $http_host;
+       proxy_pass http://minio:9000/static/;
+     }
+    }
