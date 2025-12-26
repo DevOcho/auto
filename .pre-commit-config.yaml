@@ -95,9 +95,8 @@ repos:
     hooks:
       - id: pytest
         name: pytest
-        stages: [pre-commit]
+        stages: [commit]
         language: system
-        entry: pytest --cov-config=.coveragerc --cov --cov-fail-under=20
+        entry: pytest auto/autocli --cov=auto/autocli --cov-fail-under=20
         pass_filenames: false
         always_run: true
-        args: ["--ignore=lib"]  # Restrict pytest to the tests/ directory
