@@ -114,7 +114,7 @@ def run_and_wait(
     suppress_error=False,
     _retry_count=0,
 ) -> int:
-    """Run a Bash command and wait for it to finish"""
+    """Run a Bash command and wait for it to finish with retries"""
 
     # Local vars
     found = 0
@@ -176,6 +176,17 @@ def run_and_wait(
         return 0
 
 
+def run_and_return(cmd: str) -> str:
+    """Run a Bash command and return the output as a string"""
+
+    # Run the command and return the output
+    try:
+        output = subprocess.run(cmd, capture_output=True, shell=True, check=True)
+        return output.stdout.decode("utf-8").strip()
+    except CalledProcessError:
+        return ""
+
+
 def run_async(cmd: str) -> bytes:
     """Run a Bash command and keep moving"""
 
@@ -225,9 +236,11 @@ def wait_for_pod_status(podname: str, status: str, max_wait_time=60) -> None:
     cycles = 0  # Each cycle is a half a second
 
     while not pod_complete and cycles < max_wait_time:
-        # Get the pod(s) in question.
-        # We DO NOT use grep here so we can detect if kubectl itself fails.
-        bash_command = "kubectl get pods --all-namespaces"
+        # Get the pod(s) in question
+        bash_command = f"""kubectl get pods --all-namespaces | grep {podname} || true"""
+        results = subprocess.run(
+            bash_command, capture_output=True, shell=True, check=True
+        )
 
         try:
             results = subprocess.run(
@@ -637,17 +650,6 @@ def setup_minio(retries=5):
         if retries > 1:
             sleep(3)
             setup_minio(retries - 1)
-
-
-def run_and_return(cmd: str) -> str:
-    """Run a Bash command and return the output as a string"""
-
-    # Run the command and return the output
-    try:
-        output = subprocess.run(cmd, capture_output=True, shell=True, check=True)
-        return output.stdout.decode("utf-8").strip()
-    except CalledProcessError:
-        return ""
 
 
 def get_cluster_status():

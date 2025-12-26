@@ -12,10 +12,14 @@ if anything obscure breaks, the developer is typically able to recover the
 entire local development environment in 10 minutes.  This is a huge boost to
 productivity.
 
+Features:
+ - Kubernetes local development environment
+ - Nginx ingress
+ - HTTPS support for local development
+ - Quick access to databases (i.e. mysql, minio, etc.)
+ - Shell autocompletion for commands and pod names
 
-## Todo List
-
-- [ ] Create `auto update` to update to the latest version of auto
+Made with love by [DevOcho - Custom Software](https://www.devocho.com)
 
 ## Install `auto`
 
@@ -37,12 +41,13 @@ Optional dependencies:
 
 ### Install Commands
 
-NOTE: `auto` is installed for a user and not installed system wide.
 You can install it with the following commands:
 
 ```bash
 curl -fsSL https://www.devocho.com/auto.sh | bash
 ```
+
+NOTE: `auto` is installed for a user and not installed system wide.
 
 The `auto` install will update your `~/.bashrc` file to add itself to your path
 environment variable.  For that change to take effect you will need to run
@@ -66,7 +71,7 @@ auto --version
 
 ## Shell Autocompletion
 
-`auto` supports tab completion for Bash, Zsh, and Fish. This allows you to tab-complete commands, options, and even pod names.
+`auto` supports tab completion for Bash, Zsh, and Fish. This allows you to tab-complete commands, options, and even pod names (e.g., `auto start my<tab>` -> `auto start my-pod`).
 
 To see the installation instructions for your shell, run:
 
@@ -184,7 +189,16 @@ Once you have the config files ready, you can start the cluster and pods with th
 auto start
 ```
 
-The technical documentation has many more specifics you might enjoy.
+If you prefer to use yaml vs helm, you can change your command to something like the following:
+
+```yaml
+# k8s/k3s commands
+command: kubectl apply
+command-args: -f '.auto/deployment.yaml'
+```
+
+Where your entire yaml is in that file.  This command is run blindly so be careful.  With much
+power comes much responsibility.
 
 ## HTTPS Support
 
@@ -232,6 +246,10 @@ working on the config or Dockerfile.
 ### `auto autocomplete`
 
 Setup shell integration for tab completion.
+
+### `auto images` (or `auto container-list`)
+
+Scans the running cluster and outputs a YAML list of container images. You can copy this output into the `registry:` section of your `local.yaml` to speed up cluster startup by pre-loading images.
 
 ### `auto mysql`
 

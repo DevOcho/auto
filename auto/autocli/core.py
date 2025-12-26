@@ -288,20 +288,17 @@ def delete_cluster(progress, task) -> None:
     rprint("  -- Deleting cluster :skull::skull:")
 
     # Explicitly target k3s-default
-    bash_command = """/usr/local/bin/k3d cluster delete k3s-default"""
+    delete_cmd = "/usr/local/bin/k3d cluster delete k3s-default"
 
     # Run delete
-    utils.run_and_wait(bash_command)
-    time.sleep(2)  # Give docker a moment to cleanup
+    utils.run_and_wait(delete_cmd)
 
-    # Verify deletion by looping
-    # If k3d cluster list still returns 'k3s-default', we wait.
-    # We use capture_output=True so we can check the text result cleanly.
-    for _ in range(30):
+    # Verify deletion by looping with retries
+    # We wait up to 45 seconds. If it's still there, we error out.
+    for i in range(45):
         try:
-            # We run subprocess directly here to differentiate between "command failed"
-            # and "text not found".
-            result = subprocess.run(
+            # Check k3d list
+            k3d_result = subprocess.run(
                 "/usr/local/bin/k3d cluster list",
                 shell=True,
                 capture_output=True,
@@ -309,28 +306,99 @@ def delete_cluster(progress, task) -> None:
                 check=False,
             )
 
-            # If the command succeeded (k3d is running) but 'k3s-default' is NOT in output
-            if result.returncode == 0 and "k3s-default" not in result.stdout:
-                break
+            # Check docker containers (source of truth)
+            docker_result = subprocess.run(
+                "docker ps -a",
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
 
-            # If the command failed (e.g. docker daemon busy), we wait and retry
+            k3d_gone = (
+                k3d_result.returncode == 0 and "k3s-default" not in k3d_result.stdout
+            )
+            docker_gone = (
+                docker_result.returncode == 0
+                and "k3d-k3s-default" not in docker_result.stdout
+            )
+
+            if k3d_gone and docker_gone:
+                progress.update(task, advance=50)
+                return
+
+            # If not gone after 5 seconds, try deleting again (idempotent usually)
+            if i > 0 and i % 5 == 0:
+                utils.run_and_wait(delete_cmd, suppress_error=True)
+
             time.sleep(1)
         except (OSError, subprocess.SubprocessError):
             time.sleep(1)
 
-    progress.update(task, advance=50)
+    # If we fall out of the loop, deletion failed
+    utils.declare_error(
+        "Failed to delete cluster k3s-default. Docker containers may be stuck."
+    )
 
 
 def stop_pod(pod) -> None:
     """Stop a single pod"""
 
-    # Is the pod running?
-    if not utils.run_and_wait("""kubectl get pods""", check_result=pod):
-        rprint(f"    -- {pod}[steel_blue] was not running")
+    # Local Vars
+    code_dir = CONFIG["code"]
+
+    # If we get a dictionary we have to find the pod name from the repo name
+    if isinstance(pod, dict):
+        pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
     else:
-        command = f"""helm delete {pod}"""
+        pod_name = pod
+
+    # Is the pod running?
+    if not utils.run_and_wait("""kubectl get pods""", check_result=pod_name):
+        rprint(f"    -- {pod_name}[steel_blue] was not running")
+        return
+
+    # Attempt to load config to perform a clean stop
+    config_file_path = Path(code_dir) / pod_name / ".auto" / "config.yaml"
+
+    if not config_file_path.is_file():
+        # Fallback for pods without local config
+        rprint(
+            f"    [yellow]Warning: Config not found for {pod_name}. Trying helm uninstall...[/]"
+        )
+        utils.run_and_wait(f"helm uninstall {pod_name}")
+        return
+
+    with open(config_file_path, encoding="utf-8") as pod_yaml:
+        pod_config = yaml.safe_load(pod_yaml)
+
+    # Determine stop strategy based on start command
+    start_cmd = pod_config.get("command", "")
+
+    if re.search("helm", start_cmd):
+        # Helm Uninstall
+        release_name = pod_config.get("name", pod_name)
+        command = f"helm uninstall {release_name}"
         utils.run_and_wait(command)
-        rprint(f"    -- {pod} [steel_blue]stopped")
+        rprint(f"    -- {pod_name} [steel_blue]stopped (Helm)[/]")
+
+    elif re.search("kubectl apply", start_cmd):
+        # Kubectl Delete (reverse of apply)
+        args = pod_config.get("command_args", "")
+        # We assume args are like "-f .auto/deployment.yaml" or similar
+        command = f"kubectl delete {args}"
+
+        # Execute in the pod directory so relative paths in args work
+        pod_folder = os.path.join(code_dir, pod_name)
+        utils.run_and_wait(command, cwd=pod_folder)
+        rprint(f"    -- {pod_name} [steel_blue]stopped (Manifest)[/]")
+
+    else:
+        # Unknown/Custom command - fallback
+        rprint(
+            f"    [red]Unknown start command '{start_cmd}'. Attempting helm uninstall...[/]"
+        )
+        utils.run_and_wait(f"helm uninstall {pod_name}")
 
 
 def _recover_pvc_conflict(pod_name):
@@ -650,19 +718,33 @@ def output_logs(pod):
     pod_name = utils.get_full_pod_name(pod)
 
     if not pod_name:
-        utils.declare_error("Pod not found: {pod}")
+        utils.declare_error(f"Pod not found: {pod}")
+
+    # Dynamically find the Node IP (often the source of the health check)
+    node_ip = utils.run_and_return(
+        "kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"InternalIP\")].address}'"
+    )
 
     rprint(f"Printing logs for {pod_name}")
+    rprint("[italic]Filtering out health checks (kube-probe, node-ip)...[/]")
     rprint("[steel_blue]Press ^C to exit")
 
-    # Run `kubectl logs` on a pod but exclude the k8s healthchecks.
-    # the extra space at the end of the ip address is helpful because the health check
-    # ip address and the pod ip address might be similar (i.e. 10.42.1.1 and 10.42.1.10)
-    # by adding the space it let's the 10.42.1.10 show up in the output and suppresses
-    # the 10.42.1.1 healthcheck
-    os.system(
-        f'kubectl logs -f {pod_name} | grep -v "10.42.0.1 " | grep -v "10.42.1.1 "'
-    )
+    # Build the filter command
+    # 1. --line-buffered fixes the lag issue (grep usually buffers heavily on pipes)
+    # 2. -v "kube-probe" filters standard HTTP health checks regardless of IP
+    # 3. -v node_ip filters TCP checks coming from the kubelet
+    filters = [
+        'grep --line-buffered -v "kube-probe"',
+        'grep --line-buffered -v "10.42.0.1"',  # Common CNI Gateway
+    ]
+
+    if node_ip:
+        filters.append(f'grep --line-buffered -v "{node_ip}"')
+
+    filter_cmd = " | ".join(filters)
+
+    # Run kubectl logs piped through our filters
+    os.system(f"kubectl logs -f {pod_name} | {filter_cmd}")
 
 
 def seed_pod(pod):
