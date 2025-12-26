@@ -179,13 +179,61 @@ def delete_cluster(progress, task) -> None:
 def stop_pod(pod) -> None:
     """Stop a single pod"""
 
-    # Is the pod running?
-    if not utils.run_and_wait("""kubectl get pods""", check_result=pod):
-        rprint(f"    -- {pod}[steel_blue] was not running")
+    # Local Vars
+    code_dir = CONFIG["code"]
+
+    # If we get a dictionary we have to find the pod name from the repo name
+    if isinstance(pod, dict):
+        pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
     else:
-        command = f"""helm delete {pod}"""
+        pod_name = pod
+
+    # Is the pod running?
+    if not utils.run_and_wait("""kubectl get pods""", check_result=pod_name):
+        rprint(f"    -- {pod_name}[steel_blue] was not running")
+        return
+
+    # Attempt to load config to perform a clean stop
+    config_file_path = Path(code_dir) / pod_name / ".auto" / "config.yaml"
+
+    if not config_file_path.is_file():
+        # Fallback for pods without local config
+        rprint(
+            f"    [yellow]Warning: Config not found for {pod_name}. Trying helm uninstall...[/]"
+        )
+        utils.run_and_wait(f"helm uninstall {pod_name}")
+        return
+
+    with open(config_file_path, encoding="utf-8") as pod_yaml:
+        pod_config = yaml.safe_load(pod_yaml)
+
+    # Determine stop strategy based on start command
+    start_cmd = pod_config.get("command", "")
+
+    if re.search("helm", start_cmd):
+        # Helm Uninstall
+        release_name = pod_config.get("name", pod_name)
+        command = f"helm uninstall {release_name}"
         utils.run_and_wait(command)
-        rprint(f"    -- {pod} [steel_blue]stopped")
+        rprint(f"    -- {pod_name} [steel_blue]stopped (Helm)[/]")
+
+    elif re.search("kubectl apply", start_cmd):
+        # Kubectl Delete (reverse of apply)
+        args = pod_config.get("command_args", "")
+        # We assume args are like "-f .auto/deployment.yaml" or similar
+        command = f"kubectl delete -f {args}"
+
+        # Execute in the pod directory so relative paths in args work
+        pod_folder = os.path.join(code_dir, pod_name)
+        utils.run_and_wait(command, cwd=pod_folder)
+        rprint(f"    -- {pod_name} [steel_blue]stopped (Manifest)[/]")
+
+    else:
+        # Unknown/Custom command - fallback
+        rprint(
+            f"    [red]Unknown start command '{start_cmd}'. Attempting helm uninstall...[/]"
+        )
+        utils.run_and_wait(f"helm uninstall {pod_name}")
 
 
 def start_pod(pod) -> None:
@@ -362,10 +410,12 @@ def connect_to_mysql() -> None:
 
     utils.connect_to_db()
 
+
 def connect_to_postgres() -> None:
     """Connect to the PostgreSQL cluster inside the k3s cluster"""
 
     utils.connect_to_db_postgres()
+
 
 def connect_to_minio() -> None:
     """Open a port=forward and print a nice message to inform user"""

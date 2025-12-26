@@ -103,20 +103,27 @@ def declare_error(error_msg: str, exit_auto: bool = True) -> None:
         sys.exit()
 
 
-def run_and_wait(cmd: str, capture_output=True, check_result="") -> int:
-    """Run a Bash command and wait for it to finish"""
+def run_and_wait(
+    cmd: str,
+    capture_output=True,
+    check_result="",
+    cwd=None,
+    suppress_error=False,
+    _retry_count=0,
+) -> int:
+    """Run a Bash command and wait for it to finish with retries"""
 
     # Local vars
     found = 0
 
-    # Make this command safe to run
-    cmd = shlex.quote(cmd)
-    args = shlex.split(cmd)
-
     # Run the command and return the output
     try:
         output = subprocess.run(
-            args, capture_output=capture_output, shell=True, check=True
+            cmd,
+            capture_output=capture_output,
+            shell=True,
+            check=True,
+            cwd=cwd,  # Allow running in specific directory
         )
 
         if check_result:
@@ -132,7 +139,37 @@ def run_and_wait(cmd: str, capture_output=True, check_result="") -> int:
         # Get to this point implies success
         return 1
 
-    except CalledProcessError:
+    except CalledProcessError as error:
+        # Check for kubectl connection issues to auto-heal
+        err_text = error.stderr.decode("utf-8") if error.stderr else ""
+        if "kubectl" in cmd and (
+            "connection refused" in err_text or "server was refused" in err_text
+        ):
+            if _retry_count < 3:
+                # Attempt to fix connectivity by refreshing kubeconfig
+                # We use subprocess directly to avoid recursion loops
+                subprocess.run(
+                    "k3d kubeconfig merge k3s-default --kubeconfig-switch-context",
+                    shell=True,
+                    capture_output=True,
+                    check=False,
+                )
+                sleep(2)
+                # Retry the original command
+                return run_and_wait(
+                    cmd,
+                    capture_output,
+                    check_result,
+                    cwd,
+                    suppress_error,
+                    _retry_count + 1,
+                )
+
+        # If we captured output and errors are not suppressed, print the error.
+        if capture_output and err_text and not suppress_error:
+            rprint(f"\n[red]Command failed:[/red] {cmd}")
+            # Use standard print to avoid rich parsing error contents as tags
+            print(err_text)
         return 0
 
 

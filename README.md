@@ -3,7 +3,7 @@
 Easily manage your k3s/k3d local development environment using k8s YAML
 configs or helm charts.
 
-`auto` sets up a loccal k3s environment utilizing k3d (k3s in docker).  It then
+`auto` sets up a local k3s environment utilizing k3d (k3s in docker).  It then
 uses config files to create your environment.  At DevOcho we have the goal
 of a sub 10 minute start up for a developer joining a project.  `auto` helps us
 achieve that goal.  We explain our process a bit more at the bottom of
@@ -12,15 +12,14 @@ if anything obscure breaks, the developer is typically able to recover the
 entire local development environment in 10 minutes.  This is a huge boost to
 productivity.
 
+Features:
+ - Kubernetes local development environment
+ - Nginx ingress
+ - HTTPS support for local development
+ - Quick access to databases (i.e. mysql, minio, etc.)
+ - Shell autocompletion for commands and pod names
 
-## Todo List
-
-- [ ] Create `auto status` to show where things are
-- [ ] Create `auto update` to update to the latest version of auto
-- [ ] Create `auto install` to install config from a parent repo
-- [ ] Create `auto migrations` run database migrations in a pod
-- [ ] Use `pyinstaller` to create a single file instead of installing python reqs
-
+Made with love by [DevOcho - Custom Software](https://www.devocho.com)
 
 ## Install `auto`
 
@@ -37,15 +36,18 @@ You will need a Linux system with the following pre-installed:
 
 Optional dependencies:
 - Helm (if you plan to use helm charts for deployments)
+- mkcert (if you plan to use HTTPS/SSL locally)
+- libnss3-tools (required by mkcert on Linux)
 
 ### Install Commands
 
-NOTE: `auto` is installed for a user and not installed system wide.
 You can install it with the following commands:
 
 ```bash
 curl -fsSL https://www.devocho.com/auto.sh | bash
 ```
+
+NOTE: `auto` is installed for a user and not installed system wide.
 
 The `auto` install will update your `~/.bashrc` file to add itself to your path
 environment variable.  For that change to take effect you will need to run
@@ -67,11 +69,29 @@ You can verify `auto` is installed with the following command:
 auto --version
 ```
 
+## Shell Autocompletion
+
+`auto` supports tab completion for Bash, Zsh, and Fish. This allows you to tab-complete commands, options, and even pod names (e.g., `auto start my<tab>` -> `auto start my-pod`).
+
+To see the installation instructions for your shell, run:
+
+```bash
+auto autocomplete --shell bash  # or zsh, fish
+```
+
+For automatic installation, you can use the `--install` flag:
+
+```bash
+auto autocomplete --shell bash --install
+source ~/.bashrc
+```
+
+
 ## Quickstart
 
 Once you've installed `auto` you can get up and running with the following steps:
 
-### Edit the `~/.auto/config/local.yaml`` file
+### Edit the `~/.auto/config/local.yaml` file
 
 The install process installed a config folder for you.  Inside the config
 folder is the `local.yaml` file.  The `local.yaml` file tells `auto` about
@@ -88,6 +108,17 @@ This is what I have set for mine:
 # The code folder is where we will download all of your pod code repositories
 code: /home/rogue/source/devocho
 ```
+
+#### Enabling HTTPS
+
+If you want your local cluster to run with SSL/HTTPS enabled, add the following line to your config:
+
+```yaml
+# Do you want local to be https?
+https: true
+```
+
+*Note: This requires `mkcert` to be installed on your system.*
 
 #### Adding Your Pods
 
@@ -117,7 +148,7 @@ for the following files/folders in your repo:
 /.auto/helm  (if using helm charts)
 ```
 
-In your pod you will need an `.auto` folder that contains a `config.yaml``
+In your pod you will need an `.auto` folder that contains a `config.yaml`
 file that tells auto how you want it to run.  Here is an example of a
 web application pod using a helm chart:
 
@@ -159,6 +190,33 @@ Once you have the config files ready, you can start the cluster and pods with th
 auto start
 ```
 
+If you prefer to use yaml vs helm, you can change your command to something like the following:
+
+```yaml
+# k8s/k3s commands
+command: kubectl apply
+command-args: -f '.auto/deployment.yaml'
+```
+
+Where your entire yaml is in that file.  This command is run blindly so be careful.  With much
+power comes much responsibility.
+
+## HTTPS Support
+
+When `https: true` is set in your `local.yaml`, `auto` will automatically:
+1. Generate a local Certificate Authority (CA) using `mkcert`.
+2. Generate SSL certificates for `localhost`, `*.local`, and your specific pod names (e.g., `portal.local`).
+3. Configure the Nginx Ingress Controller in the cluster to use these certificates.
+4. Expose port `443` on the load balancer.
+
+**Prerequisites:**
+You must install `mkcert` and `certutil` (often found in `libnss3-tools`) for this to work.
+*   **Ubuntu/Debian:** `sudo apt install libnss3-tools` and follow mkcert installation instructions.
+*   **Fedora:** `sudo dnf install nss-tools`
+*   **Arch:** `sudo pacman -S nss`
+
+On the first run, `auto start` may prompt you for your `sudo` password to install the local CA into your system's trust store.
+
 ## Usage
 
 You can get basic help by running `auto --help`.
@@ -185,6 +243,14 @@ your machine.
 
 This will remove and recreate the pod in the cluster.  This is nice if you are
 working on the config or Dockerfile.
+
+### `auto autocomplete`
+
+Setup shell integration for tab completion.
+
+### `auto images` (or `auto container-list`)
+
+Scans the running cluster and outputs a YAML list of container images. You can copy this output into the `registry:` section of your `local.yaml` to speed up cluster startup by pre-loading images.
 
 ### `auto mysql`
 
