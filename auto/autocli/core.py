@@ -726,16 +726,17 @@ def output_logs(pod):
     )
 
     rprint(f"Printing logs for {pod_name}")
-    rprint("[italic]Filtering out health checks (kube-probe, node-ip)...[/]")
+    rprint("[italic]Filtering out health checks (kube-probe, node-ip, 10.42.x.1)...[/]")
     rprint("[steel_blue]Press ^C to exit")
 
     # Build the filter command
-    # 1. --line-buffered fixes the lag issue (grep usually buffers heavily on pipes)
+    # 1. --line-buffered removes any lag issue (grep usually buffers heavily on pipes)
     # 2. -v "kube-probe" filters standard HTTP health checks regardless of IP
     # 3. -v node_ip filters TCP checks coming from the kubelet
     filters = [
         'grep --line-buffered -v "kube-probe"',
-        'grep --line-buffered -v "10.42.0.1"',  # Common CNI Gateway
+        'grep --line-buffered -v "10.42.0.1 "',
+        'grep --line-buffered -v "10.42.1.1 "',
     ]
 
     if node_ip:
@@ -744,6 +745,7 @@ def output_logs(pod):
     filter_cmd = " | ".join(filters)
 
     # Run kubectl logs piped through our filters
+    # os.system gives a direct stream without a python buffer
     os.system(f"kubectl logs -f {pod_name} | {filter_cmd}")
 
 
@@ -877,6 +879,7 @@ def pull_and_build_pods():
     rprint(" -- pulling code repos")
     for pod in CONFIG["pods"]:
         rprint(f"    = Pulling [bright_cyan]{pod['repo']}[/]")
+        utils.ensure_host_known(pod["repo"])
         utils.pull_repo(pod, code_folder)
 
     return CONFIG["pods"]

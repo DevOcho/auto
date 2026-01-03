@@ -6,19 +6,35 @@ from unittest.mock import MagicMock, mock_open, patch
 from autocli import utils
 
 
+@patch("autocli.utils.Confirm.ask")
+@patch("os.makedirs")
+@patch("os.path.exists")
 @patch("os.path.isfile")
 @patch("builtins.open", new_callable=mock_open, read_data="code: /tmp/code")
 @patch("yaml.safe_load")
-def test_load_config(mock_yaml, _mock_file, mock_isfile):
+def test_load_config(
+    mock_yaml, _mock_file, mock_isfile, mock_exists, mock_makedirs, mock_confirm
+):
     """Test loading configuration"""
-    # Case 1: Config exists
-    mock_isfile.return_value = True
+    # Setup default yaml return
     mock_yaml.return_value = {"code": "/tmp/code"}
+
+    # Case 1: Config exists and code folder exists
+    mock_isfile.return_value = True
+    mock_exists.return_value = True
 
     config = utils.load_config()
     assert config["code"] == "/tmp/code"
 
-    # Case 2: Config does not exist (should trigger error/create)
+    # Case 2: Config exists but code folder MISSING (User says YES to create)
+    mock_exists.return_value = False  # Folder missing
+    mock_confirm.return_value = True  # User says Yes
+
+    config = utils.load_config()
+    assert config["code"] == "/tmp/code"
+    mock_makedirs.assert_called_with("/tmp/code")
+
+    # Case 3: Config does not exist (should trigger error/create)
     # We mock declare_error to avoid sys.exit
     mock_isfile.return_value = False
     with patch("autocli.utils.declare_error") as mock_error:
