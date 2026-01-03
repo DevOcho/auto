@@ -179,7 +179,7 @@ def run_and_wait(
     suppress_error=False,
     _retry_count=0,
 ) -> int:
-    """Run a Bash command and wait for it to finish"""
+    """Run a Bash command and wait for it to finish with retries"""
 
     # Local vars
     found = 0
@@ -301,9 +301,11 @@ def wait_for_pod_status(podname: str, status: str, max_wait_time=60) -> None:
     cycles = 0  # Each cycle is a half a second
 
     while not pod_complete and cycles < max_wait_time:
-        # Get the pod(s) in question.
-        # We DO NOT use grep here so we can detect if kubectl itself fails.
-        bash_command = "kubectl get pods --all-namespaces"
+        # Get the pod(s) in question
+        bash_command = f"""kubectl get pods --all-namespaces | grep {podname} || true"""
+        results = subprocess.run(
+            bash_command, capture_output=True, shell=True, check=True
+        )
 
         try:
             results = subprocess.run(
