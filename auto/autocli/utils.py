@@ -12,6 +12,7 @@ from time import sleep
 
 import yaml
 from rich import print as rprint
+from rich.prompt import Confirm
 from rich.table import Table
 from rich.text import Text
 
@@ -21,8 +22,9 @@ def load_config():
 
     # Local vars
     config = {}
+    config_path = os.path.expanduser("~") + "/.auto/config/local.yaml"
 
-    if not os.path.isfile(os.path.expanduser("~") + "/.auto/config/local.yaml"):
+    if not os.path.isfile(config_path):
         declare_error(
             "No local.yaml file available. Creating a default.", exit_auto=False
         )
@@ -30,10 +32,30 @@ def load_config():
         create_initial_config()
 
     # Read Config and provide the data
-    with open(
-        os.path.expanduser("~") + "/.auto/config/local.yaml", encoding="utf-8"
-    ) as yaml_file:
+    with open(config_path, encoding="utf-8") as yaml_file:
         config = yaml.safe_load(yaml_file)
+
+    # 1. Expand User and Variables in the code path
+    if "code" in config:
+        # Expands ~ to /home/user
+        expanded_path = os.path.expanduser(config["code"])
+        # Expands ${USER} or $HOME
+        expanded_path = os.path.expandvars(expanded_path)
+        config["code"] = expanded_path
+
+        # 2. Check if folder exists, if not, ask to create
+        if not os.path.exists(config["code"]):
+            rprint(
+                f"\n[yellow]Warning: Code folder '{config['code']}' does not exist.[/]"
+            )
+            if Confirm.ask("Do you want us to create it for you?"):
+                try:
+                    os.makedirs(config["code"])
+                    rprint(f"[green]Created directory: {config['code']}[/]")
+                except OSError as e:
+                    declare_error(f"Could not create directory: {e}")
+            else:
+                declare_error("Code directory missing. Cannot proceed.")
 
     return config
 
@@ -41,12 +63,11 @@ def load_config():
 def create_initial_config():
     """Create a default config file if none is present"""
 
-    home_folder = os.path.expanduser("~")
-
-    default_config = f"""
+    # We use ${HOME} here so the config file is portable if copied
+    default_config = """
 ---
 # The code folder is where you want us to download all of your pod code repositories
-code: {home_folder}/source/devocho
+code: ${HOME}/source/devocho
 
 # Each repo listed here will be run as a pod in k3s
 pods:
@@ -70,10 +91,54 @@ system-pods:
 """
 
     if not os.path.isfile(os.path.expanduser("~") + "/.auto/config/local.yaml"):
+        # Ensure the directory exists
+        os.makedirs(os.path.expanduser("~") + "/.auto/config", exist_ok=True)
+
         with open(
             os.path.expanduser("~") + "/.auto/config/local.yaml", "w", encoding="utf-8"
         ) as config_file:
             config_file.write(default_config)
+
+
+def ensure_host_known(git_url):
+    """Ensure the git host is in known_hosts to prevent interactive prompts hanging"""
+    # Extract domain from git@github.com:User/Repo.git or https://github.com/User/Repo
+    domain_match = re.search(r"@(.*?):", git_url)
+    if not domain_match:
+        # fallback for https or other formats if needed, or return if no match
+        return
+
+    host = domain_match.group(1)
+
+    # 1. Check if host is already known
+    # ssh-keygen -F returns exit code 0 if found, 1 if not
+    cmd_check = f"ssh-keygen -F {host}"
+    if run_and_wait(cmd_check, capture_output=True, suppress_error=True):
+        return  # Host is known
+
+    # 2. If not known, scan and add keys
+    rprint(f"  [yellow]-- Trusting new host: {host}[/]")
+    ssh_dir = os.path.expanduser("~/.ssh")
+    if not os.path.exists(ssh_dir):
+        os.makedirs(ssh_dir, mode=0o700)
+
+    # ssh-keyscan outputs the key, we append to known_hosts
+    cmd_scan = f"ssh-keyscan -H {host} >> {ssh_dir}/known_hosts"
+
+    # We use subprocess directly to handle the redirect easily
+    try:
+        subprocess.run(
+            cmd_scan,
+            shell=True,
+            check=True,
+            stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+        )
+        rprint(f"     [green]Host {host} added to known_hosts[/]")
+    except CalledProcessError:
+        rprint(
+            f"     [red]Failed to automatically trust {host}. Git clone may fail.[/]"
+        )
 
 
 def run_command_inside_pod(pod, command):
@@ -114,7 +179,7 @@ def run_and_wait(
     suppress_error=False,
     _retry_count=0,
 ) -> int:
-    """Run a Bash command and wait for it to finish with retries"""
+    """Run a Bash command and wait for it to finish"""
 
     # Local vars
     found = 0
@@ -236,11 +301,9 @@ def wait_for_pod_status(podname: str, status: str, max_wait_time=60) -> None:
     cycles = 0  # Each cycle is a half a second
 
     while not pod_complete and cycles < max_wait_time:
-        # Get the pod(s) in question
-        bash_command = f"""kubectl get pods --all-namespaces | grep {podname} || true"""
-        results = subprocess.run(
-            bash_command, capture_output=True, shell=True, check=True
-        )
+        # Get the pod(s) in question.
+        # We DO NOT use grep here so we can detect if kubectl itself fails.
+        bash_command = "kubectl get pods --all-namespaces"
 
         try:
             results = subprocess.run(

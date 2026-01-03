@@ -877,6 +877,7 @@ def pull_and_build_pods():
     rprint(" -- pulling code repos")
     for pod in CONFIG["pods"]:
         rprint(f"    = Pulling [bright_cyan]{pod['repo']}[/]")
+        utils.ensure_host_known(pod["repo"])
         utils.pull_repo(pod, code_folder)
 
     return CONFIG["pods"]
