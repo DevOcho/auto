@@ -102,16 +102,15 @@ system-pods:
 
 def ensure_host_known(git_url):
     """Ensure the git host is in known_hosts to prevent interactive prompts hanging"""
-    # Extract domain from git@github.com:User/Repo.git or https://github.com/User/Repo
+    # Extract domain from git@github.com:User/Repo.git
+    # If https is used, we don't need SSH keys
     domain_match = re.search(r"@(.*?):", git_url)
     if not domain_match:
-        # fallback for https or other formats if needed, or return if no match
         return
 
     host = domain_match.group(1)
 
     # 1. Check if host is already known
-    # ssh-keygen -F returns exit code 0 if found, 1 if not
     cmd_check = f"ssh-keygen -F {host}"
     if run_and_wait(cmd_check, capture_output=True, suppress_error=True):
         return  # Host is known
@@ -122,22 +121,31 @@ def ensure_host_known(git_url):
     if not os.path.exists(ssh_dir):
         os.makedirs(ssh_dir, mode=0o700)
 
-    # ssh-keyscan outputs the key, we append to known_hosts
-    cmd_scan = f"ssh-keyscan -H {host} >> {ssh_dir}/known_hosts"
-
-    # We use subprocess directly to handle the redirect easily
     try:
-        subprocess.run(
-            cmd_scan,
-            shell=True,
+        result = subprocess.run(
+            ["ssh-keyscan", "-H", host],
+            capture_output=True,
             check=True,
-            stderr=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
+            text=True,
         )
+
+        keys = result.stdout.strip()
+        if not keys:
+            rprint(f"     [red]Warning: Could not retrieve keys for {host}[/]")
+            return
+
+        # Append to known_hosts using Python
+        known_hosts_path = os.path.join(ssh_dir, "known_hosts")
+        with open(known_hosts_path, "a", encoding="utf-8") as f:
+            f.write("\n" + keys + "\n")
+
         rprint(f"     [green]Host {host} added to known_hosts[/]")
-    except CalledProcessError:
+
+    except (CalledProcessError, FileNotFoundError, OSError) as e:
+        # FileNotFoundError usually means ssh-keyscan is missing
+        rprint(f"     [red]Failed to automatically trust {host}: {e}[/]")
         rprint(
-            f"     [red]Failed to automatically trust {host}. Git clone may fail.[/]"
+            "     [italic]You may need to run 'git clone' manually once to accept the host key.[/]"
         )
 
 
@@ -179,7 +187,7 @@ def run_and_wait(
     suppress_error=False,
     _retry_count=0,
 ) -> int:
-    """Run a Bash command and wait for it to finish with retries"""
+    """Run a Bash command and wait for it to finish"""
 
     # Local vars
     found = 0
@@ -301,11 +309,9 @@ def wait_for_pod_status(podname: str, status: str, max_wait_time=60) -> None:
     cycles = 0  # Each cycle is a half a second
 
     while not pod_complete and cycles < max_wait_time:
-        # Get the pod(s) in question
-        bash_command = f"""kubectl get pods --all-namespaces | grep {podname} || true"""
-        results = subprocess.run(
-            bash_command, capture_output=True, shell=True, check=True
-        )
+        # Get the pod(s) in question.
+        # We DO NOT use grep here so we can detect if kubectl itself fails.
+        bash_command = "kubectl get pods --all-namespaces"
 
         try:
             results = subprocess.run(

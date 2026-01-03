@@ -20,6 +20,6 @@ We use github actions to create an exec file.  You can trigger that by pushing
 a new tag version to the repo.
 
 ```bash
-git tag X.Y.Z
-git push tags
+git tag vX.Y.Z  # notice the `v` because it's important
+git push origin --tags
 ```
