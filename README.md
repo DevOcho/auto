@@ -9,7 +9,7 @@ of a sub 10 minute start up for a developer joining a project.  `auto` helps us
 achieve that goal.  We explain our process a bit more at the bottom of
 the README.  One amazing benefit of this less than 10 minute start, is that
 if anything obscure breaks, the developer is typically able to recover the
-entire local development environment in 10 minutes.  This is a huge boost to
+entire local development environment in less than 10 minutes.  This is a huge boost to
 productivity.
 
 Features:
@@ -38,6 +38,7 @@ Optional dependencies:
 - Helm (if you plan to use helm charts for deployments)
 - mkcert (if you plan to use HTTPS/SSL locally)
 - libnss3-tools (required by mkcert on Linux)
+- [smalls](https://github.com/DevOcho/smalls) if working with Python and Peewee
 
 ### Install Commands
 
@@ -294,7 +295,7 @@ having multiple repos solved several problems for us but where do you
 put the "global" auto config?
 
 We do that with a specific repository for all of the
-microservices in a project.  We call the the "project repo" and it
+microservices in a project.  We call it the "project repo" and it
 contains the config files for auto, a simple make process, and also
 contains the docs that explain the project as a whole with overviews of the
 different microservices.
@@ -308,5 +309,6 @@ the following:
 4. Run `auto start`
 
 Auto will automatically clone all the git repositories, download docker images
-and populate the local registry.  It typially takes less than 10 minutes for
-the developer to have everything they need on even the largest projects.
+and populate the local registry.  It typically takes less than 10 minutes (average
+in 2025 was 2 minutes) for the developer to have everything they need on even
+the largest projects.
