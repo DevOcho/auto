@@ -3,17 +3,26 @@
 code: /home/${USER}/source/devocho
 
 # Each repo listed here will be run as a pod in k3s
+# We expect them to have a .auto folder with a config.yaml file to tell us how
+# to treat them
 pods:
-  - repo: git@github.com:DevOcho/portal.git
+  - repo: https://github.com/DevOcho/portal.git
     branch: main
 
+# HTTPS in local
+# Set to `false` if you don't want this.  If it's false we will use port 8088
+# for local pod access.
+https: true
+
 # We will pre-load the following images into the local k3s container registry
+# This makes starting and stopping the cluster much faster
 registry:
   - image: mysql:8.0
-  - image: minio:RELEASE.2025-04-08T15-41-24Z
+  - image: postgres:18.1-trixie
+  - image: minio/minio:RELEASE.2025-04-08T15-41-24Z
   - image: matomo:5.3.1-fpm-alpine
 
-# System Pods (for use with every pod)
+# System Pods (all default to `false`)
 system-pods:
 
   # Database config
@@ -37,6 +46,18 @@ system-pods:
         - kubectl apply -f ~/.auto/k3s/minio/deployment.yaml
         - kubectl apply -f ~/.auto/k3s/minio/service.yaml
         - kubectl apply -f ~/.auto/k3s/minio/ingress.yaml
+
+  # Postgres config
+  - pod:
+      name: postgres
+      active: false # set this to true if you want it to start
+      commands:
+        - kubectl apply -f ~/.auto/k3s/postgres/configmap.yaml
+        - kubectl apply -f ~/.auto/k3s/postgres/pv.yaml
+        - kubectl apply -f ~/.auto/k3s/postgres/pvc.yaml
+        - kubectl apply -f ~/.auto/k3s/postgres/deployment.yaml
+        - kubectl apply -f ~/.auto/k3s/postgres/service.yaml
+        - kubectl apply -f ~/.auto/k3s/postgres/ingress.yaml
 
   # Matomo config
   - pod:
