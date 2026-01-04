@@ -59,7 +59,7 @@ def get_namespaces(ctx, param, incomplete):  # pylint: disable=unused-argument
 
 
 @click.group(context_settings=CONTEXT_SETTINGS)
-@click.version_option(version="0.5.3")
+@click.version_option(version="0.5.4")
 def auto():
     """Commandline utility to assist with creating/deleting clusters and
     starting/stopping pods.

@@ -63,15 +63,18 @@ def load_config():
 def create_initial_config():
     """Create a default config file if none is present"""
 
-    # We use ${HOME} here so the config file is portable if copied
     default_config = """
 ---
 # The code folder is where you want us to download all of your pod code repositories
 code: ${HOME}/source/devocho
 
+# HTTPS in local
+# Set to `false` if you don't want this.  If it's false we will use port 8088 for local pod access.
+https: true
+
 # Each repo listed here will be run as a pod in k3s
 pods:
-  - repo: git@github.com:DevOcho/portal.git
+  - repo: https://github.com/DevOcho/portal.git
     branch: main
 
 # These are the system pods.  They use the config that comes with auto.
