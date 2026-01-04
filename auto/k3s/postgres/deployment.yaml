@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: k3d-registry.local:12345/postgres:18.0-trixie
+          image: k3d-registry.local:12345/postgres:18.1-trixie
           ports:
             - containerPort: 5432
           envFrom:
