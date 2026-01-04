@@ -878,7 +878,8 @@ def check_mkcert():
     if not shutil.which("mkcert"):
         declare_error(
             "mkcert is not installed. Please install it to use HTTPS.\n"
-            "  See: https://github.com/FiloSottile/mkcert"
+            "    See: https://github.com/FiloSottile/mkcert"
+            "Or set `HTTPS: false` in `~/.auto/config/local.yaml`"
         )
     # Also check for certutil so we don't fail partially
     check_certutil()

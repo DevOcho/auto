@@ -16,7 +16,7 @@ Features:
  - Kubernetes local development environment
  - Nginx ingress
  - HTTPS support for local development
- - Quick access to databases (i.e. mysql, minio, etc.)
+ - Quick access to databases installed in the cluster (i.e. mysql, postgres, minio, etc.)
  - Shell autocompletion for commands and pod names
 
 Made with love by [DevOcho - Custom Software](https://www.devocho.com)
