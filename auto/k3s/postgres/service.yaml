@@ -6,7 +6,12 @@ metadata:
     app: postgres
 spec:
   type: NodePort
+  externalTrafficPolicy: Local
   ports:
-    - port: 5432
+  - port: 5432
+    targetPort: 5432
+    nodePort: 30035
+    protocol: TCP
+    name: postgres
   selector:
     app: postgres
