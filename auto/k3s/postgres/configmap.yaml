@@ -8,4 +8,3 @@ data:
   POSTGRES_DB: postgres
   POSTGRES_USER: root
   POSTGRES_PASSWORD: password
-
