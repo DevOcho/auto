@@ -16,4 +16,3 @@ spec:
             name: postgres
             port:
               number: 5432
-
