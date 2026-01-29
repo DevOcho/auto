@@ -42,7 +42,7 @@ jobs:
     - name: Build with pyinstaller
       run: |
         source venv/bin/activate
-        pyinstaller --onefile --name auto --add-data "venv/lib/python3.12/site-packages/pyfiglet/fonts:pyfiglet/fonts" ./auto/auto.py
+        pyinstaller --collect-all pyfiglet --collect-submodules rich --hidden-import "rich._unicode_data.unicode17-0-0" --onefile ./auto/auto.py 
 
     - name: List dist directory
       run: ls -l dist/
