@@ -238,6 +238,7 @@ def start_cluster(progress, task, key_file="", cert_file=""):
                        --k3s-arg "--disable=traefik@server:0" \
                        -p "3306:30036@loadbalancer" \
                        -p "5432:30035@loadbalancer" \
+                       -p "1433:30034@loadbalancer" \
                        --agents 1"""
 
     # Attempt creation.
