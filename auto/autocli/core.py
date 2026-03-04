@@ -227,9 +227,8 @@ def start_cluster(progress, task, key_file="", cert_file=""):
         rprint("  -- [bold green]HTTPS Enabled[/]: Binding ports 80/443")
 
     code_dir = CONFIG["code"]
-    # I'm opening port 8088 and 3306 outside the cluster for access to the sites
-    # and mysql.  This means you can't run a mysql instance on your host on the
-    # same port.
+    # I'm opening port 8088 outside the cluster for access to the sites
+    # We are also opening ports for SQL Server (1433), MySQL (3306), and Postgres (5432)
     bash_command = f"""/usr/local/bin/k3d cluster create \
                        --volume {code_dir}:/mnt/code \
                        --registry-use k3d-registry.local:12345 \
@@ -238,7 +237,7 @@ def start_cluster(progress, task, key_file="", cert_file=""):
                        --k3s-arg "--disable=traefik@server:0" \
                        -p "3306:30036@loadbalancer" \
                        -p "5432:30035@loadbalancer" \
-                       --network k3d-vpn-net \
+                       -p "1433:30034@loadbalancer" \
                        --agents 1"""
 
     # Attempt creation.
