@@ -238,6 +238,7 @@ def start_cluster(progress, task, key_file="", cert_file=""):
                        --k3s-arg "--disable=traefik@server:0" \
                        -p "3306:30036@loadbalancer" \
                        -p "5432:30035@loadbalancer" \
+                       --network k3d-vpn-net \
                        --agents 1"""
 
     # Attempt creation.
@@ -420,6 +421,15 @@ def _recover_pvc_conflict(pod_name):
         ):
             break
         time.sleep(1)
+
+    # 4. Restore the global PV and PVC so they are correct for this and other pods
+    user_path = os.path.expanduser("~")
+    utils.run_and_wait(
+        f"kubectl apply -f {user_path}/.auto/k3s/pv.yaml", suppress_error=True
+    )
+    utils.run_and_wait(
+        f"kubectl apply -f {user_path}/.auto/k3s/pvc.yaml", suppress_error=True
+    )
 
 
 def _build_install_command(pod_config, pod_name, code_dir):
