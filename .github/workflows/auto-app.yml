@@ -42,7 +42,13 @@ jobs:
     - name: Build with pyinstaller
       run: |
         source venv/bin/activate
-        pyinstaller --collect-all pyfiglet --collect-submodules rich --hidden-import "rich._unicode_data.unicode17-0-0" --onefile ./auto/auto.py 
+        pyinstaller --collect-all pyfiglet \
+                    --collect-submodules rich \
+                    --collect-all autocli \
+                    --hidden-import "rich._unicode_data.unicode17-0-0" \
+                    --hidden-import "charset_normalizer" \
+                    --hidden-import "chardet" \
+                    --onefile ./auto/auto.py
 
     - name: List dist directory
       run: ls -l dist/

@@ -51,6 +51,10 @@ fi
 
 ls -lah ${TEMP_DIR}
 
+# Clean existing binary to prevent "file busy" lock issues
+echo " - Removing old executable..."
+rm -f ~/.auto/auto
+
 # Copy the contents of auto into the new directory
 cp -r ${EXTRACTED_DIR}/* ~/.auto/.
 printf " - Contents of ${BLUE}auto${NC} installed\n"
