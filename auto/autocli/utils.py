@@ -5,130 +5,17 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 from subprocess import CalledProcessError
 from time import sleep
 
 import yaml
+from autocli.config import CONFIG
 from rich import print as rprint
-from rich.prompt import Confirm
 from rich.table import Table
 from rich.text import Text
-
-
-def load_config():
-    """Load the global auto config"""
-
-    # Local vars
-    config = {}
-    config_path = os.path.expanduser("~") + "/.auto/config/local.yaml"
-
-    if not os.path.isfile(config_path):
-        declare_error(
-            "No local.yaml file available. Creating a default.", exit_auto=False
-        )
-        # Initialize a config file
-        create_initial_config()
-
-    # Read Config and provide the data
-    with open(config_path, encoding="utf-8") as yaml_file:
-        config = yaml.safe_load(yaml_file)
-
-    # 1. Expand User and Variables in the code path
-    if "code" in config:
-        # Expands ~ to /home/user
-        expanded_path = os.path.expanduser(config["code"])
-        # Expands ${USER} or $HOME
-        expanded_path = os.path.expandvars(expanded_path)
-        config["code"] = expanded_path
-
-        # 2. Check if folder exists, if not, ask to create
-        if not os.path.exists(config["code"]):
-            rprint(
-                f"\n[yellow]Warning: Code folder '{config['code']}' does not exist.[/]"
-            )
-            if Confirm.ask("Do you want us to create it for you?"):
-                try:
-                    os.makedirs(config["code"])
-                    rprint(f"[green]Created directory: {config['code']}[/]")
-                except OSError as e:
-                    declare_error(f"Could not create directory: {e}")
-            else:
-                declare_error("Code directory missing. Cannot proceed.")
-
-    return config
-
-
-def create_initial_config():
-    """Create a default config file if none is present"""
-
-    default_config = """
----
-# The code folder is where you want us to download all of your pod code repositories
-code: ${HOME}/source/devocho
-
-# HTTPS in local
-# Set to `false` if you don't want this.  If it's false we will use port 8088 for local pod access.
-https: true
-
-# Each repo listed here will be run as a pod in k3s
-pods:
-  - repo: https://github.com/DevOcho/portal.git
-    branch: main
-
-# These are the system pods.  They use the config that comes with auto.
-system-pods:
-  - pod:
-      name: mysql
-      active: false
-      commands:
-        [
-          "kubectl apply -f ~/.auto/k3s/mysql/pv.yaml",
-          "kubectl apply -f ~/.auto/k3s/mysql/pvc.yaml",
-          "kubectl apply -f ~/.auto/k3s/mysql/deployment.yaml",
-          "kubectl apply -f ~/.auto/k3s/mysql/service.yaml",
-          "kubectl apply -f ~/.auto/k3s/mysql/ingress.yaml",
-        ]
-      databases:
-        - name: portal
-  - pod:
-      name: postgres
-      active: false
-      commands:
-        [
-          "kubectl apply -f ~/.auto/k3s/postgres/configmap.yaml",
-          "kubectl apply -f ~/.auto/k3s/postgres/pv.yaml",
-          "kubectl apply -f ~/.auto/k3s/postgres/pvc.yaml",
-          "kubectl apply -f ~/.auto/k3s/postgres/deployment.yaml",
-          "kubectl apply -f ~/.auto/k3s/postgres/service.yaml",
-          "kubectl apply -f ~/.auto/k3s/postgres/ingress.yaml",
-        ]
-      databases:
-        - name: portal
-  - pod:
-      name: minio
-      active: false
-      commands:
-        [
-          "kubectl apply -f ~/.auto/k3s/minio/pv.yaml",
-          "kubectl apply -f ~/.auto/k3s/minio/pvc.yaml",
-          "kubectl apply -f ~/.auto/k3s/minio/deployment.yaml",
-          "kubectl apply -f ~/.auto/k3s/minio/service.yaml",
-          "kubectl apply -f ~/.auto/k3s/minio/ingress.yaml",
-        ]
-      databases:
-        - name: portal
-"""
-
-    if not os.path.isfile(os.path.expanduser("~") + "/.auto/config/local.yaml"):
-        # Ensure the directory exists
-        os.makedirs(os.path.expanduser("~") + "/.auto/config", exist_ok=True)
-
-        with open(
-            os.path.expanduser("~") + "/.auto/config/local.yaml", "w", encoding="utf-8"
-        ) as config_file:
-            config_file.write(default_config)
 
 
 def ensure_host_known(git_url):
@@ -332,7 +219,7 @@ def verify_cluster_connection(retries=10) -> bool:
     return False
 
 
-def wait_for_pod_status(podname: str, status: str, max_wait_time=60) -> None:
+def wait_for_pod_status(podname: str, status: str, max_wait_time=60) -> bool:
     """Check for a pod to be complete and then return"""
 
     # Local vars
@@ -361,6 +248,8 @@ def wait_for_pod_status(podname: str, status: str, max_wait_time=60) -> None:
 
         cycles += 1
         sleep(0.5)
+
+    return bool(pod_complete)
 
 
 def wait_for_mysql_socket(retries=30) -> bool:
@@ -706,9 +595,8 @@ def get_pod_config(pod):
     # Local Vars
     config = {}
 
-    # Read Config and provide globally
-    auto_config = load_config()
-    config_file = auto_config["code"] + "/" + pod + "/.auto/config.yaml"
+    # Read globally imported config
+    config_file = CONFIG["code"] + "/" + pod + "/.auto/config.yaml"
 
     # Does the config file exist?
     if not os.path.isfile(config_file):
@@ -752,6 +640,74 @@ def setup_minio(retries=5):
         if retries > 1:
             sleep(3)
             setup_minio(retries - 1)
+
+
+def get_required_system_pods(config):
+    """Determine which system pods need to be started based on global and pod configs"""
+    required_pods = set()
+
+    # 1. Globally active system pods from ~/.auto/config/local.yaml
+    if "system-pods" in config:
+        for sys_pod in config["system-pods"]:
+            if sys_pod.get("pod", {}).get("active"):
+                required_pods.add(sys_pod["pod"]["name"])
+
+    # 2. Extract implied system pod requirements by crawling inside pulled application repositories
+    code_dir = config.get("code", "")
+    for pod in config.get("pods", []):
+        if isinstance(pod, dict):
+            pod_name = pod.get("repo", "").split("/")[-1:][0].replace(".git", "")
+        else:
+            pod_name = pod
+
+        if not pod_name:
+            continue
+
+        config_file_path = os.path.join(code_dir, pod_name, ".auto", "config.yaml")
+        if os.path.isfile(config_file_path):
+            try:
+                with open(config_file_path, encoding="utf-8") as pod_yaml:
+                    pod_config = yaml.safe_load(pod_yaml)
+                    if pod_config and "system-pods" in pod_config:
+                        for req_sys_pod in pod_config["system-pods"]:
+                            required_pods.add(req_sys_pod["name"])
+            except (OSError, yaml.YAMLError):
+                # Pass gracefully if we hit a permission/read issue or badly formatted yaml
+                pass
+
+    return required_pods
+
+
+def is_port_in_use(port: int) -> bool:
+    """Check if a port is in use on localhost"""
+    in_use = False
+
+    # 1. Look for legacy IPv4 blocks
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        # returns 0 if connection succeeds, meaning port is mapped
+        in_use = s.connect_ex(("127.0.0.1", port)) == 0
+
+    # 2. Scan IPv6 scope just in case software like mariadb bounds differently to it.
+    if not in_use:
+        try:
+            with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as s:
+                in_use = s.connect_ex(("::1", port)) == 0
+        except OSError:
+            pass  # Operating System doesn't support IPV6 routing
+
+    return in_use
+
+
+def is_port_exposed_on_k3d(port: int) -> bool:
+    """Check if a port is currently exposed dynamically on the k3d serverlb container"""
+    output = run_and_return("docker port k3d-k3s-default-serverlb")
+    if not output:
+        return False
+    # Target string will map back similarly to: '30036/tcp -> 0.0.0.0:3306'
+    for line in output.splitlines():
+        if f":{port}" in line:
+            return True
+    return False
 
 
 def get_cluster_status():

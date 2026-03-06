@@ -8,103 +8,174 @@ import sys
 import time
 from pathlib import Path
 
-import requests
 import yaml
-from autocli import utils
+from autocli import registry, services, utils
+from autocli.config import CONFIG
 from rich import print as rprint
 from rich.console import Console, Group
 from rich.live import Live
+from rich.progress import Progress
 from rich.text import Text
 
-# Read Config and provide globally
-CONFIG = utils.load_config()
+
+def _setup_https_certificates(pods):
+    """Helper to setup HTTPS certificates interactively"""
+    rprint("[deep_sky_blue1]Setting up HTTPS certificates...[/]")
+    utils.check_mkcert()
+
+    pod_domains = []
+    for repo in pods:
+        p_name = repo["repo"].split("/")[-1:][0].replace(".git", "")
+        pod_domains.append(f"{p_name}.local")
+
+    cert_path = os.path.expanduser("~") + "/.auto/certs"
+    key_file, cert_file = utils.create_local_certs(
+        cert_path, additional_domains=pod_domains
+    )
+    rprint(" :white_heavy_check_mark:[green] Certificates Ready")
+    return key_file, cert_file
 
 
-def start_registry():
-    """Start a container registry"""
+def _print_access_hints(pods, use_https):
+    """Helper to print access hints at the end of start"""
+    print()
+    rprint("[italic]Hint: Some items may still be starting in k3s.")
+    rprint("[italic]You can access your pod(s) via the following URLs:")
 
-    # Do we have a registry or do we need to create one?
-    bash_command = """/usr/local/bin/k3d registry list"""
-    if not utils.run_and_wait(bash_command, check_result="k3d-registry.local"):
-        # No registry found so we need to make one
-        rprint(" -- Creating new registry")
-        bash_command = """k3d registry create registry.local --port 12345"""
-        utils.run_and_wait(bash_command)
-        rprint("    [steel_blue1]Created Registry")
-        time.sleep(3)
+    protocol = "https" if use_https else "http"
+    port_suffix = "" if use_https else ":8088"
+
+    for repo in pods:
+        pod_name = repo["repo"].split("/")[-1:][0].replace(".git", "")
+        if utils.check_host_entry(pod_name):
+            rprint(f"[italic]  {protocol}://{pod_name}.local{port_suffix}/")
 
 
-def populate_registry():
-    """Load important images into the registry to speed up the deployment of pods"""
+def _run_bootstrap_step(msg, success_msg, execute, func=None, **kwargs):
+    """Helper to orchestrate standard bootstrap steps cleanly"""
+    rprint(f"[deep_sky_blue1]{msg}[/]")
+    result = None
+    if execute and func:
+        result = func()
+    rprint(f" :white_heavy_check_mark:[green] {success_msg}")
 
-    # Local vars
-    skip_version = False
+    if kwargs.get("advance", 0) > 0 and "progress" in kwargs and "task" in kwargs:
+        kwargs["progress"].update(kwargs["task"], advance=kwargs["advance"])
 
-    # Get the list of images we want to pre-load from the config file
-    registry_load_list = CONFIG["registry"]
+    return result
 
-    # Get the registry images already loaded
-    req = requests.get("http://k3d-registry.local:12345/v2/_catalog", timeout=30)
-    registry_list = req.json()
 
-    # Remove images that are already loaded in the registry since we don't need to load them
-    for image in registry_list["repositories"]:
-        for delete_candidate in registry_load_list:
-            if re.search(delete_candidate["image"].split(":")[0], image):
-                registry_load_list.remove(delete_candidate)
+def _install_system_sequence(new_cluster):
+    """Helper to run the system pod installation block"""
+    services.install_system_pods()
+    if new_cluster:
+        services.create_databases()
 
-    # Load new images in the registry
-    for image_obj in registry_load_list:
-        image = image_obj["image"]
 
-        # Is this a local image already?
-        bash_command = "docker images"
-        if not utils.run_and_wait(bash_command, check_result=image):
-            bash_command = "docker pull " + image
-            utils.run_and_wait(bash_command)
+def bootstrap_cluster(pod, dry_run, offline):
+    """Orchestrates the entire start sequence seamlessly."""
+    pods = CONFIG.get("pods", [])
+    use_https = CONFIG.get("https", False)
+    key_file, cert_file = "", ""
 
-        # Let's tag the image for the registry
-        bash_command = "docker tag " + image + " k3d-registry.local:12345/" + image
-        utils.run_and_wait(bash_command)
+    if not pod and use_https and not dry_run:
+        key_file, cert_file = _setup_https_certificates(pods)
 
-        # Push the image into the registry
-        bash_command = "docker push k3d-registry.local:12345/" + image
-        utils.run_and_wait(bash_command)
-        rprint("  -- Loaded: [bright_cyan]" + image)
+    if pod:
+        rprint(f"[steel_blue]Starting[/] {pod}")
+        start_pod(pod)
+        return
 
-    # Now we need to build and load the pods
-    for pod in CONFIG["pods"]:
-        # Check each pod
-        skip_version = False
+    with Progress(transient=False) as progress:
+        task = progress.add_task("Creating Dev Environment", total=100)
 
-        # What is the name of this pod?
-        pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
+        # STEP 1: Verify Dependencies
+        _run_bootstrap_step(
+            "Verify Dependencies",
+            "Dependencies installed and working",
+            not dry_run,
+            verify_dependencies,
+        )
 
-        # Since this is a slow process, let's skip the ones that are already loaded
-        if pod_name in registry_list["repositories"]:
-            req = requests.get(
-                f"http://k3d-registry.local:12345/v2/{pod_name}/tags/list", timeout=30
-            )
-            image_info = req.json()
+        # STEP 2: Pull Code and Build Local Images
+        fetched_pods = _run_bootstrap_step(
+            "Pulling code and building local images",
+            "Pods built",
+            not dry_run and not offline,
+            pull_and_build_pods,
+        )
+        if fetched_pods is not None:
+            pods = fetched_pods
 
-            # We need to load the pod's config and see what version we are on
-            with open(
-                CONFIG["code"] + "/" + pod_name + "/.auto/config.yaml", encoding="utf-8"
-            ) as pod_config_yaml:
-                pod_config = yaml.safe_load(pod_config_yaml)
-            version = pod_config["version"]
+        # STEP 3: Container Registry
+        _run_bootstrap_step(
+            "Container Registry",
+            "Registry Ready",
+            not dry_run,
+            registry.start_registry,
+            progress=progress,
+            task=task,
+            advance=5,
+        )
 
-            # search for this version so we know if we need to skip it
-            for tag in image_info["tags"]:
-                if tag == version:
-                    skip_version = True
+        # STEP 4: Populate Container Registry
+        _run_bootstrap_step(
+            "Populating Container Registry for faster loading",
+            "Registry Populated",
+            not dry_run,
+            registry.populate_registry,
+            progress=progress,
+            task=task,
+            advance=5,
+        )
 
-            # If the loaded image is the same version as one already there we are skipping it
-            if skip_version or image_info["tags"] == version:
-                continue
+        # STEP 5: Cluster
+        new_cluster = _run_bootstrap_step(
+            "Cluster",
+            "Cluster Ready",
+            not dry_run,
+            lambda: start_cluster(
+                progress, task, key_file=key_file, cert_file=cert_file
+            ),
+            progress=progress,
+            task=task,
+            advance=33,
+        )
 
-        # Build, Tag, and Load the pod image into the registry
-        tag_pod_docker_image(pod_name)
+        # STEP 6: System Pods & Databases
+        _run_bootstrap_step(
+            "Loading system pods...",
+            "System Pods Loaded",
+            not dry_run,
+            lambda: _install_system_sequence(new_cluster),
+            progress=progress,
+            task=task,
+            advance=20,
+        )
+
+        # STEP 7: Build & Load Application Pods
+        _run_bootstrap_step(
+            "Building and loading pods...",
+            "Pods Loaded",
+            not dry_run,
+            install_pods_in_cluster,
+            progress=progress,
+            task=task,
+            advance=20,
+        )
+
+        # STEP 8: Auto-detect external images and cache them
+        _run_bootstrap_step(
+            "Detecting and caching external images...",
+            "External Images Cached",
+            not dry_run,
+            registry.cache_running_images,
+            progress=progress,
+            task=task,
+            advance=17,
+        )
+
+        _print_access_hints(pods, use_https)
 
 
 def _install_nginx_ingress(use_https, key_file, cert_file):
@@ -228,17 +299,16 @@ def start_cluster(progress, task, key_file="", cert_file=""):
 
     code_dir = CONFIG["code"]
     # I'm opening port 8088 outside the cluster for access to the sites
-    # We are also opening ports for SQL Server (1433), MySQL (3306), and Postgres (5432)
-    bash_command = f"""/usr/local/bin/k3d cluster create \
-                       --volume {code_dir}:/mnt/code \
-                       --registry-use k3d-registry.local:12345 \
-                       --registry-config ~/.auto/k3s/registries.yaml \
-                       {load_bal_config} \
-                       --k3s-arg "--disable=traefik@server:0" \
-                       -p "3306:30036@loadbalancer" \
-                       -p "5432:30035@loadbalancer" \
-                       -p "1433:30034@loadbalancer" \
-                       --agents 1"""
+    # Ports for databases are dynamically opened when needed by pods
+    bash_command = (
+        f"/usr/local/bin/k3d cluster create "
+        f"--volume {code_dir}:/mnt/code "
+        f"--registry-use k3d-registry.local:12345 "
+        f"--registry-config ~/.auto/k3s/registries.yaml "
+        f"{load_bal_config} "
+        f'--k3s-arg "--disable=traefik@server:0" '
+        f"--agents 1"
+    )
 
     # Attempt creation.
     # Changed capture_output to True to suppress verbose k3d INFO logs.
@@ -547,175 +617,6 @@ def install_pods_in_cluster() -> None:
         start_pod(pod)
 
 
-def _run_command_with_retry(command):
-    """Helper to run a command with retries"""
-    for _ in range(10):
-        try:
-            # Attempt to apply with suppressed errors for cleaner startup logs
-            success = utils.run_and_wait(
-                command, capture_output=True, suppress_error=True
-            )
-            if success:
-                break
-            time.sleep(2)
-        except Exception:  # pylint: disable=broad-except
-            pass
-    else:
-        # If we exhausted retries, try one last time WITH errors to show user
-        if not utils.run_and_wait(command):
-            rprint(f"    [red]Error running {command}")
-
-
-def install_system_pods():
-    """Install all of the system pods in the cluster"""
-
-    # Let's start the ones that we find that are "active"
-    for pod in CONFIG["system-pods"]:
-        if pod["pod"]["active"]:
-            rprint("  -- Starting: " + pod["pod"]["name"])
-            for command in pod["pod"]["commands"]:
-                _run_command_with_retry(command)
-
-            # MinIO has some extra setup stuff needed to use it
-            if pod["pod"]["name"] == "minio":
-                utils.setup_minio()
-
-
-def install_mysql_in_cluster() -> None:
-    """Install MySQL into the cluster"""
-
-    print("  -- Installing MySQL into the cluster")
-
-    user_path = os.path.expanduser("~")
-    command = f"kubectl apply -f {user_path}/.auto/k3s/mysql/pv.yaml"
-    utils.run_and_wait(command)
-    command = f"kubectl apply -f {user_path}/.auto/k3s/mysql/pvc.yaml"
-    utils.run_and_wait(command)
-    command = f"kubectl apply -f {user_path}/.auto/k3s/mysql/deployment.yaml"
-    utils.run_and_wait(command)
-    command = f"kubectl apply -f {user_path}/.auto/k3s/mysql/service.yaml"
-    utils.run_and_wait(command)
-
-    # Let's wait for it to start before we let other pods start
-    if utils.wait_for_pod_status("mysql", "Running"):
-        rprint("       [green]Started MySQL")
-
-
-def _process_pod_databases(pod_config):
-    """Helper to process database creation for a single pod config"""
-    if "system-pods" in pod_config:
-        for system_pod in pod_config["system-pods"]:
-            if system_pod["name"] == "mysql":
-                for database in system_pod["databases"]:
-                    utils.create_mysql_database(database["name"])
-                    rprint(
-                        f"      *  Created MySQL database: [bright_cyan]{database['name']}"
-                    )
-            elif system_pod["name"] == "minio":
-                for bucket in system_pod["buckets"]:
-                    utils.create_minio_bucket(bucket["name"])
-                    rprint(
-                        f"      *  Created MinIO bucket: [bright_cyan]{bucket['name']}"
-                    )
-
-
-def create_databases():
-    """Create the databases"""
-    rprint("  -- Creating Databases and Buckets")
-
-    # Let's confirm mysql is running
-    for system_pod in CONFIG["system-pods"]:
-        if system_pod["pod"]["name"] == "mysql":
-            # Let's wait for the MySQL pod to start
-            if utils.wait_for_pod_status("mysql", "Running"):
-                rprint("       [green]MySQL running")
-
-                # Check for actual connectivity via socket before proceeding
-                if not utils.wait_for_mysql_socket():
-                    rprint(
-                        "       [red]MySQL failed to respond on socket after waiting."
-                    )
-                    return
-
-    # Create the databases requested in each of the pods
-    for pod in CONFIG["pods"]:
-        pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
-        pod_config = utils.get_pod_config(pod_name)
-        _process_pod_databases(pod_config)
-
-
-def connect_to_mysql() -> None:
-    """Connect to the MySQL cluster inside the k3s cluster"""
-
-    utils.connect_to_db()
-
-
-def connect_to_postgres() -> None:
-    """Connect to the PostgreSQL cluster inside the k3s cluster"""
-
-    utils.connect_to_db_postgres()
-
-
-def connect_to_minio() -> None:
-    """Open a port=forward and print a nice message to inform user"""
-
-    # Helpful Message
-    rprint("Open a browser and visit: http://127.0.0.1:9090/")
-    rprint("Press ctrl+c to exit")
-    rprint("")
-    rprint("Username: minio")
-    rprint("Password: minio123")
-    rprint("")
-
-    # The port forward
-    utils.connect_to_minio()
-
-
-def tag_pod_docker_image(pod) -> None:
-    """Tag and push a new docker image to local registry"""
-
-    # Local Vars
-    code_path = CONFIG["code"]
-
-    # We need to load the pod's config and see what version we are on
-    with open(
-        CONFIG["code"] + "/" + pod + "/.auto/config.yaml", encoding="utf-8"
-    ) as pod_config_yaml:
-        pod_config = yaml.safe_load(pod_config_yaml)
-    version = pod_config["version"]
-
-    rprint(f"  -- Building and Tagging: [bright_cyan]{pod} {version}")
-
-    # Verify the pod is real using the users source code folder
-    if os.path.isdir(code_path + "/" + pod):
-        rprint(f"     = Found pod {pod}")
-
-        # Perform docker build
-        rprint(f"     = Building [bright_cyan]{pod}[/] container")
-        command = f"docker build -t {pod}:{version} {code_path}/{pod}"
-        utils.run_and_wait(command)
-
-        # Tag the image for the registry
-        rprint(f"     = Tagging [bright_cyan]{pod}[/] image for the registry")
-        command = f"docker tag {pod}:{version} k3d-registry.local:12345/{pod}:{version}"
-        utils.run_and_wait(command)
-
-        # Push the image to the registry
-        rprint(f"     = Pushing [bright_cyan]{pod}[/] image to the registry")
-        command = f"docker push k3d-registry.local:12345/{pod}:{version}"
-        utils.run_and_wait(command)
-
-        # clean up your mess
-        rprint("  -- Cleaning unused images")
-        command = "docker image prune -f"
-        utils.run_and_wait(command)
-
-    # They tried to build a pod that didn't exist.  Maybe a typo?
-    else:
-        print("")
-        rprint(f"[red bold]ERROR: Portal {pod} does not exist")
-
-
 def output_logs(pod):
     """Output the logs for a pod via kubctl"""
 
@@ -757,34 +658,6 @@ def output_logs(pod):
     # Run kubectl logs piped through our filters
     # os.system gives a direct stream without a python buffer
     os.system(f"kubectl logs -f {pod_name} | {filter_cmd}")
-
-
-def seed_pod(pod):
-    """Run the seeddb.py script inside a pod's container"""
-
-    # Get the pod config and the init command
-    config = utils.get_pod_config(pod)
-    seed_command = config["seed-command"]
-
-    # Run the command
-    utils.run_command_inside_pod(pod, seed_command)
-
-    # Tell the user
-    rprint(f"  -- {pod} database seeded")
-
-
-def init_pod_db(pod):
-    """Run the initdb.py script inside a pod's container"""
-
-    # Get the pod config and the init command
-    config = utils.get_pod_config(pod)
-    init_command = config["init-command"]
-
-    # Run the command
-    utils.run_command_inside_pod(pod, init_command)
-
-    # Tell the user
-    rprint(f"  -- {pod} database initialized")
 
 
 def verify_dependencies():
@@ -937,60 +810,3 @@ def rollback_with_smalls(pod, number):
     # Run the command inside the pod
     command = f"./smalls.py rollback {number}"
     utils.run_command_inside_pod(pod, command)
-
-
-def list_cluster_images():
-    """Scan running pods and print a YAML list of images for local.yaml"""
-
-    rprint("  -- Scanning cluster for images...")
-
-    # 1. Get images from all containers and initContainers
-    # We use a set to automatically handle deduplication
-    found_images = set()
-
-    # JSONPath to grab both standard containers and init containers
-    cmd = (
-        "kubectl get pods --all-namespaces "
-        "-o jsonpath='{range .items[*]}{.spec.containers[*].image} "
-        '{.spec.initContainers[*].image}{"\\n"}{end}\''
-    )
-
-    output = utils.run_and_return(cmd)
-
-    if not output:
-        rprint("     [yellow]No images found (is the cluster running?)[/]")
-        return
-
-    # 2. Process the images
-    # We need to filter out the user's local pods (portal, www, etc) because
-    # those shouldn't be pulled from a registry, they are built locally.
-    local_pod_names = []
-    for p in CONFIG.get("pods", []):
-        if "repo" in p:
-            name = p["repo"].split("/")[-1:][0].replace(".git", "")
-            local_pod_names.append(name)
-
-    raw_list = output.split()
-    for image in raw_list:
-        # Strip the local registry prefix if present (e.g. k3d-registry.local:12345/mysql:8.0 -> mysql:8.0)
-        clean_image = image.replace("k3d-registry.local:12345/", "")
-
-        # Filter out local pods (naive check: if image starts with pod name)
-        is_local_project = False
-        for pod_name in local_pod_names:
-            # Check if image is exactly the pod name or pod_name:tag
-            if clean_image == pod_name or clean_image.startswith(f"{pod_name}:"):
-                is_local_project = True
-                break
-
-        if not is_local_project:
-            found_images.add(clean_image)
-
-    # 3. Print the result
-    rprint(f"     [green]Found {len(found_images)} unique upstream images.[/]")
-    rprint("\n[bold]Copy this into your ~/.auto/config/local.yaml:[/bold]\n")
-
-    print("registry:")
-    for img in sorted(found_images):
-        print(f"  - image: {img}")
-    print()
