@@ -307,7 +307,7 @@ def start_cluster(progress, task, key_file="", cert_file=""):
         f"--registry-config ~/.auto/k3s/registries.yaml "
         f"{load_bal_config} "
         f'--k3s-arg "--disable=traefik@server:0" '
-        f"--network k3d-vpn-net"
+        # f"--network k3d-vpn-net "
         f"--agents 1"
     )
 
