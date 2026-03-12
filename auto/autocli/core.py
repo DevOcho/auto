@@ -456,9 +456,14 @@ def stop_pod(pod) -> None:
 
     elif re.search("kubectl apply", start_cmd):
         # Kubectl Delete (reverse of apply)
-        args = pod_config.get("command_args", "")
-        # We assume args are like "-f .auto/deployment.yaml" or similar
-        command = f"kubectl delete {args}"
+        args = pod_config.get("command_args", pod_config.get("command-args", ""))
+
+        # If the user put the whole command in `command` (e.g. `kubectl apply -f file.yaml`),
+        # we need to extract the `-f file.yaml` part to pass to `kubectl delete`.
+        if not args and "-f" in start_cmd:
+            args = start_cmd[start_cmd.find("-f") :]  # noqa: E203
+
+        command = f"kubectl delete {args}".strip()
 
         # Execute in the pod directory so relative paths in args work
         pod_folder = os.path.join(code_dir, pod_name)
@@ -507,18 +512,21 @@ def _build_install_command(pod_config, pod_name, code_dir):
     release_name = pod_config.get("name", pod_name)
     is_helm = False
 
+    base_cmd = pod_config.get("command", "")
+    # Fallback support for both spellings of command args, preventing KeyError
+    cmd_args = pod_config.get("command_args", pod_config.get("command-args", ""))
+
     # If they are using helm
-    if re.search("helm", pod_config["command"]):
+    if re.search("helm", base_cmd):
         is_helm = True
-        cmd_args = pod_config.get("command-args", "")
         desc = pod_config.get("desc", "")
         helm_path = f"{code_dir}/{pod_name}/.auto/helm"
 
         # Construct helm command
-        command = f'{pod_config["command"]} {cmd_args} --description "{desc}" {release_name} {helm_path}'
+        command = f'{base_cmd} {cmd_args} --description "{desc}" {release_name} {helm_path}'.strip()
     else:
         # They are using kubectl apply
-        command = f"{pod_config['command']} {pod_config['command_args']}"
+        command = f"{base_cmd} {cmd_args}".strip()
 
     return command, is_helm, release_name
 
