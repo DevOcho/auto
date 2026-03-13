@@ -479,25 +479,30 @@ def stop_pod(pod) -> None:
 
 
 def _recover_pvc_conflict(pod_name):
-    """Helper to attempt fixing PVC conflicts"""
-    rprint("       [italic]Attempting to fix common PVC errors...[/]")
+    """Helper to attempt fixing deployment conflicts without destroying shared volumes"""
+    rprint("       [italic]Attempting to clean up previous deployment states...[/]")
 
-    # Common fix: Delete conflicting 'code' PVC
-    # 1. Delete the deployment to release the volume claim lock
+    # 1. Delete the deployment to release any locks
     utils.run_and_wait(f"kubectl delete deployment {pod_name} --ignore-not-found=true")
 
-    # 2. Delete the conflicting PVC
-    utils.run_and_wait("kubectl delete pvc code --ignore-not-found=true")
+    # 2. Check if the 'code' PVC is currently stuck in Terminating from a past bug.
+    # If it is, we need to unstick it, delete the PV claimRef, and recreate them.
+    pvc_status = utils.run_and_return(
+        "kubectl get pvc code -o jsonpath='{.metadata.deletionTimestamp}'"
+    )
+    if pvc_status:  # It has a deletion timestamp, meaning it's Terminating
+        rprint("       [yellow]Found stuck 'code' PVC. Repairing shared volumes...[/]")
+        utils.run_and_wait(
+            'kubectl patch pvc code -p \'{"metadata":{"finalizers":null}}\'',
+            suppress_error=True,
+        )
+        utils.run_and_wait(
+            'kubectl patch pv code -p \'{"spec":{"claimRef":null}}\'',
+            suppress_error=True,
+        )
+        time.sleep(2)
 
-    # 3. Wait for PVC to be fully removed
-    for _ in range(15):
-        if not utils.run_and_wait(
-            "kubectl get pvc code", capture_output=True, suppress_error=True
-        ):
-            break
-        time.sleep(1)
-
-    # 4. Restore the global PV and PVC so they are correct for this and other pods
+    # 3. Always ensure the global PV and PVC are correctly applied
     user_path = os.path.expanduser("~")
     utils.run_and_wait(
         f"kubectl apply -f {user_path}/.auto/k3s/pv.yaml", suppress_error=True
@@ -549,10 +554,12 @@ def _execute_pod_install(command, pod_folder, pod_name, is_helm, release_name):
             )
 
         # RETRY INSTALLATION
-        if utils.run_and_wait(command, cwd=pod_folder):
+        if utils.run_and_wait(command, cwd=pod_folder, suppress_error=False):
             rprint(f"     * [bright_cyan]: {pod_name}[/] installed")
         else:
-            rprint(f"     * [red]: {pod_name}[/] failed to install")
+            rprint(
+                f"     * [red]: {pod_name}[/] failed to install. Check the output above for errors."
+            )
 
 
 def start_pod(pod) -> None:
