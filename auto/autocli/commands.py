@@ -151,7 +151,7 @@ def restart(self, pod):  # pylint: disable=unused-argument
 @click.argument("pod", required=True, shell_complete=get_pod_names)
 def seed(self, pod):  # pylint: disable=unused-argument
     """Seed a pod's databases"""
-    rprint(f"[steel_blue]Initializing[/]{pod}[steel_blue] pod")
+    rprint(f"[steel_blue]Initializing[/] {pod}[steel_blue] pod")
     services.init_pod_db(pod)
     rprint()
     rprint(f"[steel_blue]Seeding [/]{pod}[steel_blue] pod")

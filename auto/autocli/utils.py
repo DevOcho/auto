@@ -269,6 +269,62 @@ def wait_for_mysql_socket(retries=30) -> bool:
     return False
 
 
+def wait_for_postgres_socket(retries=30) -> bool:
+    """Wait for Postgres socket to be available inside the pod"""
+    pod_name = get_full_pod_name("postgres").strip("\n")
+    if not pod_name:
+        return False
+
+    for _ in range(retries):
+        # We use a real query to test connectivity
+        cmd = f'kubectl exec {pod_name} -- psql -U root -d postgres -c "SELECT 1"'
+        try:
+            subprocess.run(cmd, capture_output=True, shell=True, check=True)
+            return True
+        except CalledProcessError:
+            sleep(1)
+    return False
+
+
+def create_postgres_database(database, retries=0):
+    """Create a database inside postgres"""
+    # We use a quick bash command to see if the DB exists, and create it if it doesn't.
+    # This prevents Postgres from throwing errors on subsequent "auto start" runs.
+    container_cmd = f'sh -c "psql -U root -lqt | grep -qw {database} || createdb -U root {database}"'
+    pod_name = get_full_pod_name("postgres").strip("\n")
+
+    if pod_name:
+        cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
+
+        # Make this command safe to run
+        cmd = shlex.quote(cmd)
+        args = shlex.split(cmd)
+
+        try:
+            # Run the command silently
+            subprocess.run(
+                args,
+                shell=True,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except CalledProcessError:
+            if retries < 10:  # Allow up to 30s for slower startups
+                sleep(3)
+                create_postgres_database(database, retries=retries + 1)
+            else:
+                rprint(f"  [red]FAILED: Could not create database[/] {database}")
+
+    else:
+        # If pod_name not found, wait and retry
+        if retries < 10:
+            sleep(3)
+            create_postgres_database(database, retries=retries + 1)
+        else:
+            rprint(f"  [red]FAILED: Could not create database[/] {database}")
+
+
 def get_full_pod_name(pod) -> str:
     """Get the full name of the pod for a k3s pod by application name"""
 
