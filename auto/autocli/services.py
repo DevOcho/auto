@@ -103,6 +103,13 @@ def _process_minio_buckets(system_pod):
         rprint(f"      *  Created MinIO bucket:[bright_cyan]{bucket['name']}")
 
 
+def _process_postgres_databases(system_pod):
+    """Helper to process Postgres database creation"""
+    for database in system_pod.get("databases", []):
+        utils.create_postgres_database(database["name"])
+        rprint(f"      *  Created Postgres database:[bright_cyan]{database['name']}")
+
+
 def _process_pod_databases(pod_config):
     """Helper to process database creation for a single pod config"""
     if "system-pods" not in pod_config:
@@ -116,33 +123,50 @@ def _process_pod_databases(pod_config):
 
         if system_pod.get("name") == "mysql":
             _process_mysql_databases(system_pod)
+        elif system_pod.get("name") == "postgres":
+            _process_postgres_databases(system_pod)
         elif system_pod.get("name") == "minio":
             _process_minio_buckets(system_pod)
+
+
+def _verify_db_system_ready(db_name, friendly_name, socket_check_func):
+    """Helper to verify a system database pod is ready before creating databases"""
+    # If the user port-blocked the launch earlier, let's fail gracefully here.
+    if db_name in CONFIG.get("skipped-system-pods", []):
+        rprint(
+            f"       [yellow]Skipping {friendly_name} database creation because pod was not started[/yellow]"
+        )
+        return True
+
+    # Let's confirm the database is running
+    for system_pod in CONFIG.get("system-pods", []):
+        if system_pod["pod"]["name"] == db_name:
+            # Let's wait for the pod to start
+            if utils.wait_for_pod_status(db_name, "Running"):
+                rprint(f"       [green]{friendly_name} running")
+
+                # Check for actual connectivity via socket before proceeding
+                if not socket_check_func():
+                    rprint(
+                        f"       [red]{friendly_name} failed to respond on socket after waiting."
+                    )
+                    return False
+    return True
 
 
 def create_databases():
     """Create the databases"""
     rprint("  -- Creating Databases and Buckets")
 
-    # If the user port-blocked the MySQL launch earlier, let's fail gracefully here.
-    if "mysql" in CONFIG.get("skipped-system-pods", []):
-        rprint(
-            "       [yellow]Skipping MySQL database creation because pod was not started[/yellow]"
-        )
-    else:
-        # Let's confirm mysql is running
-        for system_pod in CONFIG.get("system-pods", []):
-            if system_pod["pod"]["name"] == "mysql":
-                # Let's wait for the MySQL pod to start
-                if utils.wait_for_pod_status("mysql", "Running"):
-                    rprint("       [green]MySQL running")
+    # Verify MySQL is ready
+    if not _verify_db_system_ready("mysql", "MySQL", utils.wait_for_mysql_socket):
+        return
 
-                    # Check for actual connectivity via socket before proceeding
-                    if not utils.wait_for_mysql_socket():
-                        rprint(
-                            "       [red]MySQL failed to respond on socket after waiting."
-                        )
-                        return
+    # Verify Postgres is ready
+    if not _verify_db_system_ready(
+        "postgres", "Postgres", utils.wait_for_postgres_socket
+    ):
+        return
 
     # Create the databases requested in each of the pods
     for pod in CONFIG.get("pods", []):
