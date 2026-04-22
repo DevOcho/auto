@@ -384,7 +384,7 @@ def connect_to_minio() -> None:
     pod_name = get_full_pod_name("minio").strip("\n")
 
     # The command we are going to run
-    cmd = f"kubectl port-forward {pod_name} 9000 9090"
+    cmd = f"kubectl port-forward {pod_name} 9090:9090"
 
     # Make this command safe to run
     cmd = shlex.quote(cmd)

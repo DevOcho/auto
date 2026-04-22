@@ -298,6 +298,7 @@ def start_cluster(progress, task, key_file="", cert_file=""):
         rprint("  -- [bold green]HTTPS Enabled[/]: Binding ports 80/443")
 
     code_dir = CONFIG["code"]
+    extra_args = CONFIG.get("extra-args", "")
     # I'm opening port 8088 outside the cluster for access to the sites
     # Ports for databases are dynamically opened when needed by pods
     bash_command = (
@@ -307,6 +308,7 @@ def start_cluster(progress, task, key_file="", cert_file=""):
         f"--registry-config ~/.auto/k3s/registries.yaml "
         f"{load_bal_config} "
         f'--k3s-arg "--disable=traefik@server:0" '
+        f"{extra_args}"
         # f"--network k3d-vpn-net "
         f"--agents 1"
     )
