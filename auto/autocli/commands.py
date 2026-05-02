@@ -4,8 +4,8 @@
   * `--offline`     This disables steps that require internet so you can work without Internet
 """
 
-import os
 import json
+import os
 
 import click
 from autocli import core, registry, services, utils
@@ -13,7 +13,7 @@ from autocli.config import CONFIG
 from rich import print as rprint
 from rich.progress import Progress
 
-VERSION = "0.6.11"
+VERSION = "0.7.2"
 
 
 # Global settings for click
@@ -282,7 +282,8 @@ def update(self):  # pylint: disable=unused-argument
             latest_version = latest_version_data["tag_name"].lstrip("v")
             if VERSION == latest_version:
                 rprint(f"[green]Current version ({VERSION}) is already the latest.[/]")
-                rprint("""
+                rprint(
+                    """
 ⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⣶⡋⠉⠙⠒⢤⡀⠀⠀⠀⠀⠀⢠⠖⠉⠉⠙⠢⡄⠀
 ⠀⠀⠀⠀⠀⠀⢀⣼⣟⡒⠒⠀⠀⠀⠀⠀⠙⣆⠀⠀⠀⢠⠃⠀⠀⠀⠀⠀⠹⡄
 ⠀⠀⠀⠀⠀⠀⣼⠷⠖⠀⠀⠀⠀⠀⠀⠀⠀⠘⡆⠀⠀⡇⠀⠀⠀⠀⠀⠀⠀⢷
@@ -297,7 +298,8 @@ def update(self):  # pylint: disable=unused-argument
 ⠀⠀⠀⢰⡯⠭⠹⡟⠿⠧⠷⣄⣀⣟⠛⣦⠔⠋⠛⠛⠋⠙⡆⠀⠀⠀⠀⠀⠀⠀
 ⠀⠀⢸⣿⠭⠉⠀⢠⣤⠀⠀⠀⠘⡷⣵⢻⠀⠀⠀⠀⣼⠀⣇⠀⠀⠀⠀⠀⠀⠀
 ⠀⠀⡇⣿⠍⠁⠀⢸⣗⠂⠀⠀⠀⣧⣿⣼⠀⠀⠀⠀⣯⠀⢸⠀⠀⠀⠀⠀⠀⠀
-    """)
+    """
+                )
                 return
             rprint(f"[steel_blue]Updating from {VERSION} to {latest_version}...[/]")
         except Exception:  # pylint: disable=broad-except
