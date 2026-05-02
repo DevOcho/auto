@@ -294,16 +294,12 @@ def create_postgres_database(database, retries=0):
     pod_name = get_full_pod_name("postgres").strip("\n")
 
     if pod_name:
-        cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
-
-        # Make this command safe to run
-        cmd = shlex.quote(cmd)
-        args = shlex.split(cmd)
+        cmd = f"kubectl exec {pod_name} -- {container_cmd}"
 
         try:
             # Run the command silently
             subprocess.run(
-                args,
+                cmd,
                 shell=True,
                 check=True,
                 stdout=subprocess.DEVNULL,
@@ -397,28 +393,27 @@ def connect_to_minio() -> None:
 def create_mysql_database(database, retries=0):
     """Create a database inside mysql"""
 
-    container_cmd = f'mysql -uroot -ppassword --execute="create database {database}"'
+    # IF NOT EXISTS prevents a failed retry loop when the database already exists
+    container_cmd = (
+        f'mysql -uroot -ppassword --execute="CREATE DATABASE IF NOT EXISTS {database}"'
+    )
     pod_name = get_full_pod_name("mysql").strip("\n")
 
     if pod_name:
-        cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
-
-        # Make this command safe to run
-        cmd = shlex.quote(cmd)
-        args = shlex.split(cmd)
+        cmd = f"kubectl exec {pod_name} -- {container_cmd}"
 
         try:
             # Run the command silently.
             # We capture output to suppress "ERROR 2002" messages during startup.
             subprocess.run(
-                args,
+                cmd,
                 shell=True,
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
         except CalledProcessError:
-            if retries < 10:  # Increased retries to 10 (approx 30s) for slower startups
+            if retries < 10:  # Allow up to 30s for slower startups
                 sleep(3)
                 create_mysql_database(database, retries=retries + 1)
             else:
@@ -436,29 +431,23 @@ def create_mysql_database(database, retries=0):
 def create_minio_bucket(bucket):
     """Create a bucket in MinIO"""
 
-    container_cmds = [
-        f"mc mb --quiet myminio/{bucket}",
-        f"mc anonymous --quiet set none myminio/{bucket}",  # disable file list
-        f"mc anonymous --quiet set download myminio/{bucket}/*",  # enable full path access
-    ]
     pod_name = get_full_pod_name("minio").strip("\n")
 
     if pod_name:
-        for cmd in container_cmds:
-            cmd = f"kubectl exec -it {pod_name} -- {cmd}"
-
-            # Make this command safe to run
-            cmd = shlex.quote(cmd)
-            args = shlex.split(cmd)
-
-            # Run the command and return the output
-            subprocess.run(
-                args,
-                shell=True,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.STDOUT,
-            )
+        # Batch all three mc commands into a single exec call to avoid subprocess overhead per bucket
+        combined = (
+            f"mc mb --quiet myminio/{bucket} ; "  # disable file list
+            f"mc anonymous --quiet set none myminio/{bucket} && "  # enable full path access
+            f"mc anonymous --quiet set download myminio/{bucket}/*"
+        )
+        cmd = f"kubectl exec {pod_name} -- sh -c {shlex.quote(combined)}"
+        subprocess.run(
+            cmd,
+            shell=True,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+        )
 
 
 def check_docker():

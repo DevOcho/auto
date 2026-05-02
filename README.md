@@ -23,11 +23,11 @@ Made with love by [DevOcho - Custom Software](https://www.devocho.com)
 
 ## Install `auto`
 
-The following instructions are assuming Linux or Windows WSL2 running Bash.
+`auto` runs on Linux, macOS (Apple Silicon), and Windows via WSL2.
 
 ### Dependencies
-You will need a Linux system with the following pre-installed:
-- Bash (`auto` uses Bash commands)
+You will need one of the supported systems with the following pre-installed:
+- Bash or Zsh (`auto` uses POSIX shell commands; macOS defaults to Zsh, most Linux distros default to Bash)
 - Git
 - Python 3
 - Docker (both the daemon running and the bash command available as a non-root user)
@@ -50,19 +50,25 @@ curl -fsSL https://www.devocho.com/auto.sh | bash
 
 NOTE: `auto` is installed for a user and not installed system wide.
 
-The `auto` install will update your `~/.bashrc` file to add itself to your path
-environment variable.  For that change to take effect you will need to run
-`source ~/.bashrc` in each open terminal or restart your terminals.
+The installer detects your default shell (`$SHELL`) and updates the matching rc
+file — `~/.bashrc` for Bash or `~/.zshrc` for Zsh (the default on macOS) — to
+add itself to your path. For that change to take effect you will need to run
+`source ~/.bashrc` (or `source ~/.zshrc`) in each open terminal or restart your
+terminals.
 
-This is what we did in your .bashrc file:
+This is what we add to your shell rc file:
 
 ```bash
 # Adding auto to the path
-export PATH="$PATH:/home/$USER/.auto"
+export PATH="$PATH:$HOME/.auto"
 ```
 
-If you are using a shell other than Bash, you will want to add the `~/.auto`
-folder to your path.
+If you are using a shell other than Bash or Zsh, you will want to add the
+`~/.auto` folder to your path manually.
+
+On macOS, the installer also clears the `com.apple.quarantine` attribute that
+Gatekeeper applies to downloaded binaries, so `auto` runs on first invocation
+without a "cannot verify developer" warning.
 
 You can verify `auto` is installed with the following command:
 
@@ -214,6 +220,7 @@ You must install `mkcert` and `certutil` (often found in `libnss3-tools`) for th
 *   **Ubuntu/Debian:** `sudo apt install libnss3-tools` and follow mkcert installation instructions.
 *   **Fedora:** `sudo dnf install nss-tools`
 *   **Arch:** `sudo pacman -S nss`
+*   **macOS:** `brew install mkcert nss`
 
 On the first run, `auto start` may prompt you for your `sudo` password to install the local CA into your system's trust store.
 

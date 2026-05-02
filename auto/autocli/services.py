@@ -1,5 +1,6 @@
 """System Pods and Database Services Management"""
 
+import concurrent.futures
 import time
 
 from autocli import utils
@@ -155,18 +156,35 @@ def _verify_db_system_ready(db_name, friendly_name, socket_check_func):
     return True
 
 
+def _verify_required_dbs_ready(needs):
+    """Verify only the system DB pods referenced by `needs` are ready.
+
+    `needs` is a set of system-pod names (e.g. {'mysql', 'postgres'}). Returns
+    True if all required DB pods are ready (or none were required).
+    """
+    checks = {
+        "mysql": ("MySQL", utils.wait_for_mysql_socket),
+        "postgres": ("Postgres", utils.wait_for_postgres_socket),
+    }
+    targets = {name: checks[name] for name in needs if name in checks}
+
+    if not targets:
+        return True
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(targets)) as executor:
+        futures = {
+            name: executor.submit(_verify_db_system_ready, name, friendly, sock_fn)
+            for name, (friendly, sock_fn) in targets.items()
+        }
+        return all(future.result() for future in futures.values())
+
+
 def create_databases():
     """Create the databases"""
     rprint("  -- Creating Databases and Buckets")
 
-    # Verify MySQL is ready
-    if not _verify_db_system_ready("mysql", "MySQL", utils.wait_for_mysql_socket):
-        return
-
-    # Verify Postgres is ready
-    if not _verify_db_system_ready(
-        "postgres", "Postgres", utils.wait_for_postgres_socket
-    ):
+    # Check MySQL and Postgres readiness in parallel so both pods warm up simultaneously
+    if not _verify_required_dbs_ready({"mysql", "postgres"}):
         return
 
     # Create the databases requested in each of the pods
@@ -178,6 +196,28 @@ def create_databases():
 
         pod_config = utils.get_pod_config(pod_name)
         _process_pod_databases(pod_config)
+
+
+def create_databases_for_pod(pod_name):
+    """Create databases and buckets declared by a single pod's .auto/config.yaml.
+
+    Used by the single-pod `auto start <pod>` path so that newly added
+    databases or MinIO buckets are picked up without a full cluster bootstrap.
+    All underlying create_* helpers are idempotent, so existing resources
+    are left untouched.
+    """
+    pod_config = utils.get_pod_config(pod_name)
+    if not pod_config.get("system-pods"):
+        return
+
+    needs = {sp.get("name") for sp in pod_config["system-pods"] if sp.get("name")}
+
+    rprint("  -- Creating Databases and Buckets")
+
+    if not _verify_required_dbs_ready(needs):
+        return
+
+    _process_pod_databases(pod_config)
 
 
 def connect_to_mysql() -> None:

@@ -155,3 +155,89 @@ def test_output_logs(mock_run_wait, mock_system, mock_name, mock_ip):
     assert "kubectl logs -f mypod-12345" in cmd
     assert "grep --line-buffered -v" in cmd
     assert "10.0.0.5" in cmd
+
+
+# --- bootstrap_cluster: single-pod path ----------------------------------
+
+
+@patch("autocli.core.start_pod")
+@patch("autocli.services.create_databases_for_pod")
+@patch("autocli.services.install_system_pods")
+@patch("autocli.core._prepare_single_pod")
+@patch("autocli.core.verify_dependencies")
+@patch("autocli.utils.get_cluster_status")
+def test_bootstrap_single_pod_cluster_running(  # pylint: disable=too-many-arguments
+    mock_status, mock_verify, mock_prepare, mock_install_sys, mock_create_db, mock_start
+):
+    """Single-pod start runs the per-pod sequence when cluster is up."""
+    mock_status.return_value = ("Running", "green")
+
+    with patch.dict(CONFIG, {"pods": [], "https": False}, clear=False):
+        core.bootstrap_cluster("api", dry_run=False, offline=False)
+
+    mock_verify.assert_called_once()
+    mock_prepare.assert_called_once_with("api", False)
+    mock_install_sys.assert_called_once()
+    mock_start.assert_called_once_with("api")
+    mock_create_db.assert_called_once_with("api")
+
+
+@patch("autocli.core.start_pod")
+@patch("autocli.services.create_databases_for_pod")
+@patch("autocli.services.install_system_pods")
+@patch("autocli.core._prepare_single_pod")
+@patch("autocli.core.verify_dependencies")
+@patch("autocli.utils.declare_error", side_effect=SystemExit)
+@patch("autocli.utils.get_cluster_status")
+def test_bootstrap_single_pod_cluster_down_errors(  # pylint: disable=too-many-arguments
+    mock_status,
+    mock_declare,
+    mock_verify,
+    mock_prepare,
+    mock_install_sys,
+    mock_create_db,
+    mock_start,
+):
+    """Single-pod start fails fast when cluster is not running."""
+    mock_status.return_value = ("Stopped", "red")
+
+    with patch.dict(CONFIG, {"pods": [], "https": False}, clear=False):
+        try:
+            core.bootstrap_cluster("api", dry_run=False, offline=False)
+        except SystemExit:
+            pass
+
+    # verify_dependencies runs before the cluster-status gate
+    mock_verify.assert_called_once()
+    mock_declare.assert_called_once()
+    err_msg = mock_declare.call_args[0][0]
+    assert "Cluster is not running" in err_msg
+    # None of the per-pod work should have happened
+    mock_prepare.assert_not_called()
+    mock_install_sys.assert_not_called()
+    mock_start.assert_not_called()
+    mock_create_db.assert_not_called()
+
+
+@patch("autocli.core.start_pod")
+@patch("autocli.services.create_databases_for_pod")
+@patch("autocli.services.install_system_pods")
+@patch("autocli.core._prepare_single_pod")
+@patch("autocli.core.verify_dependencies")
+@patch("autocli.utils.get_cluster_status")
+def test_bootstrap_single_pod_dry_run(  # pylint: disable=too-many-arguments
+    mock_status, mock_verify, mock_prepare, mock_install_sys, mock_create_db, mock_start
+):
+    """--dry-run skips every side-effecting step on the single-pod path."""
+    with patch.dict(CONFIG, {"pods": [], "https": False}, clear=False):
+        core.bootstrap_cluster("api", dry_run=True, offline=False)
+
+    mock_status.assert_not_called()
+    mock_verify.assert_not_called()
+    mock_prepare.assert_not_called()
+    mock_install_sys.assert_not_called()
+    mock_create_db.assert_not_called()
+    # start_pod is the lone "no-op when dry-run is true" call that bootstrap
+    # delegates the dry-run check to (it runs regardless), so we only assert
+    # the side-effecting helpers are bypassed.
+    mock_start.assert_called_once_with("api")

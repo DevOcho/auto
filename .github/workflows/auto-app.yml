@@ -10,7 +10,15 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset_suffix: linux-x86_64
+          - os: macos-latest
+            asset_suffix: darwin-arm64
+    runs-on: ${{ matrix.os }}
 
     steps:
     - uses: actions/checkout@v4
@@ -55,25 +63,38 @@ jobs:
 
     - name: Create distribution directory
       run: |
-        # Create a temporary directory to stage the release files
-        mkdir -p release/auto-${{ github.ref_name }}
-        # Copy the auto executable
-        cp dist/auto release/auto-${{ github.ref_name}}/
-        # Copy the config and k3s directories (preserving structure)
-        cp -r auto/config release/auto-${{ github.ref_name }}/
-        cp -r auto/k3s release/auto-${{ github.ref_name }}/
-        cp -r README.md release/auto-${{ github.ref_name }}/
+        # Stage release files under an arch-tagged directory so the tarball is unambiguous
+        STAGE=release/auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}
+        mkdir -p "$STAGE"
+        cp dist/auto "$STAGE/"
+        cp -r auto/config "$STAGE/"
+        cp -r auto/k3s "$STAGE/"
+        cp README.md "$STAGE/"
 
     - name: Create tar.gz archive
       run: |
-        tar -czvf auto-${{ github.ref_name }}.tar.gz -C release auto-${{ github.ref_name }}
+        tar -czvf auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}.tar.gz \
+            -C release auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: auto-${{ github.ref_name }}.tar.gz
-        path: auto-${{ github.ref_name }}.tar.gz
+        name: auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}
+        path: auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}.tar.gz
         if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        merge-multiple: true
+
+    - name: List downloaded artifacts
+      run: ls -l artifacts/
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
@@ -83,6 +104,6 @@ jobs:
         draft: false
         prerelease: false
         files: |
-          auto-${{ github.ref_name }}.tar.gz
+          artifacts/*.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

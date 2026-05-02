@@ -13,12 +13,43 @@ command_exists() {
 }
 
 # Check for required tools
-for cmd in curl tar; do
+for cmd in curl tar uname; do
     if ! command_exists "$cmd"; then
         echo "Error: $cmd is required but not installed."
         exit 1
     fi
 done
+
+# Detect OS and architecture so we pull the right release asset
+OS=$(uname -s)
+ARCH=$(uname -m)
+case "$OS" in
+    Linux)
+        case "$ARCH" in
+            x86_64) ASSET_SUFFIX="linux-x86_64" ;;
+            *) echo "Error: Unsupported Linux architecture: $ARCH"; exit 1 ;;
+        esac
+        ;;
+    Darwin)
+        case "$ARCH" in
+            arm64|aarch64) ASSET_SUFFIX="darwin-arm64" ;;
+            *) echo "Error: Unsupported macOS architecture: $ARCH (only Apple Silicon is supported)"; exit 1 ;;
+        esac
+        ;;
+    *)
+        echo "Error: Unsupported OS: $OS"
+        exit 1
+        ;;
+esac
+echo " - Detected ${OS} / ${ARCH} (asset: ${ASSET_SUFFIX})"
+
+# Pick the shell rc file matching the user's default shell.
+# macOS defaults to zsh; most Linux distros default to bash.
+case "$(basename "${SHELL:-/bin/bash}")" in
+    zsh)  SHELL_RC="$HOME/.zshrc" ;;
+    bash) SHELL_RC="$HOME/.bashrc" ;;
+    *)    SHELL_RC="$HOME/.profile" ;;
+esac
 
 # Create ~/.auto directory
 mkdir -p ~/.auto
@@ -34,8 +65,15 @@ fi
 # Download the latest release tar.gz from GitHub
 echo " - Downloading latest release from GitHub..."
 LATEST_URL="https://api.github.com/repos/${REPO}/releases/latest"
-if ! curl -sL -o "${TEMP_DIR}/auto-latest.tar.gz" \
-    $(curl -sL "${LATEST_URL}" | grep "browser_download_url" | grep "auto-.*\.tar\.gz" | cut -d '"' -f 4); then
+ASSET_URL=$(curl -sL "${LATEST_URL}" \
+    | grep "browser_download_url" \
+    | grep "auto-.*${ASSET_SUFFIX}\.tar\.gz" \
+    | cut -d '"' -f 4)
+if [ -z "${ASSET_URL}" ]; then
+    echo "Error: No release asset matching ${ASSET_SUFFIX} found."
+    exit 1
+fi
+if ! curl -sL -o "${TEMP_DIR}/auto-latest.tar.gz" "${ASSET_URL}"; then
     echo "Error: Failed to download the latest release."
     exit 1
 fi
@@ -72,24 +110,23 @@ rm -rf "${TEMP_DIR}"
 chmod +x ~/.auto/auto
 echo " - Ensured auto is executable"
 
-# Add the line to the ~/.bashrc file to make sure it is in our path
+# On macOS, strip the quarantine attribute Gatekeeper applies to downloaded binaries
+# so the user doesn't hit a "cannot verify developer" warning on first run.
+if [ "$OS" = "Darwin" ] && command_exists xattr; then
+    xattr -d com.apple.quarantine ~/.auto/auto 2>/dev/null || true
+    echo " - Cleared macOS quarantine attribute"
+fi
+
+# Add the line to the shell rc file to make sure it is in our path
 if ! [[ `env | grep PATH | grep 'auto'` ]]
 then
     echo '';\
-    echo "Updating path to include auto folder";\
-    echo '' >> ~/.bashrc;\
-    echo '# Adding auto to the path' >> ~/.bashrc;\
-    echo 'export PATH="$PATH:/home/$USER/.auto"' >> ~/.bashrc;\
-    echo 'IMPORTANT: Any open terminals will need to be restarted for this to take effect!';\
-    echo '           or you can type "source ~/.bashrc" in the terminal';\
-
-    # Now set an ENV var for the code directory
-    #CODE_DIR=$(pwd)
-    #echo '';\
-    #echo "Setting Auto Code Directory to $CODE_DIR";\
-    #echo '' >> ~/.bashrc;\
-    #echo '# Auto Code Directory' >> ~/.bashrc;\
-    #echo "export AUTO_CODE=$CODE_DIR" >> ~/.bashrc;\
+    echo "Updating path to include auto folder (${SHELL_RC})";\
+    echo '' >> "${SHELL_RC}";\
+    echo '# Adding auto to the path' >> "${SHELL_RC}";\
+    echo 'export PATH="$PATH:'"$HOME"'/.auto"' >> "${SHELL_RC}";\
+    echo "IMPORTANT: Any open terminals will need to be restarted for this to take effect!";\
+    echo "           or you can type \"source ${SHELL_RC}\" in the terminal";\
 fi
 
 printf "\nYou now have ${BLUE}auto${NC} installed.\n"

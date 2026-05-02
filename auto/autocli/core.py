@@ -36,6 +36,22 @@ def _setup_https_certificates(pods):
     return key_file, cert_file
 
 
+def _update_tls_secrets(key_file, cert_file):
+    """Update TLS secrets in the running cluster and restart ingress to pick them up"""
+    rprint("[deep_sky_blue1]Updating TLS secrets in cluster...[/]")
+    for ns in ["default", "ingress-nginx"]:
+        cmd = (
+            f"kubectl create secret tls local-tls --key {key_file} --cert {cert_file} "
+            f"-n {ns} --dry-run=client -o yaml | kubectl apply -f -"
+        )
+        utils.run_and_wait(cmd, capture_output=True)
+    utils.run_and_wait(
+        "kubectl rollout restart deployment ingress-nginx-controller -n ingress-nginx",
+        capture_output=True,
+    )
+    rprint(" :white_heavy_check_mark:[green] TLS secrets updated")
+
+
 def _print_access_hints(pods, use_https):
     """Helper to print access hints at the end of start"""
     print()
@@ -72,6 +88,44 @@ def _install_system_sequence(new_cluster):
         services.create_databases()
 
 
+def _find_pod_entry(pod_name):
+    """Find a pod's repo entry in CONFIG['pods'] by name"""
+    for entry in CONFIG.get("pods", []):
+        if isinstance(entry, dict) and "repo" in entry:
+            entry_name = entry["repo"].split("/")[-1:][0].replace(".git", "")
+            if entry_name == pod_name:
+                return entry
+    return None
+
+
+def _apply_code_pv_pvc():
+    """Apply the shared code PersistentVolume and PersistentVolumeClaim"""
+    user_path = os.path.expanduser("~")
+    utils.run_and_wait(f"kubectl apply -f {user_path}/.auto/k3s/pv.yaml")
+    utils.run_and_wait(f"kubectl apply -f {user_path}/.auto/k3s/pvc.yaml")
+
+
+def _prepare_single_pod(pod, offline):
+    """Pull the repo, build+push the image, and apply PV/PVC for a single pod start"""
+    pod_entry = _find_pod_entry(pod)
+    if not pod_entry:
+        utils.declare_error(
+            f"Pod '{pod}' not found in ~/.auto/config/local.yaml. "
+            "Add the repo entry there first, then run 'auto start' again."
+        )
+        return
+
+    if not offline:
+        rprint(f"[deep_sky_blue1]Pulling code for[/] {pod}")
+        utils.ensure_host_known(pod_entry["repo"])
+        utils.pull_repo(pod_entry, CONFIG["code"])
+
+        registry.start_registry()
+        registry.tag_pod_docker_image(pod)
+
+    _apply_code_pv_pvc()
+
+
 def bootstrap_cluster(pod, dry_run, offline):
     """Orchestrates the entire start sequence seamlessly."""
     pods = CONFIG.get("pods", [])
@@ -83,7 +137,29 @@ def bootstrap_cluster(pod, dry_run, offline):
 
     if pod:
         rprint(f"[steel_blue]Starting[/] {pod}")
+        if not dry_run:
+            verify_dependencies()
+            # Single-pod start assumes the cluster is already up; fail loudly
+            # rather than letting downstream kubectl/helm calls error obscurely.
+            status, _ = utils.get_cluster_status()
+            if status != "Running":
+                utils.declare_error(
+                    "Cluster is not running. Run 'auto start' (no pod) first to "
+                    "bootstrap the cluster, then 'auto start <pod>' to add a pod.",
+                    exit_auto=True,
+                )
+                return
+            _prepare_single_pod(pod, offline)
+        if use_https and not dry_run:
+            key_file, cert_file = _setup_https_certificates(pods)
+            _update_tls_secrets(key_file, cert_file)
+        if not dry_run:
+            # Pick up any system-pods newly required by this pod's .auto/config.yaml
+            # (e.g., the user just added redis). install_system_pods is idempotent.
+            services.install_system_pods()
         start_pod(pod)
+        if not dry_run:
+            services.create_databases_for_pod(pod)
         return
 
     with Progress(transient=False) as progress:
@@ -623,11 +699,7 @@ def install_pods_in_cluster() -> None:
     """Install Pods into the cluster"""
 
     # Let's setup the code directory PV and PVC in k3s
-    user_path = os.path.expanduser("~")
-    command = f"kubectl apply -f {user_path}/.auto/k3s/pv.yaml"
-    utils.run_and_wait(command)
-    command = f"kubectl apply -f {user_path}/.auto/k3s/pvc.yaml"
-    utils.run_and_wait(command)
+    _apply_code_pv_pvc()
 
     # Now let's start all the pods
     rprint("  -- Pods:")
