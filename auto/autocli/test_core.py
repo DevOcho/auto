@@ -1,5 +1,7 @@
 """Tests for auto.autocli.core and auto.autocli.registry"""
 
+# pylint: disable=protected-access,unused-argument
+
 import os
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -168,6 +170,7 @@ def test_output_logs(mock_run_wait, mock_popen, mock_name, mock_ip):
 # --- bootstrap_cluster: single-pod path ----------------------------------
 
 
+@patch("autocli.registry.cache_running_images")
 @patch("autocli.core.start_pod")
 @patch("autocli.services.create_databases_for_pod")
 @patch("autocli.services.install_system_pods")
@@ -175,7 +178,13 @@ def test_output_logs(mock_run_wait, mock_popen, mock_name, mock_ip):
 @patch("autocli.core.verify_dependencies")
 @patch("autocli.utils.get_cluster_status")
 def test_bootstrap_single_pod_cluster_running(  # pylint: disable=too-many-arguments
-    mock_status, mock_verify, mock_prepare, mock_install_sys, mock_create_db, mock_start
+    mock_status,
+    mock_verify,
+    mock_prepare,
+    mock_install_sys,
+    mock_create_db,
+    mock_start,
+    mock_cache,
 ):
     """Single-pod start runs the per-pod sequence when cluster is up."""
     mock_status.return_value = ("Running", "green")
@@ -188,6 +197,44 @@ def test_bootstrap_single_pod_cluster_running(  # pylint: disable=too-many-argum
     mock_install_sys.assert_called_once()
     mock_start.assert_called_once_with("api")
     mock_create_db.assert_called_once_with("api")
+    # External images the new pod pulled get cached, matching the full start.
+    mock_cache.assert_called_once()
+
+
+@patch("autocli.registry.cache_running_images")
+@patch("autocli.core.start_pod")
+@patch("autocli.services.create_databases_for_pod")
+@patch("autocli.services.install_system_pods")
+@patch("autocli.core._prepare_single_pod")
+@patch("autocli.core.verify_dependencies")
+@patch("autocli.utils.get_cluster_status")
+def test_bootstrap_single_pod_db_created_before_pod_starts(  # pylint: disable=too-many-arguments
+    mock_status,
+    mock_verify,
+    mock_prepare,
+    mock_install_sys,
+    mock_create_db,
+    mock_start,
+    mock_cache,
+):
+    """Databases/buckets must be created BEFORE the pod starts so it doesn't
+    crash-loop against a database that doesn't exist yet."""
+    mock_status.return_value = ("Running", "green")
+
+    # Attach the ordering-sensitive calls to one manager so we can assert order.
+    manager = MagicMock()
+    manager.attach_mock(mock_install_sys, "install_system_pods")
+    manager.attach_mock(mock_create_db, "create_databases_for_pod")
+    manager.attach_mock(mock_start, "start_pod")
+
+    with patch.dict(CONFIG, {"pods": [], "https": False}, clear=False):
+        core.bootstrap_cluster("api", dry_run=False, offline=False)
+
+    ordered = [c[0] for c in manager.mock_calls]
+    assert ordered.index("create_databases_for_pod") < ordered.index("start_pod")
+    assert ordered.index("install_system_pods") < ordered.index(
+        "create_databases_for_pod"
+    )
 
 
 @patch("autocli.core.start_pod")
@@ -274,3 +321,77 @@ def test_rollback_stays_on_kubectl_exec(mock_exec):
     """rollback stays on kubectl exec because smalls.py prompts for confirmation."""
     core.rollback_with_smalls("api", "0003")
     mock_exec.assert_called_once_with("api", "./smalls.py rollback 0003")
+
+
+# --- HTTPS ingress discovery ----------------------------------------------
+
+
+@patch("autocli.utils.run_and_return")
+def test_discover_ingress_hosts_dedupes_and_sorts(mock_return):
+    """All ingress hosts are collected, de-duplicated, and returned sorted."""
+    # A single pod exposing two hosts, with the same host repeated in tls.
+    mock_return.return_value = (
+        "portal.new-d8.local\nnew-d8.local\nportal.new-d8.local\n"
+    )
+    assert core._discover_ingress_hosts() == ["new-d8.local", "portal.new-d8.local"]
+    # The command is now an argv list (shell-free), not a string.
+    argv = mock_return.call_args[0][0]
+    assert argv[:4] == ["kubectl", "get", "ingress", "--all-namespaces"]
+
+
+@patch("autocli.utils.run_and_return")
+def test_discover_ingress_hosts_empty(mock_return):
+    """No ingresses (or a failed query) yields an empty list, not a crash."""
+    mock_return.return_value = ""
+    assert core._discover_ingress_hosts() == []
+
+
+@patch("autocli.core._warn_missing_host_entries")
+@patch("autocli.core._update_tls_secrets")
+@patch("autocli.utils.create_local_certs")
+@patch("autocli.core._discover_ingress_hosts")
+def test_refresh_https_reissues_cert_for_all_hosts(
+    mock_discover, mock_certs, mock_update, mock_warn
+):
+    """The cert is re-issued with every discovered host in the SAN list."""
+    mock_discover.return_value = ["new-d8.local", "portal.new-d8.local"]
+    mock_certs.return_value = ("key.pem", "cert.pem")
+
+    core._refresh_https_for_ingresses()
+
+    assert mock_certs.call_args.kwargs["additional_domains"] == [
+        "new-d8.local",
+        "portal.new-d8.local",
+    ]
+    mock_update.assert_called_once_with("key.pem", "cert.pem")
+    mock_warn.assert_called_once_with(["new-d8.local", "portal.new-d8.local"])
+
+
+@patch("autocli.core._update_tls_secrets")
+@patch("autocli.utils.create_local_certs")
+@patch("autocli.core._discover_ingress_hosts")
+def test_refresh_https_noop_without_hosts(mock_discover, mock_certs, mock_update):
+    """With no ingresses found, nothing is re-issued or applied."""
+    mock_discover.return_value = []
+
+    core._refresh_https_for_ingresses()
+
+    mock_certs.assert_not_called()
+    mock_update.assert_not_called()
+
+
+@patch("autocli.core.platform.read_hosts")
+def test_warn_missing_host_entries_reports_only_missing(mock_hosts):
+    """Only hosts absent from the hosts file are flagged."""
+    mock_hosts.return_value = "127.0.0.1 new-d8.local\n"
+    with patch("autocli.core.rprint") as mock_print:
+        core._warn_missing_host_entries(["new-d8.local", "portal.new-d8.local"])
+
+    # Only the missing host gets its own "127.0.0.1 <host>" suggestion line.
+    host_lines = [
+        str(call.args[0])
+        for call in mock_print.call_args_list
+        if "127.0.0.1" in str(call.args[0])
+    ]
+    assert len(host_lines) == 1
+    assert host_lines[0].endswith("portal.new-d8.local")

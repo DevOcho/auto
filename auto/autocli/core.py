@@ -87,21 +87,87 @@ def _update_tls_secrets(key_file, cert_file):
     rprint(" :white_heavy_check_mark:[green] TLS secrets updated")
 
 
+def _discover_ingress_hosts():
+    """Read the hostnames every deployed Ingress actually declares.
+
+    The cluster is the source of truth for SSL coverage: pods define their own
+    hostnames in their Helm charts (a single pod can expose several, e.g. both
+    'app.local' and a customer 'portal.app.local'), which auto cannot guess from
+    the repo name alone. We collect spec.rules[].host and spec.tls[].hosts[]
+    across all namespaces and return the de-duplicated, sorted list.
+    """
+    cmd = [
+        "kubectl",
+        "get",
+        "ingress",
+        "--all-namespaces",
+        "-o",
+        'jsonpath={range .items[*]}{range .spec.rules[*]}{.host}{"\\n"}{end}'
+        '{range .spec.tls[*].hosts[*]}{@}{"\\n"}{end}{end}',
+    ]
+    output = utils.run_and_return(cmd)
+    hosts = {line.strip() for line in output.split() if line.strip()}
+    return sorted(hosts)
+
+
+def _warn_missing_host_entries(hosts):
+    """Warn about ingress hosts that won't resolve until added to /etc/hosts.
+
+    Each ingress host must point at 127.0.0.1 locally; auto does not edit
+    /etc/hosts for the user, so surface exactly which lines are missing rather
+    than letting the browser fail with an opaque resolution error.
+    """
+    current = platform.read_hosts()
+    missing = [host for host in hosts if host not in current]
+    if not missing:
+        return
+    rprint(f"  -- [yellow]These hosts are not in {platform.hosts_path()} yet[/]:")
+    for host in missing:
+        rprint(f"       127.0.0.1      {host}")
+
+
+def _refresh_https_for_ingresses():
+    """Re-issue the local cert to cover every deployed ingress hostname.
+
+    Runs after application pods are installed -- that's when their ingresses
+    exist. The initial cert is generated from a guessed '<podname>.local', which
+    misses extra hosts a pod's chart may expose, and the '*.local' wildcard does
+    not match multi-label subdomains like 'portal.app.local'. So we read the real
+    hosts from the cluster and put them in the cert's SAN list explicitly, then
+    refresh the in-cluster TLS secret.
+    """
+    hosts = _discover_ingress_hosts()
+    if not hosts:
+        return
+
+    if len(hosts) > 1:
+        rprint(f"  -- Detected {len(hosts)} ingress hosts; issuing one cert for all")
+
+    cert_path = platform.auto_dir("certs")
+    key_file, cert_file = utils.create_local_certs(cert_path, additional_domains=hosts)
+    _update_tls_secrets(key_file, cert_file)
+    _warn_missing_host_entries(hosts)
+
+
 def _print_access_hints(pods, use_https):
     """Helper to print access hints at the end of start"""
     print()
     rprint("[italic]Hint: Some items may still be starting in k3s.")
     rprint("[italic]You can access your pod(s) via the following URLs:")
 
-    protocol = "https" if use_https else "http"
-    port_suffix = "" if use_https else ":8088"
+    if use_https:
+        # HTTPS serves on 443 and covers every hostname the deployed ingresses
+        # declare -- not just '<podname>.local' -- so list the real ones.
+        for host in _discover_ingress_hosts():
+            rprint(f"[italic]  https://{host}/")
+        return
 
     for repo in pods:
         pod_name = repo["repo"].split("/")[-1:][0].replace(".git", "")
         # Access hints are informational: a missing hosts entry should print
         # guidance, not abort the whole `auto start` after it already succeeded.
         if utils.check_host_entry(pod_name, exit_auto=False):
-            rprint(f"[italic]  {protocol}://{pod_name}.local{port_suffix}/")
+            rprint(f"[italic]  http://{pod_name}.local:8088/")
 
 
 def _run_bootstrap_step(msg, success_msg, execute, func=None, **kwargs):
@@ -200,16 +266,24 @@ def bootstrap_cluster(pod, dry_run, offline):
                 )
                 return
             _prepare_single_pod(pod, offline)
-        if use_https and not dry_run:
-            key_file, cert_file = _setup_https_certificates(pods)
-            _update_tls_secrets(key_file, cert_file)
-        if not dry_run:
-            # Pick up any system-pods newly required by this pod's .auto/config.yaml
-            # (e.g., the user just added redis). install_system_pods is idempotent.
+            # Bring up any system pods this pod needs and create its databases
+            # and buckets BEFORE the pod starts. This mirrors the full-start
+            # order (system pods + databases happen ahead of the application
+            # pods) so the pod doesn't crash-loop connecting to a database or
+            # reading a bucket that doesn't exist yet. install_system_pods is
+            # idempotent and only acts on pods that are actually required.
             services.install_system_pods()
+            services.create_databases_for_pod(pod)
         start_pod(pod)
         if not dry_run:
-            services.create_databases_for_pod(pod)
+            # The pod's ingress now exists; re-issue the cert so any hostnames it
+            # adds (e.g. a second 'portal.<pod>.local') are covered too.
+            if use_https:
+                _refresh_https_for_ingresses()
+            # Cache any external images this pod pulled (sidecars, init
+            # containers, third-party images) into the local registry and
+            # local.yaml, matching what the full-start path does at the end.
+            registry.cache_running_images()
         return
 
     with Progress(transient=False) as progress:
@@ -288,6 +362,15 @@ def bootstrap_cluster(pod, dry_run, offline):
             progress=progress,
             task=task,
             advance=20,
+        )
+
+        # STEP 7.5: Now that ingresses exist, re-issue the cert to cover every
+        # hostname they actually declare (handles pods that expose more than one).
+        _run_bootstrap_step(
+            "Securing ingress hosts (HTTPS)...",
+            "HTTPS Ingress Hosts Secured",
+            not dry_run and use_https,
+            _refresh_https_for_ingresses,
         )
 
         # STEP 8: Auto-detect external images and cache them

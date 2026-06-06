@@ -15,7 +15,7 @@ from requests.exceptions import RequestException
 from rich import print as rprint
 from rich.progress import Progress
 
-VERSION = "0.7.2"
+VERSION = "0.7.3"
 
 
 # Global settings for click
@@ -430,12 +430,19 @@ def _run_self_update():
 
 @auto.command()
 @click.pass_context
-def update(self):  # pylint: disable=unused-argument
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Force update even if already at the latest version.",
+)
+def update(self, force):  # pylint: disable=unused-argument
     """Update auto CLI to the latest version"""
     latest_version = _latest_release_version()
     if latest_version:
         try:
-            if VERSION == latest_version:
+            # --force (from 0.7.3) updates even when already on the latest version.
+            if VERSION == latest_version and not force:
                 rprint(f"[green]Current version ({VERSION}) is already the latest.[/]")
                 rprint("""
 ⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⣶⡋⠉⠙⠒⢤⡀⠀⠀⠀⠀⠀⢠⠖⠉⠉⠙⠢⡄⠀
