@@ -18,6 +18,8 @@ jobs:
             asset_suffix: linux-x86_64
           - os: macos-latest
             asset_suffix: darwin-arm64
+          - os: windows-latest
+            asset_suffix: windows-x86_64
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -29,28 +31,38 @@ jobs:
         python-version: "3.12"
         cache: 'pip'
 
-    - name: Create and activate virtual environment
-      run: |
-        python -m venv venv
-        source venv/bin/activate
-        python -m pip install --upgrade pip
-
+    # All steps use bash; it is available on the windows-latest runner too,
+    # which keeps the build identical across the three operating systems.
     - name: Install dependencies
+      shell: bash
       run: |
-        source venv/bin/activate
+        python -m pip install --upgrade pip
         pip install flake8 pytest pyinstaller
         if [ -f build_requirements.txt ]; then pip install -r build_requirements.txt; fi
 
     - name: Lint with flake8
+      shell: bash
       run: |
-        source venv/bin/activate
         flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=./venv/*
         flake8 . --count --exit-zero --max-complexity=12 --max-line-length=127 --statistics --exclude=./venv/*
 
-    - name: Build with pyinstaller
+    # Importing autocli.config loads ~/.auto/config/local.yaml (creating a default
+    # if missing). Seed a minimal config pointing `code` at an existing dir so the
+    # import never blocks on the interactive "create code folder?" prompt in CI.
+    - name: Seed test config
+      shell: bash
       run: |
-        source venv/bin/activate
-        pyinstaller --collect-all pyfiglet \
+        python -c "import os,pathlib; d=pathlib.Path(os.path.expanduser('~'))/'.auto'/'config'; d.mkdir(parents=True,exist_ok=True); (d/'local.yaml').write_text('code: .\nhttps: false\npods: []\nsystem-pods: []\nregistry: []\n')"
+
+    - name: Run tests
+      shell: bash
+      run: |
+        PYTHONPATH=auto pytest auto/autocli -q
+
+    - name: Build with pyinstaller
+      shell: bash
+      run: |
+        python -m PyInstaller --collect-all pyfiglet \
                     --collect-submodules rich \
                     --collect-all autocli \
                     --hidden-import "rich._unicode_data.unicode17-0-0" \
@@ -59,29 +71,44 @@ jobs:
                     --onefile ./auto/auto.py
 
     - name: List dist directory
+      shell: bash
       run: ls -l dist/
 
-    - name: Create distribution directory
+    - name: Stage release files
+      shell: bash
       run: |
-        # Stage release files under an arch-tagged directory so the tarball is unambiguous
-        STAGE=release/auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}
+        # Stage release files under an arch-tagged directory so the archive is unambiguous
+        STAGE="release/auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}"
         mkdir -p "$STAGE"
-        cp dist/auto "$STAGE/"
+        if [ -f dist/auto.exe ]; then cp dist/auto.exe "$STAGE/"; else cp dist/auto "$STAGE/"; fi
         cp -r auto/config "$STAGE/"
         cp -r auto/k3s "$STAGE/"
         cp README.md "$STAGE/"
+        [ -f install_auto.ps1 ] && cp install_auto.ps1 "$STAGE/" || true
+        [ -f install_auto.sh ] && cp install_auto.sh "$STAGE/" || true
 
-    - name: Create tar.gz archive
+    - name: Create tar.gz archive (Linux/macOS)
+      if: runner.os != 'Windows'
+      shell: bash
       run: |
-        tar -czvf auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}.tar.gz \
-            -C release auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}
+        tar -czvf "auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}.tar.gz" \
+            -C release "auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}"
+
+    - name: Create zip archive (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $name = "auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}"
+        Compress-Archive -Path "release/$name" -DestinationPath "$name.zip"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}
-        path: auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}.tar.gz
-        if-no-files-found: error
+        path: |
+          auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}.tar.gz
+          auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}.zip
+        if-no-files-found: ignore
 
   release:
     needs: build
@@ -105,5 +132,6 @@ jobs:
         prerelease: false
         files: |
           artifacts/*.tar.gz
+          artifacts/*.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

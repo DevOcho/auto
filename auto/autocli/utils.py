@@ -16,6 +16,7 @@ from subprocess import CalledProcessError
 from time import sleep
 
 import yaml
+from autocli import platform
 from autocli.config import CONFIG
 from rich import print as rprint
 from rich.table import Table
@@ -32,16 +33,33 @@ def ensure_host_known(git_url):
 
     host = domain_match.group(1)
 
+    # OpenSSH is an optional component on Windows; if the tools aren't present we
+    # skip host-key trusting entirely (HTTPS remotes are unaffected).
+    if not platform.which("ssh-keyscan") or not platform.which("ssh-keygen"):
+        rprint(
+            f"  [yellow]-- ssh-keyscan/ssh-keygen not found; skipping host trust for {host}.[/]"
+        )
+        rprint(
+            "     [italic]Install OpenSSH or use an https:// remote to avoid an interactive prompt.[/]"
+        )
+        return
+
     # 1. Check if host is already known
-    cmd_check = f"ssh-keygen -F {host}"
-    if run_and_wait(cmd_check, capture_output=True, suppress_error=True):
+    if run_and_wait(
+        ["ssh-keygen", "-F", host], capture_output=True, suppress_error=True
+    ):
         return  # Host is known
 
     # 2. If not known, scan and add keys
     rprint(f"  [yellow]-- Trusting new host: {host}[/]")
     ssh_dir = os.path.expanduser("~/.ssh")
     if not os.path.exists(ssh_dir):
-        os.makedirs(ssh_dir, mode=0o700)
+        # Unix permission bits are a no-op on Windows (NTFS ACLs), so only set
+        # mode on POSIX where it matters.
+        if platform.IS_WINDOWS:
+            os.makedirs(ssh_dir, exist_ok=True)
+        else:
+            os.makedirs(ssh_dir, mode=0o700)
 
     try:
         result = subprocess.run(
@@ -49,6 +67,8 @@ def ensure_host_known(git_url):
             capture_output=True,
             check=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
 
         keys = result.stdout.strip()
@@ -101,33 +121,58 @@ def declare_error(error_msg: str, exit_auto: bool = True) -> None:
         sys.exit()
 
 
+def to_argv(cmd):
+    """Normalize a command into an argv list for shell-free execution.
+
+    Accepts a list/tuple (used as-is, the preferred form) or a string (tokenized
+    with POSIX rules on every platform). POSIX tokenization strips shell quoting
+    such as the single quotes around a kubectl ``jsonpath=`` value and yields the
+    tokens the tool should receive as argv. Genuine shell pipelines must NOT be
+    passed here -- they are handled explicitly by their callers (e.g. two-step
+    apply, Popen streaming). Path arguments should already be forward-slashed via
+    platform.posix_path/to_mount_path so POSIX tokenization never eats a Windows
+    backslash.
+    """
+    if isinstance(cmd, (list, tuple)):
+        return [str(part) for part in cmd]
+    return shlex.split(cmd, posix=True)
+
+
 def run_and_wait(
-    cmd: str,
+    cmd,
     capture_output=True,
     check_result="",
     cwd=None,
     suppress_error=False,
     _retry_count=0,
 ) -> int:
-    """Run a Bash command and wait for it to finish"""
+    """Run a command (no shell) and wait for it to finish.
+
+    ``cmd`` may be an argv list (preferred) or a string that gets tokenized.
+    Returns 1 on success (or when ``check_result`` is found in stdout), else 0.
+    """
 
     # Local vars
     found = 0
+    argv = to_argv(cmd)
 
     # Run the command and return the output
     try:
         output = subprocess.run(
-            cmd,
+            argv,
             capture_output=capture_output,
-            shell=True,
+            shell=False,
             check=True,
             cwd=cwd,  # Allow running in specific directory
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
 
         if check_result:
-            results = output.stdout.splitlines()
+            results = (output.stdout or "").splitlines()
             for line in results:
-                if re.search(check_result, str(line)):
+                if re.search(check_result, line):
                     found = 1
 
             # Returning either that the check was successful (if there was a check)
@@ -137,20 +182,37 @@ def run_and_wait(
         # Get to this point implies success
         return 1
 
+    except FileNotFoundError:
+        # The executable isn't installed / not on PATH.
+        if not suppress_error:
+            missing = argv[0] if argv else str(cmd)
+            rprint(f"\n[red]Command not found:[/red] {missing}")
+        return 0
+
     except CalledProcessError as error:
-        # Check for kubectl connection issues to auto-heal
-        err_text = error.stderr.decode("utf-8") if error.stderr else ""
-        if "kubectl" in cmd and (
+        # stderr is already text because we run with text=True
+        err_text = error.stderr or ""
+        is_kubectl = bool(argv) and "kubectl" in os.path.basename(argv[0])
+        if is_kubectl and (
             "connection refused" in err_text or "server was refused" in err_text
         ):
             if _retry_count < 3:
-                # Attempt to fix connectivity by refreshing kubeconfig
-                # We use subprocess directly to avoid recursion loops
+                # Attempt to fix connectivity by refreshing kubeconfig.
+                # We use subprocess directly to avoid recursion loops.
                 subprocess.run(
-                    "k3d kubeconfig merge k3s-default --kubeconfig-switch-context",
-                    shell=True,
+                    [
+                        platform.k3d_bin(),
+                        "kubeconfig",
+                        "merge",
+                        "k3s-default",
+                        "--kubeconfig-switch-context",
+                    ],
+                    shell=False,
                     capture_output=True,
                     check=False,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
                 )
                 sleep(2)
                 # Retry the original command
@@ -171,31 +233,23 @@ def run_and_wait(
         return 0
 
 
-def run_and_return(cmd: str) -> str:
-    """Run a Bash command and return the output as a string"""
+def run_and_return(cmd) -> str:
+    """Run a command (no shell) and return its stdout as a string"""
 
     # Run the command and return the output
     try:
-        output = subprocess.run(cmd, capture_output=True, shell=True, check=True)
-        return output.stdout.decode("utf-8").strip()
-    except CalledProcessError:
+        output = subprocess.run(
+            to_argv(cmd),
+            capture_output=True,
+            shell=False,
+            check=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        return (output.stdout or "").strip()
+    except (CalledProcessError, FileNotFoundError):
         return ""
-
-
-def run_async(cmd: str) -> bytes:
-    """Run a Bash command and keep moving"""
-
-    # Make this command safe to run
-    cmd = shlex.quote(cmd)
-    # args = shlex.split(cmd)
-
-    # Run the command
-    with subprocess.Popen(cmd, shell=True) as subp:
-        output = subp.communicate()[0]
-        if subp.returncode < 0:
-            cmd = " ".join(cmd)
-            sys.stderr.write(f"{cmd} failed")
-        return output
 
 
 def verify_pod_is_installed(pod: str) -> bool:
@@ -211,14 +265,14 @@ def verify_pod_is_installed(pod: str) -> bool:
 
 def verify_cluster_connection(retries=10) -> bool:
     """Verify that kubectl can connect to the cluster"""
-    cmd = "kubectl cluster-info"
+    cmd = ["kubectl", "cluster-info"]
     for _ in range(retries):
         try:
-            # We assume capture_output=True inside run_and_wait is fine here,
-            # but we use subprocess directly to avoid loop recursion logging
-            subprocess.run(cmd, capture_output=True, shell=True, check=True)
+            # We use subprocess directly (not run_and_wait) to avoid loop
+            # recursion logging / auto-heal during this readiness poll.
+            subprocess.run(cmd, capture_output=True, shell=False, check=True)
             return True
-        except CalledProcessError:
+        except (CalledProcessError, FileNotFoundError):
             sleep(2)
     return False
 
@@ -233,21 +287,24 @@ def wait_for_pod_status(podname: str, status: str, max_wait_time=60) -> bool:
     while not pod_complete and cycles < max_wait_time:
         # Get the pod(s) in question.
         # We DO NOT use grep here so we can detect if kubectl itself fails.
-        bash_command = "kubectl get pods --all-namespaces"
+        cmd = ["kubectl", "get", "pods", "--all-namespaces"]
 
         try:
             results = subprocess.run(
-                bash_command, capture_output=True, shell=True, check=True
+                cmd,
+                capture_output=True,
+                shell=False,
+                check=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
             )
 
             # Look for the pod and the status to see if it's ready
-            result_lines = results.stdout.splitlines()
-            for line in result_lines:
-                line_str = line.decode("utf-8")
-                if re.search(podname, line_str):
-                    if re.search(status, line_str):
-                        pod_complete = 1
-        except CalledProcessError:
+            for line_str in (results.stdout or "").splitlines():
+                if re.search(podname, line_str) and re.search(status, line_str):
+                    pod_complete = 1
+        except (CalledProcessError, FileNotFoundError):
             pass
 
         cycles += 1
@@ -264,9 +321,19 @@ def wait_for_mysql_socket(retries=30) -> bool:
 
     for _ in range(retries):
         # We use a real query to test connectivity, not just admin ping
-        cmd = f'kubectl exec {pod_name} -- mysql -uroot -ppassword -e "SELECT 1"'
+        cmd = [
+            "kubectl",
+            "exec",
+            pod_name,
+            "--",
+            "mysql",
+            "-uroot",
+            "-ppassword",
+            "-e",
+            "SELECT 1",
+        ]
         try:
-            subprocess.run(cmd, capture_output=True, shell=True, check=True)
+            subprocess.run(cmd, capture_output=True, shell=False, check=True)
             return True
         except CalledProcessError:
             sleep(1)
@@ -281,9 +348,21 @@ def wait_for_postgres_socket(retries=30) -> bool:
 
     for _ in range(retries):
         # We use a real query to test connectivity
-        cmd = f'kubectl exec {pod_name} -- psql -U root -d postgres -c "SELECT 1"'
+        cmd = [
+            "kubectl",
+            "exec",
+            pod_name,
+            "--",
+            "psql",
+            "-U",
+            "root",
+            "-d",
+            "postgres",
+            "-c",
+            "SELECT 1",
+        ]
         try:
-            subprocess.run(cmd, capture_output=True, shell=True, check=True)
+            subprocess.run(cmd, capture_output=True, shell=False, check=True)
             return True
         except CalledProcessError:
             sleep(1)
@@ -292,19 +371,20 @@ def wait_for_postgres_socket(retries=30) -> bool:
 
 def create_postgres_database(database, retries=0):
     """Create a database inside postgres"""
-    # We use a quick bash command to see if the DB exists, and create it if it doesn't.
+    # We check (and create) the DB with a small pipeline that runs INSIDE the
+    # Linux container via `sh -c`, so it stays POSIX even on a Windows host.
     # This prevents Postgres from throwing errors on subsequent "auto start" runs.
-    container_cmd = f'sh -c "psql -U root -lqt | grep -qw {database} || createdb -U root {database}"'
+    pipeline = f"psql -U root -lqt | grep -qw {database} || createdb -U root {database}"
     pod_name = get_full_pod_name("postgres").strip("\n")
 
     if pod_name:
-        cmd = f"kubectl exec {pod_name} -- {container_cmd}"
+        cmd = ["kubectl", "exec", pod_name, "--", "sh", "-c", pipeline]
 
         try:
             # Run the command silently
             subprocess.run(
                 cmd,
-                shell=True,
+                shell=False,
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -326,92 +406,84 @@ def create_postgres_database(database, retries=0):
 
 
 def get_full_pod_name(pod) -> str:
-    """Get the full name of the pod for a k3s pod by application name"""
+    """Get the name of the first Running k3s pod matching an application name.
 
-    cmd = f"kubectl get pods | grep {pod} " + "| grep Running | awk 'NR==1{{print $1}}'"
+    Replaces the old `kubectl get pods | grep | grep Running | awk` pipeline with
+    JSON parsing so it works without a POSIX shell on any platform.
+    """
 
-    # Make this command safe to run
-    cmd = shlex.quote(cmd)
-    args = shlex.split(cmd)
+    output = run_and_return(["kubectl", "get", "pods", "-o", "json"])
+    if not output:
+        return ""
 
-    # Run the command and return the output
-    pod_name = subprocess.run(args, capture_output=True, shell=True, check=True)
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError:
+        return ""
 
-    # give the people what they want
-    return pod_name.stdout.decode().strip("\n")
+    for item in data.get("items", []):
+        name = item.get("metadata", {}).get("name", "")
+        phase = item.get("status", {}).get("phase", "")
+        if pod in name and phase == "Running":
+            return name
+
+    return ""
 
 
 def connect_to_db() -> None:
-    """Get the full name of the pod for a k3s pod by application name"""
+    """Open an interactive MySQL shell inside the cluster's mysql pod"""
 
-    # The command we will send to the mysql pod
-    container_cmd = "mysql -uroot -ppassword"
-
-    # Determine which pod to exec against and build the command
     pod_name = get_full_pod_name("mysql").strip("\n")
-    cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
+    cmd = ["kubectl", "exec", "-it", pod_name, "--", "mysql", "-uroot", "-ppassword"]
 
-    # Make this command safe to run
-    cmd = shlex.quote(cmd)
-    args = shlex.split(cmd)
-
-    # Run the command and return the output
-    subprocess.run(args, shell=True, check=True)
+    # Interactive: inherit the parent stdio so the TTY works
+    subprocess.run(cmd, shell=False, check=True)
 
 
 def connect_to_db_postgres() -> None:
-    """Get the full name of the pod for a k3s pod by application name"""
+    """Open an interactive psql shell inside the cluster's postgres pod"""
 
-    # The command we will send to the mysql pod
-    container_cmd = "psql -U root postgres"
-
-    # Determine which pod to exec against and build the command
     pod_name = get_full_pod_name("postgres").strip("\n")
-    cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
+    cmd = ["kubectl", "exec", "-it", pod_name, "--", "psql", "-U", "root", "postgres"]
 
-    # Make this command safe to run
-    cmd = shlex.quote(cmd)
-    args = shlex.split(cmd)
-
-    # Run the command and return the output
-    subprocess.run(args, shell=True, check=True)
+    # Interactive: inherit the parent stdio so the TTY works
+    subprocess.run(cmd, shell=False, check=True)
 
 
 def connect_to_minio() -> None:
     """This opens the port-forward to MinIO to allow dev access"""
 
-    # Determine which pod to exec against and build the command
     pod_name = get_full_pod_name("minio").strip("\n")
+    cmd = ["kubectl", "port-forward", pod_name, "9090:9090"]
 
-    # The command we are going to run
-    cmd = f"kubectl port-forward {pod_name} 9090:9090"
-
-    # Make this command safe to run
-    cmd = shlex.quote(cmd)
-    args = shlex.split(cmd)
-
-    # Run the command and return the output
-    subprocess.run(args, shell=True, check=True)
+    # Long-running: inherit the parent stdio so Ctrl+C reaches it
+    subprocess.run(cmd, shell=False, check=True)
 
 
 def create_mysql_database(database, retries=0):
     """Create a database inside mysql"""
 
     # IF NOT EXISTS prevents a failed retry loop when the database already exists
-    container_cmd = (
-        f'mysql -uroot -ppassword --execute="CREATE DATABASE IF NOT EXISTS {database}"'
-    )
     pod_name = get_full_pod_name("mysql").strip("\n")
 
     if pod_name:
-        cmd = f"kubectl exec {pod_name} -- {container_cmd}"
+        cmd = [
+            "kubectl",
+            "exec",
+            pod_name,
+            "--",
+            "mysql",
+            "-uroot",
+            "-ppassword",
+            f"--execute=CREATE DATABASE IF NOT EXISTS {database}",
+        ]
 
         try:
             # Run the command silently.
             # We capture output to suppress "ERROR 2002" messages during startup.
             subprocess.run(
                 cmd,
-                shell=True,
+                shell=False,
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -444,10 +516,12 @@ def create_minio_bucket(bucket):
             f"mc anonymous --quiet set none myminio/{bucket} && "  # enable full path access
             f"mc anonymous --quiet set download myminio/{bucket}/*"
         )
-        cmd = f"kubectl exec {pod_name} -- sh -c {shlex.quote(combined)}"
+        # The combined pipeline runs INSIDE the Linux container via `sh -c`,
+        # passed as a single argv element so no host shell is involved.
+        cmd = ["kubectl", "exec", pod_name, "--", "sh", "-c", combined]
         subprocess.run(
             cmd,
-            shell=True,
+            shell=False,
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.STDOUT,
@@ -455,43 +529,33 @@ def create_minio_bucket(bucket):
 
 
 def check_docker():
-    """Make sure docker exists and the service is running"""
+    """Make sure docker exists and the daemon is reachable"""
 
     # Error count
     errors = 0
 
-    # Verify docker is installed
-    bash_command = """which docker"""
-    if not run_and_wait(bash_command, check_result="docker"):
+    # Verify docker is installed (cross-platform PATH lookup; no `which`)
+    if not platform.which("docker"):
         declare_error(
             """Docker is missing!
                [yellow]We didn't see docker on your system.  You'll need docker installed to continue""",
             exit_auto=False,
         )
+        # No point checking the daemon if the client isn't even installed
+        return errors + 1
 
-        errors += 1
-
-    # Verify docker is running
-    bash_command = """ps aux"""
-    if not run_and_wait(bash_command, check_result="dockerd"):
-        declare_error(
-            """Docker Daemon doesn't appear to be running.
+    # Verify the daemon is reachable. `docker info` works the same on Linux,
+    # macOS and Windows (Docker Desktop / Rancher Desktop) and does not depend on
+    # a host `dockerd` process (there isn't one on Windows).
+    if not run_and_wait(["docker", "info"], capture_output=True, suppress_error=True):
+        if platform.IS_WINDOWS or platform.IS_MAC:
+            msg = """The Docker engine doesn't appear to be running.
+        Please start Docker Desktop (or Rancher Desktop) and wait for it to be ready."""
+        else:
+            msg = """The Docker daemon doesn't appear to be running.
         Please run the following command:
-          `sudo service docker start`""",
-            exit_auto=False,
-        )
-        errors += 1
-
-    # Verify the `docker` command is available to this user
-    bash_command = """docker ps"""
-    if not run_and_wait(bash_command, check_result="CONTAINER ID"):
-        declare_error(
-            """The `docker` command doesn't appear to be working!
-             Perhaps you need to run the post install steps:
-               https://docs.docker.com/engine/install/linux-postinstall/
-          """,
-            exit_auto=False,
-        )
+          `sudo service docker start`"""
+        declare_error(msg, exit_auto=False)
         errors += 1
 
     return errors
@@ -564,21 +628,119 @@ def check_registry_host_entry():
 def check_host_entry(host, exit_auto: bool = True):
     """Check that a host entry for the pod has been made"""
 
-    # check for the k3d-registry.local host entry
-    bash_command = """cat /etc/hosts"""
-    if not run_and_wait(bash_command, check_result=host):
-        declare_error(
-            f"""No registry entry in /etc/hosts !
-       Please add the following to your /etc/hosts file
+    # Read the system hosts file directly in Python (no `cat`; correct path
+    # per-OS). On a locked-down Windows box this may come back empty, so we also
+    # fall back to DNS resolution below.
+    if re.search(host, platform.read_hosts()):
+        return True
+
+    # Fall back to DNS resolution: the mapping might live somewhere other than
+    # the hosts file, or the hosts file may be unreadable without elevation.
+    try:
+        socket.gethostbyname(f"{host}.local")
+        return True
+    except OSError:
+        pass
+
+    declare_error(
+        f"""No registry entry in the hosts file !
+       Please add the following line to {platform.hosts_path()}
        127.0.0.1      {host}.local
           """,
-            exit_auto=exit_auto,
+        exit_auto=exit_auto,
+    )
+
+    return False
+
+
+# winget package ids for the tools auto can auto-install on Windows.
+# k3d has no reliable winget package, so it is handled with manual guidance.
+_WINGET_IDS = {
+    "docker": "Docker.DockerDesktop",
+    "kubectl": "Kubernetes.kubectl",
+    "helm": "Helm.Helm",
+    "git": "Git.Git",
+    "mkcert": "FiloSottile.mkcert",
+}
+
+
+def run_doctor(fix=False):
+    """Report (and optionally install) the external tools auto depends on.
+
+    This is the in-CLI prerequisite checker. On Windows, ``--fix`` installs the
+    winget-available tools; k3d is guided manually (scoop/choco/download). For a
+    full automated setup, the PowerShell installer's ``-InstallDeps`` is richer.
+    """
+    https = CONFIG.get("https", False)
+
+    # (tool, note). k3d intentionally has no winget id (see _WINGET_IDS).
+    tools = [
+        ("docker", "Docker Desktop provides the engine k3d runs on"),
+        ("k3d", "install via: scoop install k3d | choco install k3d | https://k3d.io"),
+        ("kubectl", ""),
+        ("helm", "optional, only needed for helm charts"),
+        ("git", ""),
+    ]
+    if https:
+        tools.append(("mkcert", "only needed when https: true"))
+
+    rprint("[deep_sky_blue1 bold]auto doctor[/]\n")
+    missing = []
+    for name, note in tools:
+        if platform.which(name):
+            rprint(
+                f"  {name:<8} [green]:white_heavy_check_mark: found[/]"
+                + (f"  [italic]{note}[/]" if note else "")
+            )
+        else:
+            rprint(
+                f"  {name:<8} [red]:x: missing[/]"
+                + (f"  [italic]{note}[/]" if note else "")
+            )
+            missing.append(name)
+
+    # Docker daemon reachability (only meaningful if the client is present)
+    if platform.which("docker"):
+        if run_and_wait(["docker", "info"], capture_output=True, suppress_error=True):
+            rprint("  engine   [green]:white_heavy_check_mark: docker running[/]")
+        else:
+            rprint("  engine   [yellow]not reachable -- start Docker Desktop[/]")
+
+    if not missing:
+        rprint("\n[green]All required tools are present.[/]")
+        return
+
+    if fix and platform.IS_WINDOWS and platform.which("winget"):
+        for name in missing:
+            winget_id = _WINGET_IDS.get(name)
+            if winget_id:
+                rprint(f"\n[deep_sky_blue1]Installing {name} via winget...[/]")
+                run_and_wait(
+                    [
+                        "winget",
+                        "install",
+                        "-e",
+                        "--id",
+                        winget_id,
+                        "--accept-source-agreements",
+                        "--accept-package-agreements",
+                    ],
+                    capture_output=False,
+                )
+            else:
+                rprint(
+                    f"\n[yellow]{name} must be installed manually (see note above).[/]"
+                )
+        rprint("\n[italic]Open a new terminal so PATH changes take effect.[/]")
+    else:
+        rprint(
+            "\n[yellow]Some tools are missing.[/] On Windows, re-run with "
+            "[bright_cyan]--fix[/] to install via winget,"
         )
-
-        return False
-
-    # We found the entry so tell them everything is ok
-    return True
+        rprint(
+            "or run the installer's setup once: "
+            "[bright_cyan]install_auto.ps1 -InstallDeps[/]"
+        )
 
 
 def pull_repo(repo, code_folder):
@@ -670,16 +832,16 @@ def setup_minio(retries=5):
     if pod_name:
         # Let's run the commands in the container to setup the access creds
         for container_cmd in container_cmds:
-            full_cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
-
-            # Make this command safe to run
-            full_cmd = shlex.quote(full_cmd)
-            cmd_with_args = shlex.split(full_cmd)
+            # container_cmd is a fixed, space-delimited command; tokenize it and
+            # exec it inside the pod with no host shell involved.
+            cmd_with_args = ["kubectl", "exec", "-it", pod_name, "--"] + shlex.split(
+                container_cmd
+            )
 
             # Run the command and return the output
             subprocess.run(
                 cmd_with_args,
-                shell=True,
+                shell=False,
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.STDOUT,
@@ -867,14 +1029,22 @@ def build_pod_table(namespace, all_namespaces):
 
 
 def check_certutil():
-    """Check if libnss3-tools is installed"""
+    """Check for the NSS certutil that mkcert needs on Linux.
+
+    On Windows, mkcert uses the system certificate store directly -- the built-in
+    Windows ``certutil.exe`` is a different tool and is NOT required -- so we skip
+    this check there to avoid a false positive. macOS uses the system keychain.
+    """
+    if platform.IS_WINDOWS:
+        return
     if not shutil.which("certutil"):
         declare_error(
             "certutil is not installed (required for mkcert).\n"
             "  Please install it:\n"
             "  - Ubuntu/Debian: sudo apt install libnss3-tools\n"
             "  - Fedora: sudo dnf install nss-tools\n"
-            "  - Arch: sudo pacman -S nss"
+            "  - Arch: sudo pacman -S nss\n"
+            "  - macOS: brew install nss"
         )
 
 
@@ -903,56 +1073,71 @@ def create_local_certs(cert_path, additional_domains=None):
     key_file = os.path.join(cert_path, "key.pem")
     cert_file = os.path.join(cert_path, "cert.pem")
 
-    # Install the local CA
-    # Try silently first (success if already installed or no sudo needed)
+    # Install the local CA. Try silently first (succeeds if already installed or
+    # no elevation is needed). On failure, run again with inherited stdio so a
+    # sudo password (POSIX) or UAC dialog (Windows) can be handled by the user.
     try:
         subprocess.run(
-            "mkcert -install",
-            shell=True,
+            ["mkcert", "-install"],
+            shell=False,
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-    except CalledProcessError:
-        # If silent fail, run interactively (likely needs sudo password)
-        rprint("  -- Installing local CA (may prompt for password)")
-        os.system("mkcert -install")
+    except (CalledProcessError, FileNotFoundError):
+        rprint("  -- Installing local CA (may prompt for elevation)")
+        subprocess.run(["mkcert", "-install"], shell=False, check=False)
 
-    # Generate the certs
-    # We suppress output here unless it fails
-    domain_args = " ".join(additional_domains)
-    cmd = (
-        f"mkcert -key-file {key_file} -cert-file {cert_file} "
-        f"'*.local' localhost 127.0.0.1 ::1 {domain_args}"
-    )
+    # Generate the certs as an argv list so '*.local' needs no shell quoting
+    # (single quotes are literal on cmd.exe). We suppress output unless it fails.
+    cmd = [
+        "mkcert",
+        "-key-file",
+        key_file,
+        "-cert-file",
+        cert_file,
+        "*.local",
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        *additional_domains,
+    ]
 
     try:
         subprocess.run(
             cmd,
-            shell=True,
+            shell=False,
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
     except CalledProcessError as e:
         rprint("[red]Error generating certificates:[/red]")
-        print(e.stderr.decode())
+        print(e.stderr or "")
+    except FileNotFoundError:
+        rprint("[red]mkcert not found; cannot generate certificates.[/red]")
 
     return key_file, cert_file
 
 
 def get_deployment_spec(name, namespace="default"):
     """Fetch a deployment's spec as a dict, or None if it doesn't exist"""
-    cmd = (
-        f"kubectl get deployment {shlex.quote(name)} "
-        f"-n {shlex.quote(namespace)} -o json"
-    )
+    cmd = ["kubectl", "get", "deployment", name, "-n", namespace, "-o", "json"]
     try:
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, check=True, text=True
+            cmd,
+            shell=False,
+            capture_output=True,
+            check=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         return json.loads(result.stdout)
-    except (CalledProcessError, json.JSONDecodeError):
+    except (CalledProcessError, json.JSONDecodeError, FileNotFoundError):
         return None
 
 
@@ -1050,11 +1235,13 @@ def run_one_shot_pod_command(
     try:
         rprint(f"  -- Spawning {action_label} pod for {pod_name}")
         result = subprocess.run(
-            "kubectl apply -f -",
-            shell=True,
+            ["kubectl", "apply", "-f", "-"],
+            shell=False,
             input=manifest_yaml,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
         if result.returncode != 0:
@@ -1079,19 +1266,34 @@ def run_one_shot_pod_command(
             )
             return 1
 
-        # Stream logs until the container exits. os.system avoids buffering
-        # so the user sees output in real time.
+        # Stream logs until the container exits. Inheriting stdio (no capture)
+        # lets the user see output in real time without a shell or buffering.
         rprint(f"  -- Streaming {action_label} output for {pod_name}")
-        os.system(f"kubectl logs -f pod/{runner_name} -n {namespace}")
+        subprocess.run(
+            ["kubectl", "logs", "-f", f"pod/{runner_name}", "-n", namespace],
+            shell=False,
+            check=False,
+        )
 
         # Pod has exited (or user Ctrl-C'd). Check the actual phase rather
-        # than trusting the log stream's exit code.
-        phase_cmd = (
-            f"kubectl get pod/{runner_name} -n {namespace} "
-            "-o jsonpath='{.status.phase}'"
-        )
+        # than trusting the log stream's exit code. The jsonpath value is passed
+        # as a single argv element, so no shell quoting is needed.
         phase_result = subprocess.run(
-            phase_cmd, shell=True, capture_output=True, text=True, check=False
+            [
+                "kubectl",
+                "get",
+                f"pod/{runner_name}",
+                "-n",
+                namespace,
+                "-o",
+                "jsonpath={.status.phase}",
+            ],
+            shell=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
         )
         phase = phase_result.stdout.strip().strip("'")
 

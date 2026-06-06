@@ -1,15 +1,17 @@
 """Auto Commands
 
-  * `--dry-run`     This is for automated testing and visually testing the output
-  * `--offline`     This disables steps that require internet so you can work without Internet
+* `--dry-run`     This is for automated testing and visually testing the output
+* `--offline`     This disables steps that require internet so you can work without Internet
 """
 
-import json
 import os
+import subprocess
 
 import click
-from autocli import core, registry, services, utils
+import requests
+from autocli import core, platform, registry, services, utils
 from autocli.config import CONFIG
+from requests.exceptions import RequestException
 from rich import print as rprint
 from rich.progress import Progress
 
@@ -25,7 +27,7 @@ CONTEXT_SETTINGS = {
 
 def get_pod_names(ctx, param, incomplete):  # pylint: disable=unused-argument
     """Generate list of pods for shell autocompletion"""
-    config_path = os.path.expanduser("~/.auto/config/local.yaml")
+    config_path = platform.auto_dir("config", "local.yaml")
     if not os.path.isfile(config_path):
         return []
 
@@ -45,7 +47,7 @@ def get_namespaces(ctx, param, incomplete):  # pylint: disable=unused-argument
     """Generate list of namespaces for shell autocompletion"""
     try:
         output = utils.run_and_return(
-            "kubectl get ns -o jsonpath='{.items[*].metadata.name}'"
+            ["kubectl", "get", "ns", "-o", "jsonpath={.items[*].metadata.name}"]
         )
         if not output:
             return []
@@ -71,41 +73,174 @@ def images(self):  # pylint: disable=unused-argument
     registry.list_cluster_images()
 
 
+# Subcommands that take a <pod> argument (used by the PowerShell completer to
+# offer pod-name completion after them).
+_POD_SUBCOMMANDS = "start stop restart logs seed init migrate rollback tag upgrade"
+
+# Self-contained PowerShell completer. click has no native PowerShell completion,
+# so this Register-ArgumentCompleter completes subcommands at the first position
+# and pod names (read from local.yaml) for the subcommands that take a <pod>.
+# __CMDS__/__PODCMDS__ are filled in by _powershell_completer().
+_PS_COMPLETER_TEMPLATE = r"""Register-ArgumentCompleter -Native -CommandName auto -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    $cmds = '__CMDS__'.Split(' ')
+    $podCmds = '__PODCMDS__'.Split(' ')
+    $typed = @($commandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.Extent.Text })
+    $onSub = ($typed.Count -eq 0) -or ($typed.Count -eq 1 -and $typed[0] -eq $wordToComplete)
+    $results = @()
+    if ($onSub) {
+        $results = $cmds | Where-Object { $_ -like "$wordToComplete*" }
+    } elseif ($podCmds -contains $typed[0]) {
+        $cfg = Join-Path $env:USERPROFILE '.auto\config\local.yaml'
+        if (Test-Path $cfg) {
+            $results = (Get-Content $cfg) | Select-String 'repo:\s*(\S+)' | ForEach-Object {
+                ($_.Matches[0].Groups[1].Value -replace '\.git$', '').Split('/')[-1]
+            } | Where-Object { $_ -like "$wordToComplete*" }
+        }
+    }
+    $results | ForEach-Object {
+        [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+    }
+}"""
+
+
+def _powershell_completer():
+    """Return the PowerShell argument completer for `auto`, with commands filled in."""
+    cmds = " ".join(sorted(auto.commands.keys()))
+    return _PS_COMPLETER_TEMPLATE.replace("__CMDS__", cmds).replace(
+        "__PODCMDS__", _POD_SUBCOMMANDS
+    )
+
+
+_POLICY_FIX_CMD = "Set-ExecutionPolicy -Scope CurrentUser RemoteSigned"
+
+
+def _ensure_powershell_policy():
+    """Make sure the execution policy lets $PROFILE load; offer to fix it if not.
+
+    On Windows the default policy is 'Restricted', which silently skips $PROFILE
+    -- so the completer never registers and Tab just beeps. We ask the user
+    (approval only when actually needed) and, if they agree, set the CurrentUser
+    policy to RemoteSigned (no admin required, reversible).
+    """
+    policy = utils.run_and_return(
+        ["powershell", "-NoProfile", "-Command", "Get-ExecutionPolicy"]
+    ).strip()
+    if policy.lower() not in ("restricted", "allsigned"):
+        return  # already allows local profile scripts
+
+    rprint(
+        f"\n[yellow]Your PowerShell execution policy is [bright_cyan]{policy}[/], "
+        "which blocks profile scripts -- so tab completion won't load.[/]"
+    )
+    if not click.confirm(f"Allow local scripts now? ({_POLICY_FIX_CMD})", default=True):
+        rprint(f"Skipped. Enable it later with:\n  [bright_cyan]{_POLICY_FIX_CMD}[/]")
+        return
+
+    utils.run_and_wait(
+        [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force",
+        ],
+        suppress_error=True,
+    )
+    # Re-check: a group policy could still enforce a stricter setting.
+    new_policy = utils.run_and_return(
+        ["powershell", "-NoProfile", "-Command", "Get-ExecutionPolicy"]
+    ).strip()
+    if new_policy.lower() not in ("restricted", "allsigned"):
+        rprint(
+            f":white_heavy_check_mark: [green]Execution policy is now "
+            f"{new_policy}.[/] Revert anytime with: "
+            "[bright_cyan]Set-ExecutionPolicy -Scope CurrentUser Undefined[/]"
+        )
+    else:
+        rprint(
+            "[red]Could not change it[/] (a group policy may enforce it). "
+            f"Try manually:\n  [bright_cyan]{_POLICY_FIX_CMD}[/]"
+        )
+
+
+def _install_completion(shell, config_file, eval_line, reload_hint):
+    """Install the completion snippet into the shell profile (idempotent)."""
+    if shell == "powershell":
+        # Resolve the real $PROFILE path from PowerShell itself.
+        target = utils.run_and_return(
+            ["powershell", "-NoProfile", "-Command", "$PROFILE"]
+        ) or os.path.expanduser(
+            "~/Documents/PowerShell/Microsoft.PowerShell_profile.ps1"
+        )
+    else:
+        target = os.path.expanduser(config_file)
+
+    marker = "# Autocomplete for auto CLI"
+    already = False
+    if os.path.isfile(target):
+        with open(target, encoding="utf-8") as handle:
+            already = marker in handle.read()
+
+    if already:
+        click.echo(f"Autocomplete is already installed in {target}.")
+    else:
+        os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+        with open(target, "a", encoding="utf-8") as handle:
+            handle.write(f"\n{marker}\n{eval_line}\n")
+        rprint(
+            f":white_heavy_check_mark: [green]Installed auto tab-completion in[/] {target}"
+        )
+
+    rprint(f'Open a NEW terminal (or run "{reload_hint}") to start using it.')
+    if shell == "powershell":
+        _ensure_powershell_policy()
+
+
 @auto.command()
-@click.option("--shell", default="bash", help="Shell type (bash, zsh, or fish).")
+@click.option(
+    "--shell", default=None, help="Shell type (bash, zsh, fish, or powershell)."
+)
 @click.option(
     "--install",
     "do_install",
     is_flag=True,
-    help="Automatically append to shell config (use with caution).",
+    help="Install it automatically into your shell profile.",
 )
 def autocomplete(shell, do_install):
-    """Display instructions to enable shell autocomplete (or install it)."""
+    """Enable tab-completion for auto (use --install to set it up automatically)."""
+    # Default to the native shell for the platform.
+    if not shell:
+        shell = "powershell" if platform.IS_WINDOWS else "bash"
+
     if shell == "bash":
         eval_line = 'eval "$(_AUTO_COMPLETE=bash_source auto)"'
         config_file = "~/.bashrc"
+        reload_hint = f"source {config_file}"
     elif shell == "zsh":
         eval_line = 'eval "$(_AUTO_COMPLETE=zsh_source auto)"'
         config_file = "~/.zshrc"
+        reload_hint = f"source {config_file}"
     elif shell == "fish":
         eval_line = "eval (env _AUTO_COMPLETE=fish_source auto)"
         config_file = "~/.config/fish/config.fish"
+        reload_hint = f"source {config_file}"
+    elif shell == "powershell":
+        eval_line = _powershell_completer()
+        config_file = "$PROFILE"
+        reload_hint = ". $PROFILE"
     else:
         raise click.BadOptionUsage("--shell", f"Unsupported shell: {shell}")
 
-    click.echo(
-        f'To enable {shell} completion for "auto", add this line to {config_file}:'
-    )
-    click.echo(eval_line)
-    click.echo(f'\nThen reload your shell (e.g., "source {config_file}").')
-
     if do_install:
-        click.confirm(
-            f"\nAppend to {config_file} now? (This modifies your file)", abort=True
-        )
-        with open(os.path.expanduser(config_file), "a", encoding="utf-8") as f:
-            f.write(f"\n# Autocomplete for auto CLI\n{eval_line}\n")
-        click.echo(f'Added to {config_file}. Run "source {config_file}" to activate.')
+        _install_completion(shell, config_file, eval_line, reload_hint)
+        return
+
+    # No --install: lead with the one-shot installer, then show the manual line.
+    rprint(f"[bold]To enable {shell} tab-completion for [bright_cyan]auto[/]:[/]\n")
+    rprint("  Run once:  [bright_cyan]auto autocomplete --install[/]")
+    rprint("  Then open a new terminal.\n")
+    rprint(f"[italic]Or add this to {config_file} manually:[/]")
+    click.echo(eval_line)
 
 
 @auto.command()
@@ -269,21 +404,40 @@ def status(self, namespace, all_namespaces, watch):  # pylint: disable=unused-ar
     core.show_status(namespace, all_namespaces, watch)
 
 
+def _latest_release_version():
+    """Return the latest published version tag (without leading 'v'), or ''."""
+    try:
+        resp = requests.get(
+            "https://api.github.com/repos/devocho/auto/releases/latest", timeout=30
+        )
+        resp.raise_for_status()
+        return resp.json()["tag_name"].lstrip("v")
+    except (RequestException, KeyError, ValueError):
+        return ""
+
+
+def _run_self_update():
+    """Kick off the self-update for the current platform."""
+    if platform.IS_WINDOWS:
+        rprint("To update on Windows, run this in PowerShell:")
+        rprint("  [bright_cyan]iwr -useb https://www.devocho.com/auto.ps1 | iex[/]")
+    else:
+        subprocess.run(
+            ["bash", "-c", "curl -fsSL https://www.devocho.com/auto.sh | bash"],
+            check=False,
+        )
+
+
 @auto.command()
 @click.pass_context
 def update(self):  # pylint: disable=unused-argument
     """Update auto CLI to the latest version"""
-    latest_version_json = utils.run_and_return(
-        "curl -s https://api.github.com/repos/devocho/auto/releases/latest"
-    )
-    if latest_version_json:
+    latest_version = _latest_release_version()
+    if latest_version:
         try:
-            latest_version_data = json.loads(latest_version_json)
-            latest_version = latest_version_data["tag_name"].lstrip("v")
             if VERSION == latest_version:
                 rprint(f"[green]Current version ({VERSION}) is already the latest.[/]")
-                rprint(
-                    """
+                rprint("""
 ⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⣶⡋⠉⠙⠒⢤⡀⠀⠀⠀⠀⠀⢠⠖⠉⠉⠙⠢⡄⠀
 ⠀⠀⠀⠀⠀⠀⢀⣼⣟⡒⠒⠀⠀⠀⠀⠀⠙⣆⠀⠀⠀⢠⠃⠀⠀⠀⠀⠀⠹⡄
 ⠀⠀⠀⠀⠀⠀⣼⠷⠖⠀⠀⠀⠀⠀⠀⠀⠀⠘⡆⠀⠀⡇⠀⠀⠀⠀⠀⠀⠀⢷
@@ -298,10 +452,23 @@ def update(self):  # pylint: disable=unused-argument
 ⠀⠀⠀⢰⡯⠭⠹⡟⠿⠧⠷⣄⣀⣟⠛⣦⠔⠋⠛⠛⠋⠙⡆⠀⠀⠀⠀⠀⠀⠀
 ⠀⠀⢸⣿⠭⠉⠀⢠⣤⠀⠀⠀⠘⡷⣵⢻⠀⠀⠀⠀⣼⠀⣇⠀⠀⠀⠀⠀⠀⠀
 ⠀⠀⡇⣿⠍⠁⠀⢸⣗⠂⠀⠀⠀⣧⣿⣼⠀⠀⠀⠀⣯⠀⢸⠀⠀⠀⠀⠀⠀⠀
-    """
-                )
+    """)
                 return
             rprint(f"[steel_blue]Updating from {VERSION} to {latest_version}...[/]")
         except Exception:  # pylint: disable=broad-except
             pass
-    os.system("curl -fsSL https://www.devocho.com/auto.sh | bash")
+
+    _run_self_update()
+
+
+@auto.command()
+@click.option(
+    "--fix",
+    is_flag=True,
+    default=False,
+    help="Attempt to install missing prerequisites (Windows: winget).",
+)
+@click.pass_context
+def doctor(self, fix):  # pylint: disable=unused-argument
+    """Check (and optionally install) the tools auto needs."""
+    utils.run_doctor(fix)

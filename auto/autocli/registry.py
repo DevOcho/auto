@@ -6,7 +6,7 @@ import time
 
 import requests
 import yaml
-from autocli import utils
+from autocli import platform, utils
 from autocli.config import CONFIG, add_images_to_local_config
 from requests.exceptions import RequestException
 from rich import print as rprint
@@ -16,12 +16,21 @@ def start_registry():
     """Start a container registry"""
 
     # Do we have a registry or do we need to create one?
-    bash_command = """/usr/local/bin/k3d registry list"""
-    if not utils.run_and_wait(bash_command, check_result="k3d-registry.local"):
+    if not utils.run_and_wait(
+        [platform.k3d_bin(), "registry", "list"], check_result="k3d-registry.local"
+    ):
         # No registry found so we need to make one
         rprint(" -- Creating new registry")
-        bash_command = """k3d registry create registry.local --port 12345"""
-        utils.run_and_wait(bash_command)
+        utils.run_and_wait(
+            [
+                platform.k3d_bin(),
+                "registry",
+                "create",
+                "registry.local",
+                "--port",
+                "12345",
+            ]
+        )
         rprint("    [steel_blue1]Created Registry")
         time.sleep(3)
 
@@ -129,11 +138,16 @@ def _scan_namespaces_for_images(namespaces):
     """Scan specified namespaces and return a set of all unique images running."""
     found_images = set()
     for ns in namespaces:
-        cmd = (
-            f"kubectl get pods -n {ns} "
-            "-o jsonpath='{range .items[*]}{.spec.containers[*].image} "
-            '{.spec.initContainers[*].image}{"\\n"}{end}\''
-        )
+        cmd = [
+            "kubectl",
+            "get",
+            "pods",
+            "-n",
+            ns,
+            "-o",
+            "jsonpath={range .items[*]}{.spec.containers[*].image} "
+            '{.spec.initContainers[*].image}{"\\n"}{end}',
+        ]
         output = utils.run_and_return(cmd)
         if output:
             for image in output.split():
@@ -253,11 +267,15 @@ def list_cluster_images():
     found_images = set()
 
     # JSONPath to grab both standard containers and init containers
-    cmd = (
-        "kubectl get pods --all-namespaces "
-        "-o jsonpath='{range .items[*]}{.spec.containers[*].image} "
-        '{.spec.initContainers[*].image}{"\\n"}{end}\''
-    )
+    cmd = [
+        "kubectl",
+        "get",
+        "pods",
+        "--all-namespaces",
+        "-o",
+        "jsonpath={range .items[*]}{.spec.containers[*].image} "
+        '{.spec.initContainers[*].image}{"\\n"}{end}',
+    ]
 
     output = utils.run_and_return(cmd)
     if not output:
@@ -311,25 +329,33 @@ def tag_pod_docker_image(pod) -> None:
     if os.path.isdir(os.path.join(code_path, pod)):
         rprint(f"     = Found pod {pod}")
 
-        # Perform docker build
+        # Perform docker build. The build context is forward-slashed via
+        # posix_path so the Windows backslashes aren't eaten when the command is
+        # tokenized for shell-free execution.
         rprint(f"     = Building [bright_cyan]{pod}[/] container")
-        command = f"docker build -t {pod}:{version} {code_path}/{pod}"
-        utils.run_and_wait(command)
+        build_context = platform.posix_path(os.path.join(code_path, pod))
+        utils.run_and_wait(["docker", "build", "-t", f"{pod}:{version}", build_context])
 
         # Tag the image for the registry
         rprint(f"     = Tagging [bright_cyan]{pod}[/] image for the registry")
-        command = f"docker tag {pod}:{version} k3d-registry.local:12345/{pod}:{version}"
-        utils.run_and_wait(command)
+        utils.run_and_wait(
+            [
+                "docker",
+                "tag",
+                f"{pod}:{version}",
+                f"k3d-registry.local:12345/{pod}:{version}",
+            ]
+        )
 
         # Push the image to the registry
         rprint(f"     = Pushing [bright_cyan]{pod}[/] image to the registry")
-        command = f"docker push k3d-registry.local:12345/{pod}:{version}"
-        utils.run_and_wait(command)
+        utils.run_and_wait(
+            ["docker", "push", f"k3d-registry.local:12345/{pod}:{version}"]
+        )
 
         # clean up your mess
         rprint("  -- Cleaning unused images")
-        command = "docker image prune -f"
-        utils.run_and_wait(command)
+        utils.run_and_wait(["docker", "image", "prune", "-f"])
 
     # They tried to build a pod that didn't exist.  Maybe a typo?
     else:

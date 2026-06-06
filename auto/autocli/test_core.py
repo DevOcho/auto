@@ -1,5 +1,6 @@
 """Tests for auto.autocli.core and auto.autocli.registry"""
 
+import os
 from unittest.mock import MagicMock, mock_open, patch
 
 from autocli import core, registry
@@ -32,12 +33,11 @@ def test_start_cluster_new(mock_verify, mock_run, mock_wait):
     mock_wait.return_value = True
 
     def side_effect(*args, **kwargs):
+        # Commands are now argv lists; inspect the tokens for a `k3d cluster list`
         cmd = args[0]
-        if (
-            "cluster list" in cmd
-            and "check_result" in kwargs
-            and kwargs["check_result"] == "k3s-default"
-        ):
+        tokens = cmd if isinstance(cmd, list) else cmd.split()
+        is_cluster_list = "cluster" in tokens and "list" in tokens
+        if is_cluster_list and kwargs.get("check_result") == "k3s-default":
             return False
         return True
 
@@ -93,7 +93,8 @@ def test_stop_pod_kubectl(mock_run, mock_is_file):
     for call in mock_run.call_args_list:
         args, kwargs = call
         if "kubectl delete -f deployment.yaml" in args[0]:
-            assert kwargs.get("cwd") == "/tmp/mypod"
+            # pod_folder is built with os.path.join, so the separator is native
+            assert kwargs.get("cwd") == os.path.join("/tmp", "mypod")
             found = True
             break
     assert found
@@ -108,7 +109,8 @@ def test_start_registry(mock_run):
         registry.start_registry()
 
     assert mock_run.call_count >= 2
-    assert "registry create" in mock_run.call_args[0][0]
+    # The create command is now an argv list: [k3d, registry, create, ...]
+    assert "create" in mock_run.call_args[0][0]
 
 
 @patch("subprocess.run")
@@ -141,20 +143,26 @@ def test_list_cluster_images(mock_local_pods, mock_run_return):
 
 @patch("autocli.utils.run_and_return")
 @patch("autocli.utils.get_full_pod_name")
-@patch("os.system")
+@patch("autocli.core.subprocess.Popen")
 @patch("autocli.utils.run_and_wait")
-def test_output_logs(mock_run_wait, mock_system, mock_name, mock_ip):
-    """Test log output logic"""
+def test_output_logs(mock_run_wait, mock_popen, mock_name, mock_ip):
+    """output_logs streams kubectl logs via Popen and filters noise in Python"""
     mock_run_wait.return_value = False
     mock_name.return_value = "mypod-12345"
     mock_ip.return_value = "10.0.0.5"
 
+    # Fake streamed output: one real line plus health-check lines to filter out
+    fake_proc = MagicMock()
+    fake_proc.stdout = iter(
+        ["app started\n", "kube-probe/1.2 GET /health\n", "10.0.0.5 ping\n"]
+    )
+    mock_popen.return_value.__enter__.return_value = fake_proc
+
     core.output_logs("mypod")
 
-    cmd = mock_system.call_args[0][0]
-    assert "kubectl logs -f mypod-12345" in cmd
-    assert "grep --line-buffered -v" in cmd
-    assert "10.0.0.5" in cmd
+    # Streams via argv (no shell), targeting the resolved pod
+    argv = mock_popen.call_args[0][0]
+    assert argv == ["kubectl", "logs", "-f", "mypod-12345"]
 
 
 # --- bootstrap_cluster: single-pod path ----------------------------------

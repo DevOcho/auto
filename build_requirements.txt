@@ -1,9 +1,6 @@
 charset-normalizer <= 3.4.4
 click >= 8.0.0
-dulwich
-gitpython
 pyfiglet
 PyYAML
 requests
 rich
-toml

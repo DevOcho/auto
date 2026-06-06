@@ -23,30 +23,52 @@ Made with love by [DevOcho - Custom Software](https://www.devocho.com)
 
 ## Install `auto`
 
-`auto` runs on Linux, macOS (Apple Silicon), and Windows via WSL2.
+`auto` runs natively on Linux, macOS (Apple Silicon), and Windows. On Windows it
+runs in PowerShell and drives **Docker Desktop** (which manages the WSL2 backend
+for you) — you do **not** need to run `auto` itself inside WSL.
 
 ### Dependencies
-You will need one of the supported systems with the following pre-installed:
-- Bash or Zsh (`auto` uses POSIX shell commands; macOS defaults to Zsh, most Linux distros default to Bash)
+You will need one of the supported systems with the following pre-installed. On
+Windows, `auto doctor` checks these and the installer can set them up for you
+(`install_auto.ps1 -InstallDeps`):
 - Git
-- Python 3
-- Docker (both the daemon running and the bash command available as a non-root user)
+- Docker
+  - Linux: the daemon running and the `docker` command available as a non-root user
+  - Windows / macOS: Docker Desktop (or Rancher Desktop) installed and running
 - K3D (k3d.io)
 - kubectl
 
 Optional dependencies:
 - Helm (if you plan to use helm charts for deployments)
 - mkcert (if you plan to use HTTPS/SSL locally)
-- libnss3-tools (required by mkcert on Linux)
+- libnss3-tools / nss — provides the NSS `certutil` mkcert needs on Linux/macOS
+  (not required on Windows, where mkcert uses the system certificate store)
 - [smalls](https://github.com/DevOcho/smalls) if working with Python and Peewee
 
 ### Install Commands
 
-You can install it with the following commands:
+**Linux / macOS:**
 
 ```bash
 curl -fsSL https://www.devocho.com/auto.sh | bash
 ```
+
+**Windows (PowerShell):**
+
+```powershell
+iwr -useb https://www.devocho.com/auto.ps1 | iex
+```
+
+To also auto-install the prerequisites (Docker Desktop, k3d, kubectl, helm, git,
+mkcert), download the repo's `install_auto.ps1` and run it with `-InstallDeps`:
+
+```powershell
+.\install_auto.ps1 -InstallDeps
+```
+
+On Windows, `auto` installs to `%USERPROFILE%\.auto` and adds it to your USER
+PATH. Open a new terminal afterwards, then run `auto doctor` to verify the
+prerequisites. We recommend using Windows Terminal for the best output rendering.
 
 NOTE: `auto` is installed for a user and not installed system wide.
 
@@ -78,13 +100,18 @@ auto --version
 
 ## Shell Autocompletion
 
-`auto` supports tab completion for Bash, Zsh, and Fish. This allows you to tab-complete commands, options, and even pod names (e.g., `auto start my<tab>` -> `auto start my-pod`).
+`auto` supports tab completion for Bash, Zsh, Fish, and PowerShell. On Bash/Zsh/Fish
+this can tab-complete commands, options, and even pod names (e.g., `auto start my<tab>`
+-> `auto start my-pod`); on PowerShell it completes the top-level commands.
 
 To see the installation instructions for your shell, run:
 
 ```bash
-auto autocomplete --shell bash  # or zsh, fish
+auto autocomplete --shell bash  # or zsh, fish, powershell
 ```
+
+On Windows, `auto autocomplete` defaults to `--shell powershell` and targets your
+`$PROFILE`.
 
 For automatic installation, you can use the `--install` flag:
 

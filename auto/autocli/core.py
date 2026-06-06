@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 import yaml
-from autocli import registry, services, utils
+from autocli import platform, registry, services, utils
 from autocli.config import CONFIG
 from rich import print as rprint
 from rich.console import Console, Group
@@ -28,7 +28,7 @@ def _setup_https_certificates(pods):
         p_name = repo["repo"].split("/")[-1:][0].replace(".git", "")
         pod_domains.append(f"{p_name}.local")
 
-    cert_path = os.path.expanduser("~") + "/.auto/certs"
+    cert_path = platform.auto_dir("certs")
     key_file, cert_file = utils.create_local_certs(
         cert_path, additional_domains=pod_domains
     )
@@ -36,15 +36,50 @@ def _setup_https_certificates(pods):
     return key_file, cert_file
 
 
+def _apply_tls_secret(key_file, cert_file, namespace):
+    """Create/update the local-tls secret without a shell pipe.
+
+    Renders the secret as YAML with --dry-run, then applies it via stdin so the
+    behaviour matches the old `kubectl create ... -o yaml | kubectl apply -f -`
+    pipeline on every platform (cmd.exe doesn't support that pipe cleanly).
+    """
+    secret_yaml = utils.run_and_return(
+        [
+            "kubectl",
+            "create",
+            "secret",
+            "tls",
+            "local-tls",
+            "--key",
+            platform.posix_path(key_file),
+            "--cert",
+            platform.posix_path(cert_file),
+            "-n",
+            namespace,
+            "--dry-run=client",
+            "-o",
+            "yaml",
+        ]
+    )
+    if not secret_yaml:
+        return
+    subprocess.run(
+        ["kubectl", "apply", "-f", "-"],
+        input=secret_yaml,
+        shell=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+
 def _update_tls_secrets(key_file, cert_file):
     """Update TLS secrets in the running cluster and restart ingress to pick them up"""
     rprint("[deep_sky_blue1]Updating TLS secrets in cluster...[/]")
     for ns in ["default", "ingress-nginx"]:
-        cmd = (
-            f"kubectl create secret tls local-tls --key {key_file} --cert {cert_file} "
-            f"-n {ns} --dry-run=client -o yaml | kubectl apply -f -"
-        )
-        utils.run_and_wait(cmd, capture_output=True)
+        _apply_tls_secret(key_file, cert_file, ns)
     utils.run_and_wait(
         "kubectl rollout restart deployment ingress-nginx-controller -n ingress-nginx",
         capture_output=True,
@@ -63,7 +98,9 @@ def _print_access_hints(pods, use_https):
 
     for repo in pods:
         pod_name = repo["repo"].split("/")[-1:][0].replace(".git", "")
-        if utils.check_host_entry(pod_name):
+        # Access hints are informational: a missing hosts entry should print
+        # guidance, not abort the whole `auto start` after it already succeeded.
+        if utils.check_host_entry(pod_name, exit_auto=False):
             rprint(f"[italic]  {protocol}://{pod_name}.local{port_suffix}/")
 
 
@@ -100,9 +137,22 @@ def _find_pod_entry(pod_name):
 
 def _apply_code_pv_pvc():
     """Apply the shared code PersistentVolume and PersistentVolumeClaim"""
-    user_path = os.path.expanduser("~")
-    utils.run_and_wait(f"kubectl apply -f {user_path}/.auto/k3s/pv.yaml")
-    utils.run_and_wait(f"kubectl apply -f {user_path}/.auto/k3s/pvc.yaml")
+    utils.run_and_wait(
+        [
+            "kubectl",
+            "apply",
+            "-f",
+            platform.posix_path(platform.auto_dir("k3s", "pv.yaml")),
+        ]
+    )
+    utils.run_and_wait(
+        [
+            "kubectl",
+            "apply",
+            "-f",
+            platform.posix_path(platform.auto_dir("k3s", "pvc.yaml")),
+        ]
+    )
 
 
 def _prepare_single_pod(pod, offline):
@@ -284,11 +334,7 @@ def _install_nginx_ingress(use_https, key_file, cert_file):
 
         # Create secrets in default and ingress-nginx namespaces
         for ns in ["default", "ingress-nginx"]:
-            cmd = (
-                f"kubectl create secret tls local-tls --key {key_file} --cert {cert_file} "
-                f"-n {ns} --dry-run=client -o yaml | kubectl apply -f -"
-            )
-            utils.run_and_wait(cmd, capture_output=True)
+            _apply_tls_secret(key_file, cert_file, ns)
 
         # Add default cert arg
         extra_args = "controller.extraArgs.default-ssl-certificate"
@@ -298,19 +344,39 @@ def _install_nginx_ingress(use_https, key_file, cert_file):
     if not utils.run_and_wait(helm_cmd, capture_output=True):
         rprint("     [red]Error installing Nginx Ingress Controller[/red]")
     else:
-        # Explicitly Patch the Deployment to FORCE the argument if Helm missed it
+        # Explicitly Patch the Deployment to FORCE the argument if Helm missed it.
+        # The JSON patch is passed as a single argv element, so no shell quoting
+        # is needed (cmd.exe wouldn't honour the single quotes anyway).
         if use_https:
-            patch_cmd = (
-                "kubectl patch deployment ingress-nginx-controller -n ingress-nginx "
-                '--type=json -p=\'[{"op": "add", "path": '
-                '"/spec/template/spec/containers/0/args/-", '
-                '"value": "--default-ssl-certificate=ingress-nginx/local-tls"}]\''
+            patch_json = (
+                '[{"op": "add", '
+                '"path": "/spec/template/spec/containers/0/args/-", '
+                '"value": "--default-ssl-certificate=ingress-nginx/local-tls"}]'
             )
+            patch_cmd = [
+                "kubectl",
+                "patch",
+                "deployment",
+                "ingress-nginx-controller",
+                "-n",
+                "ingress-nginx",
+                "--type=json",
+                "-p",
+                patch_json,
+            ]
             utils.run_and_wait(patch_cmd, capture_output=True, suppress_error=True)
 
         # Force restart Nginx pods to ensure they pick up the new certificate
         utils.run_and_wait(
-            "kubectl rollout restart deployment ingress-nginx-controller -n ingress-nginx",
+            [
+                "kubectl",
+                "rollout",
+                "restart",
+                "deployment",
+                "ingress-nginx-controller",
+                "-n",
+                "ingress-nginx",
+            ],
             capture_output=True,
         )
 
@@ -322,7 +388,13 @@ def _verify_and_heal_connection():
             "     [yellow]Warning: Cluster connection failed. Refreshing context...[/yellow]"
         )
         utils.run_and_wait(
-            "k3d kubeconfig merge k3s-default --kubeconfig-switch-context"
+            [
+                platform.k3d_bin(),
+                "kubeconfig",
+                "merge",
+                "k3s-default",
+                "--kubeconfig-switch-context",
+            ]
         )
         if not utils.verify_cluster_connection():
             utils.declare_error(
@@ -336,29 +408,28 @@ def start_cluster(progress, task, key_file="", cert_file=""):
 
     # HTTPS Setup
     use_https = CONFIG.get("https", False)
-    load_bal_config = '--api-port 6550 -p "8088:80@loadbalancer"'
-
-    if use_https:
-        load_bal_config = (
-            '--api-port 6550 -p "80:80@loadbalancer" -p "443:443@loadbalancer"'
-        )
 
     # 1. CHECK EXISTING CLUSTER
-    bash_command = """/usr/local/bin/k3d cluster list"""
-    if utils.run_and_wait(bash_command, check_result="k3s-default"):
+    list_cmd = [platform.k3d_bin(), "cluster", "list"]
+    if utils.run_and_wait(list_cmd, check_result="k3s-default"):
         rprint("  -- Found existing cluster")
 
         # Ensure context is current
         utils.run_and_wait(
-            "k3d kubeconfig merge k3s-default --kubeconfig-switch-context",
+            [
+                platform.k3d_bin(),
+                "kubeconfig",
+                "merge",
+                "k3s-default",
+                "--kubeconfig-switch-context",
+            ],
             capture_output=True,
         )
 
         # Is the cluster stopped? (0/1 servers)
-        if utils.run_and_wait(bash_command, check_result="0/1"):
+        if utils.run_and_wait(list_cmd, check_result="0/1"):
             rprint("     = Cluster is stopped. Starting...")
-            bash_command = """k3d cluster start"""
-            if not utils.run_and_wait(bash_command):
+            if not utils.run_and_wait([platform.k3d_bin(), "cluster", "start"]):
                 utils.declare_error("Failed to start existing cluster.")
 
         # Verify we can actually talk to it
@@ -375,29 +446,56 @@ def start_cluster(progress, task, key_file="", cert_file=""):
 
     code_dir = CONFIG["code"]
     extra_args = CONFIG.get("extra-args", "")
-    # I'm opening port 8088 outside the cluster for access to the sites
-    # Ports for databases are dynamically opened when needed by pods
-    bash_command = (
-        f"/usr/local/bin/k3d cluster create "
-        f"--volume {code_dir}:/mnt/code "
-        f"--registry-use k3d-registry.local:12345 "
-        f"--registry-config ~/.auto/k3s/registries.yaml "
-        f"{load_bal_config} "
-        f'--k3s-arg "--disable=traefik@server:0" '
-        f"{extra_args} "
-        # f"--network k3d-vpn-net "
-        f"--agents 1"
-    )
+
+    # Port mappings differ when HTTPS binds 80/443 instead of 8088.
+    if use_https:
+        load_bal = ["-p", "80:80@loadbalancer", "-p", "443:443@loadbalancer"]
+    else:
+        load_bal = ["-p", "8088:80@loadbalancer"]
+
+    # Build the create command as an explicit argv list so the --volume source
+    # and --registry-config paths and the quoted args need no shell quoting. The
+    # --volume source is forward-slashed (to_mount_path) so a Windows drive-letter
+    # colon is never mistaken for k3d's source:dest separator.
+    # I'm opening port 8088 outside the cluster for access to the sites; ports for
+    # databases are dynamically opened when needed by pods.
+    create_cmd = [
+        platform.k3d_bin(),
+        "cluster",
+        "create",
+        "--api-port",
+        "6550",
+        "--volume",
+        f"{platform.to_mount_path(code_dir)}:/mnt/code",
+        "--registry-use",
+        "k3d-registry.local:12345",
+        "--registry-config",
+        platform.posix_path(platform.auto_dir("k3s", "registries.yaml")),
+        *load_bal,
+        "--k3s-arg",
+        "--disable=traefik@server:0",
+        *utils.to_argv(extra_args),
+        "--agents",
+        "1",
+    ]
 
     # Attempt creation.
-    # Changed capture_output to True to suppress verbose k3d INFO logs.
+    # capture_output is True to suppress verbose k3d INFO logs.
     # run_and_wait will automatically print the output if the command fails.
-    if not utils.run_and_wait(bash_command, capture_output=True):
+    if not utils.run_and_wait(create_cmd, capture_output=True):
         utils.declare_error("Failed to create k3d cluster. Check logs above.")
         return False
 
     # Ensure context is set correctly immediately after creation
-    utils.run_and_wait("k3d kubeconfig merge k3s-default --kubeconfig-switch-context")
+    utils.run_and_wait(
+        [
+            platform.k3d_bin(),
+            "kubeconfig",
+            "merge",
+            "k3s-default",
+            "--kubeconfig-switch-context",
+        ]
+    )
 
     # Verify connection immediately
     _verify_and_heal_connection()
@@ -415,9 +513,16 @@ def start_cluster(progress, task, key_file="", cert_file=""):
     # Let's remove the completed nginx job containers
     if utils.wait_for_pod_status("ingress-nginx-admission-create", "Complete"):
         progress.update(task, advance=5)
-    bash_command = """kubectl delete pod -n ingress-nginx \
-                      --field-selector=status.phase==Succeeded"""
-    if utils.run_and_wait(bash_command):
+    if utils.run_and_wait(
+        [
+            "kubectl",
+            "delete",
+            "pod",
+            "-n",
+            "ingress-nginx",
+            "--field-selector=status.phase==Succeeded",
+        ]
+    ):
         print("     = Pods finished starting.  Removed completed setup pods.")
 
     return True
@@ -427,8 +532,7 @@ def stop_cluster(progress, task) -> None:
     """Stop the cluster"""
 
     print("  -- Stopping cluster")
-    bash_command = """/usr/local/bin/k3d cluster stop"""
-    utils.run_and_wait(bash_command)
+    utils.run_and_wait([platform.k3d_bin(), "cluster", "stop"])
     progress.update(task, advance=50)
 
 
@@ -438,7 +542,7 @@ def delete_cluster(progress, task) -> None:
     rprint("  -- Deleting cluster :skull::skull:")
 
     # Explicitly target k3s-default
-    delete_cmd = "/usr/local/bin/k3d cluster delete k3s-default"
+    delete_cmd = [platform.k3d_bin(), "cluster", "delete", "k3s-default"]
 
     # Run delete
     utils.run_and_wait(delete_cmd)
@@ -449,19 +553,23 @@ def delete_cluster(progress, task) -> None:
         try:
             # Check k3d list
             k3d_result = subprocess.run(
-                "/usr/local/bin/k3d cluster list",
-                shell=True,
+                [platform.k3d_bin(), "cluster", "list"],
+                shell=False,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
 
             # Check docker containers (source of truth)
             docker_result = subprocess.run(
-                "docker ps -a",
-                shell=True,
+                [platform.docker_bin(), "ps", "-a"],
+                shell=False,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
 
@@ -561,32 +669,59 @@ def _recover_pvc_conflict(pod_name):
     rprint("       [italic]Attempting to clean up previous deployment states...[/]")
 
     # 1. Delete the deployment to release any locks
-    utils.run_and_wait(f"kubectl delete deployment {pod_name} --ignore-not-found=true")
+    utils.run_and_wait(
+        ["kubectl", "delete", "deployment", pod_name, "--ignore-not-found=true"]
+    )
 
     # 2. Check if the 'code' PVC is currently stuck in Terminating from a past bug.
     # If it is, we need to unstick it, delete the PV claimRef, and recreate them.
     pvc_status = utils.run_and_return(
-        "kubectl get pvc code -o jsonpath='{.metadata.deletionTimestamp}'"
+        [
+            "kubectl",
+            "get",
+            "pvc",
+            "code",
+            "-o",
+            "jsonpath={.metadata.deletionTimestamp}",
+        ]
     )
     if pvc_status:  # It has a deletion timestamp, meaning it's Terminating
         rprint("       [yellow]Found stuck 'code' PVC. Repairing shared volumes...[/]")
         utils.run_and_wait(
-            'kubectl patch pvc code -p \'{"metadata":{"finalizers":null}}\'',
+            [
+                "kubectl",
+                "patch",
+                "pvc",
+                "code",
+                "-p",
+                '{"metadata":{"finalizers":null}}',
+            ],
             suppress_error=True,
         )
         utils.run_and_wait(
-            'kubectl patch pv code -p \'{"spec":{"claimRef":null}}\'',
+            ["kubectl", "patch", "pv", "code", "-p", '{"spec":{"claimRef":null}}'],
             suppress_error=True,
         )
         time.sleep(2)
 
     # 3. Always ensure the global PV and PVC are correctly applied
-    user_path = os.path.expanduser("~")
     utils.run_and_wait(
-        f"kubectl apply -f {user_path}/.auto/k3s/pv.yaml", suppress_error=True
+        [
+            "kubectl",
+            "apply",
+            "-f",
+            platform.posix_path(platform.auto_dir("k3s", "pv.yaml")),
+        ],
+        suppress_error=True,
     )
     utils.run_and_wait(
-        f"kubectl apply -f {user_path}/.auto/k3s/pvc.yaml", suppress_error=True
+        [
+            "kubectl",
+            "apply",
+            "-f",
+            platform.posix_path(platform.auto_dir("k3s", "pvc.yaml")),
+        ],
+        suppress_error=True,
     )
 
 
@@ -603,7 +738,11 @@ def _build_install_command(pod_config, pod_name, code_dir):
     if re.search("helm", base_cmd):
         is_helm = True
         desc = pod_config.get("desc", "")
-        helm_path = f"{code_dir}/{pod_name}/.auto/helm"
+        # Forward-slash the helm chart path so it survives POSIX tokenization in
+        # the exec layer on Windows (a backslash would be eaten as an escape).
+        helm_path = platform.posix_path(
+            os.path.join(code_dir, pod_name, ".auto", "helm")
+        )
 
         # Construct helm command
         command = f'{base_cmd} {cmd_args} --description "{desc}" {release_name} {helm_path}'.strip()
@@ -711,8 +850,7 @@ def output_logs(pod):
     """Output the logs for a pod via kubctl"""
 
     # Is the cluster running or stopped?
-    bash_command = """/usr/local/bin/k3d cluster list"""
-    if utils.run_and_wait(bash_command, check_result="0/1"):
+    if utils.run_and_wait([platform.k3d_bin(), "cluster", "list"], check_result="0/1"):
         rprint("[red]ERROR: Development cluster is not running!")
         return
 
@@ -723,31 +861,44 @@ def output_logs(pod):
 
     # Dynamically find the Node IP (often the source of the health check)
     node_ip = utils.run_and_return(
-        "kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"InternalIP\")].address}'"
+        [
+            "kubectl",
+            "get",
+            "nodes",
+            "-o",
+            'jsonpath={.items[0].status.addresses[?(@.type=="InternalIP")].address}',
+        ]
     )
 
     rprint(f"Printing logs for {pod_name}")
     rprint("[italic]Filtering out health checks (kube-probe, node-ip, 10.42.x.1)...[/]")
     rprint("[steel_blue]Press ^C to exit")
 
-    # Build the filter command
-    # 1. --line-buffered removes any lag issue (grep usually buffers heavily on pipes)
-    # 2. -v "kube-probe" filters standard HTTP health checks regardless of IP
-    # 3. -v node_ip filters TCP checks coming from the kubelet
-    filters = [
-        'grep --line-buffered -v "kube-probe"',
-        'grep --line-buffered -v "10.42.0.1 "',
-        'grep --line-buffered -v "10.42.1.1 "',
-    ]
-
+    # Substrings to drop from the stream:
+    # - "kube-probe" filters standard HTTP health checks regardless of IP
+    # - the 10.42.x.1 addresses filter TCP checks coming from the kubelet
+    # - node_ip filters TCP checks coming from the node
+    drop_tokens = ["kube-probe", "10.42.0.1 ", "10.42.1.1 "]
     if node_ip:
-        filters.append(f'grep --line-buffered -v "{node_ip}"')
+        drop_tokens.append(node_ip)
 
-    filter_cmd = " | ".join(filters)
-
-    # Run kubectl logs piped through our filters
-    # os.system gives a direct stream without a python buffer
-    os.system(f"kubectl logs -f {pod_name} | {filter_cmd}")
+    # Stream kubectl logs and filter line-by-line in Python (no grep / shell
+    # pipe), which works the same on Linux, macOS and Windows.
+    try:
+        with subprocess.Popen(
+            ["kubectl", "logs", "-f", pod_name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        ) as proc:
+            for line in proc.stdout:
+                if not any(token in line for token in drop_tokens):
+                    print(line, end="", flush=True)
+    except KeyboardInterrupt:
+        pass
 
 
 def verify_dependencies():
@@ -862,17 +1013,14 @@ def install_config_from_repo(repo):
     """Install an auto parent config from a repository"""
 
     # Local vars
-    user_path = os.path.expanduser("~")
+    local_yaml = platform.auto_dir("config", "local.yaml")
 
     # Tell the user
     rprint(f"Installing Parent Config: [bright_cyan]{repo}[/]")
 
     # If there is already a file there let's back it up
-    if os.path.isfile(user_path + "/.auto/config/local.yaml"):
-        shutil.move(
-            user_path + "/.auto/config/local.yaml",
-            user_path + "/.auto/config/local.yaml.bak",
-        )
+    if os.path.isfile(local_yaml):
+        shutil.move(local_yaml, platform.auto_dir("config", "local.yaml.bak"))
 
     # Pull the parent repo
     code_repo = {"repo": repo}
@@ -881,8 +1029,8 @@ def install_config_from_repo(repo):
     # Copy the file to the ~/.auto/config/local.yaml folder
     parent_folder = repo.split("/")[-1:][0].replace(".git", "")
     shutil.copy(
-        CONFIG["code"] + "/" + parent_folder + "/local.yaml",
-        user_path + "/.auto/config/local.yaml",
+        os.path.join(CONFIG["code"], parent_folder, "local.yaml"),
+        local_yaml,
     )
 
 

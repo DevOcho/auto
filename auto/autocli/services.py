@@ -1,21 +1,37 @@
 """System Pods and Database Services Management"""
 
 import concurrent.futures
+import os
 import time
 
-from autocli import utils
+from autocli import platform, utils
 from autocli.config import CONFIG
 from rich import print as rprint
 
 
+def _expand_command(command):
+    """Tokenize a config command and expand ~ / env vars per token.
+
+    The system-pod commands in local.yaml stay human-readable
+    (e.g. ``kubectl apply -f ~/.auto/k3s/mysql/pv.yaml``). We tokenize the
+    original string (forward slashes, no Windows backslashes yet) and then
+    expand ``~`` / ``$VARS`` per token, so the result is a clean argv list that
+    runs without a shell on any platform.
+    """
+    if isinstance(command, (list, tuple)):
+        tokens = [str(part) for part in command]
+    else:
+        tokens = utils.to_argv(command)
+    return [os.path.expandvars(os.path.expanduser(tok)) for tok in tokens]
+
+
 def _run_command_with_retry(command):
     """Helper to run a command with retries"""
+    argv = _expand_command(command)
     for _ in range(10):
         try:
             # Attempt to apply with suppressed errors for cleaner startup logs
-            success = utils.run_and_wait(
-                command, capture_output=True, suppress_error=True
-            )
+            success = utils.run_and_wait(argv, capture_output=True, suppress_error=True)
             if success:
                 break
             time.sleep(2)
@@ -23,7 +39,7 @@ def _run_command_with_retry(command):
             pass
     else:
         # If we exhausted retries, try one last time WITH errors to show user
-        if not utils.run_and_wait(command):
+        if not utils.run_and_wait(argv):
             rprint(f"    [red]Error running {command}")
 
 
@@ -50,7 +66,14 @@ def _expose_system_pod_port(pod_name, mapping):
     # Not in use locally or via k3d, let's inject and bind it dynamically
     rprint(f"  -- Exposing Port {host_port} for {desc}")
     utils.run_and_wait(
-        f"k3d node edit k3d-k3s-default-serverlb --port-add {host_port}:{lb_port}"
+        [
+            platform.k3d_bin(),
+            "node",
+            "edit",
+            "k3d-k3s-default-serverlb",
+            "--port-add",
+            f"{host_port}:{lb_port}",
+        ]
     )
     return True
 

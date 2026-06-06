@@ -5,9 +5,7 @@ charset_normalizer <= 3.4.4
 click == 8.2.0
 codespell == 2.4.1
 coverage
-dulwich
 flake8
-gitpython
 isort
 mccabe
 mkdocs
@@ -22,5 +20,3 @@ pytest
 pytest-cov
 pyupgrade
 rich
-toml == 0.10.2
-types-toml == 0.10.8.20240310

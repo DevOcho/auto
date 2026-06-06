@@ -1,5 +1,7 @@
 """Tests for auto.autocli.utils and auto.autocli.config"""
 
+import json
+import os
 import subprocess
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -18,21 +20,23 @@ def test_load_config(
 ):
     """Test loading configuration safely routes from config.py"""
     mock_yaml.return_value = {"code": "/tmp/code"}
+    # load_config normalizes the code path to native separators
+    expected_code = os.path.normpath("/tmp/code")
 
     # Case 1: Config exists, code dir exists
     mock_isfile.return_value = True
     mock_exists.return_value = True
 
     res_config = config.load_config()
-    assert res_config["code"] == "/tmp/code"
+    assert res_config["code"] == expected_code
 
     # Case 2: Config exists, code folder MISSING (User says YES to create)
     mock_exists.return_value = False
     mock_confirm.return_value = True
 
     res_config = config.load_config()
-    assert res_config["code"] == "/tmp/code"
-    mock_makedirs.assert_called_with("/tmp/code")
+    assert res_config["code"] == expected_code
+    mock_makedirs.assert_called_with(expected_code)
 
     # Case 3: Config does not exist (should trigger create_initial_config)
     mock_isfile.return_value = False
@@ -50,22 +54,60 @@ def test_load_config(
         mock_error.assert_called_with("Code directory missing. Cannot proceed.")
 
 
+@patch("autocli.config.os.makedirs")
+@patch("autocli.config.os.path.isfile", return_value=False)
+def test_create_initial_config_is_valid_yaml(_mock_isfile, _mock_makedirs):
+    """The generated default config must be valid YAML (regression: it used to
+    emit `commands:[` which is invalid) and use a portable `~` code path."""
+    handle = mock_open()
+    with patch("builtins.open", handle):
+        config.create_initial_config()
+
+    written = "".join(call.args[0] for call in handle().write.call_args_list)
+    parsed = yaml.safe_load(written)
+
+    assert parsed["code"] == "~/source/devocho"
+    mysql = parsed["system-pods"][0]["pod"]
+    assert isinstance(mysql["commands"], list)
+    assert mysql["commands"][0].startswith("kubectl apply -f ~/.auto/k3s/mysql/")
+
+
+def test_add_images_to_inline_empty_registry(tmp_path):
+    """Appending images to an inline-empty `registry: []` yields valid YAML.
+
+    Regression: the live `auto start` corrupted local.yaml by writing block
+    `- image:` items beneath `registry: []` (an inline empty list).
+    """
+    cfg = tmp_path / "local.yaml"
+    cfg.write_text(
+        "---\ncode: ~/x\nhttps: false\npods: []\nregistry: []\n", encoding="utf-8"
+    )
+    with patch("autocli.config.platform.auto_dir", return_value=str(cfg)):
+        with patch.dict("autocli.config.CONFIG", {"registry": []}, clear=False):
+            config.add_images_to_local_config(["repo/img:1", "repo/img2:2"])
+
+    parsed = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+    assert [r["image"] for r in parsed["registry"]] == ["repo/img:1", "repo/img2:2"]
+
+
 @patch("subprocess.run")
 def test_run_and_wait_success(mock_run):
     """Test successful command execution"""
-    mock_run.return_value = MagicMock(returncode=0, stdout=b"success\n")
+    mock_run.return_value = MagicMock(returncode=0, stdout="success\n")
 
     result = utils.run_and_wait("echo test")
     assert result == 1
-    mock_run.assert_called_with(
-        "echo test", capture_output=True, shell=True, check=True, cwd=None
-    )
+    # The exec layer now runs shell-free with a tokenized argv list.
+    args, kwargs = mock_run.call_args
+    assert args[0] == ["echo", "test"]
+    assert kwargs["shell"] is False
+    assert kwargs["cwd"] is None
 
 
 @patch("subprocess.run")
 def test_run_and_wait_check_result(mock_run):
     """Test checking output result"""
-    mock_run.return_value = MagicMock(returncode=0, stdout=b"found me\n")
+    mock_run.return_value = MagicMock(returncode=0, stdout="found me\n")
 
     result = utils.run_and_wait("echo test", check_result="found")
     assert result == 1
@@ -77,34 +119,63 @@ def test_run_and_wait_check_result(mock_run):
 @patch("subprocess.run")
 def test_run_and_wait_failure(mock_run):
     """Test command failure handling"""
-    mock_run.side_effect = subprocess.CalledProcessError(1, "cmd", stderr=b"error")
+    mock_run.side_effect = subprocess.CalledProcessError(1, "cmd", stderr="error")
 
     result = utils.run_and_wait("fail_cmd")
     assert result == 0
 
 
+@patch("autocli.utils.platform.which")
 @patch("autocli.utils.run_and_wait")
 @patch("autocli.utils.declare_error")
-def test_check_docker(mock_declare_error, mock_run):
-    """Test docker dependency check"""
-    mock_run.side_effect = [True, True, True]
-    errors = utils.check_docker()
-    assert errors == 0
+def test_check_docker(mock_declare_error, mock_run, mock_which):
+    """Test docker dependency check: client presence + reachable daemon"""
+    # Installed and daemon reachable
+    mock_which.return_value = "/usr/bin/docker"
+    mock_run.return_value = 1
+    assert utils.check_docker() == 0
 
-    mock_run.side_effect = [False, False, False]
-    errors = utils.check_docker()
-    assert errors == 3
+    # Installed but daemon not reachable
+    mock_run.return_value = 0
+    assert utils.check_docker() == 1
     mock_declare_error.assert_called()
 
+    # Not installed -> short-circuits with one error and no daemon check
+    mock_which.return_value = None
+    assert utils.check_docker() == 1
 
-@patch("subprocess.run")
-def test_get_full_pod_name(mock_run):
-    """Test getting full pod name"""
-    mock_run.return_value = MagicMock(stdout=b"mypod-12345\n")
+
+@patch("autocli.utils.run_and_return")
+def test_get_full_pod_name(mock_return):
+    """get_full_pod_name parses kubectl JSON and returns the first Running match"""
+    mock_return.return_value = json.dumps(
+        {
+            "items": [
+                {
+                    "metadata": {"name": "mypod-pending"},
+                    "status": {"phase": "Pending"},
+                },
+                {
+                    "metadata": {"name": "mypod-12345"},
+                    "status": {"phase": "Running"},
+                },
+            ]
+        }
+    )
 
     name = utils.get_full_pod_name("mypod")
     assert name == "mypod-12345"
-    assert "kubectl get pods" in mock_run.call_args[0][0][0]
+    # argv form, no shell, JSON output requested
+    assert mock_return.call_args[0][0] == ["kubectl", "get", "pods", "-o", "json"]
+
+
+@patch("autocli.utils.run_and_return")
+def test_get_full_pod_name_none_running(mock_return):
+    """No Running pod matching the name returns an empty string"""
+    mock_return.return_value = json.dumps(
+        {"items": [{"metadata": {"name": "mypod-x"}, "status": {"phase": "Pending"}}]}
+    )
+    assert utils.get_full_pod_name("mypod") == ""
 
 
 @patch("os.getcwd", return_value="/tmp")
@@ -203,10 +274,11 @@ def test_run_one_shot_pod_command_builds_manifest(
         volumes=[{"name": "code-pvc", "persistentVolumeClaim": {"claimName": "code"}}],
     )
 
-    # apply succeeds; phase query returns Succeeded
+    # apply succeeds; log stream returns; phase query returns Succeeded
     apply_result = MagicMock(returncode=0, stderr="")
+    logs_result = MagicMock(returncode=0)
     phase_result = MagicMock(stdout="Succeeded", returncode=0)
-    mock_subproc.side_effect = [apply_result, phase_result]
+    mock_subproc.side_effect = [apply_result, logs_result, phase_result]
 
     rc = utils.run_one_shot_pod_command(
         "api",
@@ -217,9 +289,9 @@ def test_run_one_shot_pod_command_builds_manifest(
 
     assert rc == 0
 
-    # First subprocess.run is `kubectl apply -f -` with the manifest on stdin
+    # First subprocess.run is `kubectl apply -f -` (argv) with manifest on stdin
     apply_call = mock_subproc.call_args_list[0]
-    assert apply_call.args[0] == "kubectl apply -f -"
+    assert apply_call.args[0] == ["kubectl", "apply", "-f", "-"]
     manifest_yaml = apply_call.kwargs["input"]
 
     manifest = yaml.safe_load(manifest_yaml)
@@ -263,8 +335,9 @@ def test_run_one_shot_pod_command_failed_phase_returns_nonzero(
     """A non-Succeeded terminal phase returns 1."""
     mock_get_dep.return_value = _fake_deployment()
     apply_result = MagicMock(returncode=0, stderr="")
+    logs_result = MagicMock(returncode=0)
     phase_result = MagicMock(stdout="Failed", returncode=0)
-    mock_subproc.side_effect = [apply_result, phase_result]
+    mock_subproc.side_effect = [apply_result, logs_result, phase_result]
 
     rc = utils.run_one_shot_pod_command(
         "api", command_args=["x"], action_label="migrate"
