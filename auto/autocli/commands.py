@@ -405,10 +405,15 @@ def status(self, namespace, all_namespaces, watch):  # pylint: disable=unused-ar
 
 
 def _latest_release_version():
-    """Return the latest published version tag (without leading 'v'), or ''."""
+    """Return the latest published version tag (without leading 'v'), or ''.
+
+    Windows tracks the fork that carries the native port; Linux/macOS track the
+    upstream project.
+    """
+    repo = "Wolflags/auto" if platform.IS_WINDOWS else "devocho/auto"
     try:
         resp = requests.get(
-            "https://api.github.com/repos/devocho/auto/releases/latest", timeout=30
+            f"https://api.github.com/repos/{repo}/releases/latest", timeout=30
         )
         resp.raise_for_status()
         return resp.json()["tag_name"].lstrip("v")
@@ -420,7 +425,11 @@ def _run_self_update():
     """Kick off the self-update for the current platform."""
     if platform.IS_WINDOWS:
         rprint("To update on Windows, run this in PowerShell:")
-        rprint("  [bright_cyan]iwr -useb https://www.devocho.com/auto.ps1 | iex[/]")
+        rprint(
+            "  [bright_cyan]iwr -useb "
+            "https://raw.githubusercontent.com/Wolflags/auto/windows/install_auto.ps1"
+            " | iex[/]"
+        )
     else:
         subprocess.run(
             ["bash", "-c", "curl -fsSL https://www.devocho.com/auto.sh | bash"],

@@ -56,7 +56,7 @@ curl -fsSL https://www.devocho.com/auto.sh | bash
 **Windows (PowerShell):**
 
 ```powershell
-iwr -useb https://www.devocho.com/auto.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/Wolflags/auto/windows/install_auto.ps1 | iex
 ```
 
 To also auto-install the prerequisites (Docker Desktop, k3d, kubectl, helm, git,

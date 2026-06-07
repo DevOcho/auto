@@ -14,7 +14,7 @@
 
 .EXAMPLE
     # Install auto only (no admin needed)
-    iwr -useb https://www.devocho.com/auto.ps1 | iex
+    iwr -useb https://raw.githubusercontent.com/Wolflags/auto/windows/install_auto.ps1 | iex
 
 .EXAMPLE
     # Install prerequisites (Docker Desktop, WSL2, k3d, kubectl, helm, git, mkcert) + auto
@@ -26,7 +26,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Repo = 'devocho/auto'
+$Repo = 'Wolflags/auto'
 $AssetSuffix = 'windows-x86_64'
 $AutoDir = Join-Path $env:USERPROFILE '.auto'
 
