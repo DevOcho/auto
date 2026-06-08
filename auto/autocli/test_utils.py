@@ -188,12 +188,13 @@ def _fake_deployment(image="reg/api:1", env=None, volume_mounts=None, volumes=No
     }
 
 
+@patch("autocli.utils.run_and_return", return_value="Succeeded")
 @patch("autocli.utils.run_and_wait", return_value=1)
 @patch("autocli.utils.os.system", return_value=0)
 @patch("autocli.utils.subprocess.run")
 @patch("autocli.utils.get_deployment_spec")
 def test_run_one_shot_pod_command_builds_manifest(
-    mock_get_dep, mock_subproc, _mock_system, _mock_run_wait
+    mock_get_dep, mock_subproc, _mock_system, _mock_run_wait, _mock_run_return
 ):
     """The generated Pod manifest mirrors the deployment's container spec."""
     mock_get_dep.return_value = _fake_deployment(
@@ -203,10 +204,9 @@ def test_run_one_shot_pod_command_builds_manifest(
         volumes=[{"name": "code-pvc", "persistentVolumeClaim": {"claimName": "code"}}],
     )
 
-    # apply succeeds; phase query returns Succeeded
+    # apply succeeds; run_and_return reports the pod phase as Succeeded
     apply_result = MagicMock(returncode=0, stderr="")
-    phase_result = MagicMock(stdout="Succeeded", returncode=0)
-    mock_subproc.side_effect = [apply_result, phase_result]
+    mock_subproc.side_effect = [apply_result]
 
     rc = utils.run_one_shot_pod_command(
         "api",
@@ -236,6 +236,8 @@ def test_run_one_shot_pod_command_builds_manifest(
     env_pairs = {(e["name"], e.get("value")) for e in container["env"]}
     assert ("DB_HOST", "postgres") in env_pairs
     assert ("SMALLS_ENV", "PROD") in env_pairs
+    # FORCE_COLOR is injected so colored output survives the kubectl logs stream
+    assert ("FORCE_COLOR", "1") in env_pairs
     assert container["volumeMounts"][0]["mountPath"] == "/mnt/code"
     assert spec["volumes"][0]["name"] == "code-pvc"
 
@@ -253,20 +255,96 @@ def test_run_one_shot_pod_command_errors_when_deployment_missing(_mock_get, mock
     assert "Deployment 'api' not found" in msg
 
 
+@patch("autocli.utils.run_and_return", return_value="Failed")
 @patch("autocli.utils.run_and_wait", return_value=1)
 @patch("autocli.utils.os.system", return_value=0)
 @patch("autocli.utils.subprocess.run")
 @patch("autocli.utils.get_deployment_spec")
 def test_run_one_shot_pod_command_failed_phase_returns_nonzero(
-    mock_get_dep, mock_subproc, _mock_system, _mock_run_wait
+    mock_get_dep, mock_subproc, _mock_system, _mock_run_wait, _mock_run_return
 ):
     """A non-Succeeded terminal phase returns 1."""
     mock_get_dep.return_value = _fake_deployment()
     apply_result = MagicMock(returncode=0, stderr="")
-    phase_result = MagicMock(stdout="Failed", returncode=0)
-    mock_subproc.side_effect = [apply_result, phase_result]
+    mock_subproc.side_effect = [apply_result]
 
     rc = utils.run_one_shot_pod_command(
         "api", command_args=["x"], action_label="migrate"
     )
     assert rc == 1
+
+
+@patch("autocli.utils.sleep")
+@patch("autocli.utils.run_and_return")
+@patch("autocli.utils.os.system", return_value=0)
+@patch("autocli.utils.run_and_wait", return_value=1)
+@patch("autocli.utils.subprocess.run")
+@patch("autocli.utils.get_deployment_spec")
+def test_run_one_shot_pod_command_waits_for_container_start(
+    mock_get_dep,
+    mock_subproc,
+    _mock_run_wait,
+    mock_system,
+    mock_run_return,
+    _mock_sleep,
+):
+    """Logs are streamed only after the container leaves ContainerCreating.
+
+    Regression test: PodScheduled fires while the container is still
+    ContainerCreating; reading the phase or streaming logs immediately would
+    misread the transient Pending as a failure. The runner must poll until the
+    pod leaves Pending before streaming.
+    """
+    mock_get_dep.return_value = _fake_deployment()
+    apply_result = MagicMock(returncode=0, stderr="")
+    mock_subproc.side_effect = [apply_result]
+    # Pre-stream poll: Pending (ContainerCreating) then Running -> start
+    # streaming; post-stream poll: Succeeded.
+    mock_run_return.side_effect = ["Pending", "Running", "Succeeded"]
+
+    rc = utils.run_one_shot_pod_command(
+        "api", command_args=["x"], action_label="init"
+    )
+
+    assert rc == 0
+    # Two pre-stream polls (Pending -> Running) plus one post-stream poll.
+    assert mock_run_return.call_count == 3
+    log_cmd = mock_system.call_args[0][0]
+    assert "kubectl logs -f pod/api-init-" in log_cmd
+
+
+@patch("autocli.utils.sleep")
+@patch("autocli.utils.run_and_return")
+@patch("autocli.utils.os.system", return_value=0)
+@patch("autocli.utils.run_and_wait", return_value=1)
+@patch("autocli.utils.subprocess.run")
+@patch("autocli.utils.get_deployment_spec")
+def test_run_one_shot_pod_command_waits_for_terminal_phase(
+    mock_get_dep,
+    mock_subproc,
+    _mock_run_wait,
+    mock_system,
+    mock_run_return,
+    _mock_sleep,
+):
+    """A run is reported successful even if the phase lags behind the logs.
+
+    Regression test: `kubectl logs -f` can return a beat before the pod's
+    phase flips from Running to Succeeded. Reading the phase once, immediately,
+    would misreport a successful run as "ended in phase Running"; the runner
+    must poll until the phase reaches a terminal value.
+    """
+    mock_get_dep.return_value = _fake_deployment()
+    apply_result = MagicMock(returncode=0, stderr="")
+    mock_subproc.side_effect = [apply_result]
+    # Pre-stream poll: Running (start streaming). Post-stream poll: phase still
+    # Running for a moment, then settles on Succeeded.
+    mock_run_return.side_effect = ["Running", "Running", "Succeeded"]
+
+    rc = utils.run_one_shot_pod_command(
+        "api", command_args=["x"], action_label="init"
+    )
+
+    assert rc == 0
+    assert mock_system.called  # logs were streamed before the phase settled
+    assert mock_run_return.call_count == 3
