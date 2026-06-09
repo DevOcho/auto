@@ -8,6 +8,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -1089,15 +1090,33 @@ def run_one_shot_pod_command(
             if phase and phase != "Pending":
                 break
             sleep(0.5)
+        else:
+            rprint(
+                f"  -- [yellow]{action_label} pod for {pod_name} still not "
+                f"running after 120s; streaming anyway[/yellow]"
+            )
 
         # Stream logs until the container exits. os.system avoids buffering
         # so the user sees output in real time.
         rprint(f"  -- Streaming {action_label} output for {pod_name}")
-        os.system(f"kubectl logs -f pod/{runner_name} -n {namespace}")
+        log_status = os.system(f"kubectl logs -f pod/{runner_name} -n {namespace}")
+
+        # If the user Ctrl-C'd the stream, don't wait for a terminal phase.
+        # os.system ignores SIGINT in the parent, so the only signal is the
+        # child's exit status: killed by SIGINT, or exit code 130 (128+SIGINT).
+        if os.WIFSIGNALED(log_status):
+            interrupted = os.WTERMSIG(log_status) == signal.SIGINT
+        else:
+            interrupted = os.WEXITSTATUS(log_status) == 130
+        if interrupted:
+            rprint(f"  -- [yellow]{action_label} for {pod_name} interrupted[/yellow]")
+            return 1
 
         for _ in range(60):  # up to ~30s at 0.5s per cycle
             phase = run_and_return(phase_cmd).strip().strip("'")
             if phase in ("Succeeded", "Failed"):
+                break
+            if not phase:  # pod deleted/evicted or kubectl error — stop waiting
                 break
             sleep(0.5)
 

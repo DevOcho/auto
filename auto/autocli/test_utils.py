@@ -1,5 +1,6 @@
 """Tests for auto.autocli.utils and auto.autocli.config"""
 
+import signal
 import subprocess
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -348,3 +349,71 @@ def test_run_one_shot_pod_command_waits_for_terminal_phase(
     assert rc == 0
     assert mock_system.called  # logs were streamed before the phase settled
     assert mock_run_return.call_count == 3
+
+
+@patch("autocli.utils.sleep")
+@patch("autocli.utils.run_and_return")
+@patch("autocli.utils.os.system", return_value=0)
+@patch("autocli.utils.run_and_wait", return_value=1)
+@patch("autocli.utils.subprocess.run")
+@patch("autocli.utils.get_deployment_spec")
+def test_run_one_shot_pod_command_stops_when_pod_vanishes(
+    mock_get_dep,
+    mock_subproc,
+    _mock_run_wait,
+    _mock_system,
+    mock_run_return,
+    _mock_sleep,
+):
+    """A vanished pod stops the poll instead of burning the full window.
+
+    Regression test: if the pod is deleted/evicted (or kubectl errors) after the
+    log stream ends, the phase query returns "". Without an early exit the runner
+    would spin the full ~30s window before reporting "ended in phase unknown".
+    """
+    mock_get_dep.return_value = _fake_deployment()
+    mock_subproc.side_effect = [MagicMock(returncode=0, stderr="")]
+    # Pre-stream poll: Running (start streaming). Post-stream poll: empty (gone).
+    mock_run_return.side_effect = ["Running", ""]
+
+    rc = utils.run_one_shot_pod_command(
+        "api", command_args=["x"], action_label="init"
+    )
+
+    assert rc == 1
+    # One pre-stream poll plus a single post-stream poll — no 60-iteration spin.
+    assert mock_run_return.call_count == 2
+
+
+@patch("autocli.utils.sleep")
+@patch("autocli.utils.run_and_return")
+@patch("autocli.utils.os.system")
+@patch("autocli.utils.run_and_wait", return_value=1)
+@patch("autocli.utils.subprocess.run")
+@patch("autocli.utils.get_deployment_spec")
+def test_run_one_shot_pod_command_stops_on_interrupt(
+    mock_get_dep,
+    mock_subproc,
+    _mock_run_wait,
+    mock_system,
+    mock_run_return,
+    _mock_sleep,
+):
+    """Ctrl-C on the log stream exits immediately without polling the phase.
+
+    Regression test: when the user interrupts `kubectl logs -f`, os.system reports
+    the child as killed by SIGINT. The runner must stop right away instead of
+    waiting ~30s for a terminal phase that will never come.
+    """
+    mock_get_dep.return_value = _fake_deployment()
+    mock_subproc.side_effect = [MagicMock(returncode=0, stderr="")]
+    # os.system status 2 == killed by signal 2 (SIGINT), no core dump.
+    mock_system.return_value = signal.SIGINT
+    mock_run_return.side_effect = ["Running"]  # only the pre-stream poll runs
+
+    rc = utils.run_one_shot_pod_command(
+        "api", command_args=["x"], action_label="init"
+    )
+
+    assert rc == 1
+    assert mock_run_return.call_count == 1  # no post-stream phase polling
