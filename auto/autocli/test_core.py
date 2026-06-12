@@ -141,12 +141,20 @@ def test_list_cluster_images(mock_local_pods, mock_run_return):
         assert mock_run_return.called
 
 
+@patch("autocli.utils.get_cluster_status")
 @patch("autocli.utils.run_and_return")
 @patch("autocli.utils.get_full_pod_name")
 @patch("os.system")
 @patch("autocli.utils.run_and_wait")
-def test_output_logs(mock_run_wait, mock_system, mock_name, mock_ip):
+def test_output_logs(
+    mock_run_wait,
+    mock_system,
+    mock_name,
+    mock_ip,
+    mock_cluster_status,
+):
     """Test log output logic"""
+    mock_cluster_status.return_value = ("Running", "green")
     mock_run_wait.return_value = False
     mock_name.return_value = "mypod-12345"
     mock_ip.return_value = "10.0.0.5"
@@ -157,6 +165,30 @@ def test_output_logs(mock_run_wait, mock_system, mock_name, mock_ip):
     assert "kubectl logs -f mypod-12345" in cmd
     assert "grep --line-buffered -v" in cmd
     assert "10.0.0.5" in cmd
+
+
+@patch("autocli.utils.declare_error")
+@patch("autocli.utils.get_cluster_status")
+@patch("autocli.utils.get_full_pod_name")
+@patch("os.system")
+@patch("autocli.utils.run_and_wait")
+def test_output_logs_cluster_down_missing_pod(
+    mock_run_wait,
+    mock_system,
+    mock_get_name,
+    mock_cluster_status,
+    mock_declare,
+):
+    """Test output_logs reports missing pod even when cluster is down"""
+    mock_cluster_status.return_value = ("Stopped", "red")
+    mock_get_name.return_value = ""
+
+    core.output_logs("blabla")
+
+    mock_declare.assert_called_once()
+    assert "Pod not found: blabla" in mock_declare.call_args[0][0]
+    assert "Development cluster is not running." in mock_declare.call_args[0][0]
+    assert not mock_system.called
 
 
 # --- bootstrap_cluster: single-pod path ----------------------------------

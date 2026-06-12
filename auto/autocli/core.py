@@ -9,13 +9,14 @@ import time
 from pathlib import Path
 
 import yaml
-from autocli import registry, services, utils
-from autocli.config import CONFIG
 from rich import print as rprint
 from rich.console import Console, Group
 from rich.live import Live
 from rich.progress import Progress
 from rich.text import Text
+
+from autocli import registry, services, utils
+from autocli.config import CONFIG
 
 
 def _setup_https_certificates(pods):
@@ -789,16 +790,17 @@ def install_pods_in_cluster() -> None:
 def output_logs(pod):
     """Output the logs for a pod via kubctl"""
 
+    pod_name = utils.get_full_pod_name(pod, only_running=False)
     # Is the cluster running or stopped?
-    bash_command = """/usr/local/bin/k3d cluster list"""
-    if utils.run_and_wait(bash_command, check_result="0/1"):
-        rprint("[red]ERROR: Development cluster is not running!")
-        return
-
-    pod_name = utils.get_full_pod_name(pod)
-
+    cluster_status, _ = utils.get_cluster_status()
+    error_msg = ""
     if not pod_name:
-        utils.declare_error(f"Pod not found: {pod}")
+        error_msg += f"Pod not found: {pod}"
+    if cluster_status != "Running":
+        error_msg += "\nDevelopment cluster is not running."
+    if error_msg:
+        utils.declare_error(error_msg)
+        return
 
     # Dynamically find the Node IP (often the source of the health check)
     node_ip = utils.run_and_return(
@@ -827,6 +829,11 @@ def output_logs(pod):
     # Run kubectl logs piped through our filters
     # os.system gives a direct stream without a python buffer
     os.system(f"kubectl logs -f {pod_name} | {filter_cmd}")
+
+    # Print a message for crashed or non running pod states
+    pod_status = utils.get_pod_status(pod_name)
+    if pod_status != "Running":
+        rprint(f"  -- [red]Pod status: {pod_status}.[/red]")
 
 
 def verify_dependencies():

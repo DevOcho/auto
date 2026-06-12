@@ -326,10 +326,13 @@ def create_postgres_database(database, retries=0):
             rprint(f"  [red]FAILED: Could not create database[/] {database}")
 
 
-def get_full_pod_name(pod) -> str:
+def get_full_pod_name(pod, only_running=True) -> str:
     """Get the full name of the pod for a k3s pod by application name"""
 
-    cmd = f"kubectl get pods | grep {pod} " + "| grep Running | awk 'NR==1{{print $1}}'"
+    if only_running:
+        cmd = f"kubectl get pods | grep {pod} " + "| grep Running | awk 'NR==1{{print $1}}'"
+    else:
+        cmd = f"kubectl get pods | grep {pod} " + "| awk 'NR==1{{print $1}}'"
 
     # Make this command safe to run
     cmd = shlex.quote(cmd)
@@ -766,9 +769,10 @@ def get_cluster_status():
     style = "red"
 
     # Check if k3d is even installed and lists the cluster
-    if run_and_wait("k3d cluster list", check_result="NAME"):
+    # suppress_error=True prevents Docker daemon errors when cluster is simply stopped
+    if run_and_wait("k3d cluster list", check_result="NAME", suppress_error=True):
         # Check if running (1/1 servers running)
-        if run_and_wait("k3d cluster list", check_result="1/1"):
+        if run_and_wait("k3d cluster list", check_result="1/1", suppress_error=True):
             status = "Running"
             style = "green"
     return status, style
@@ -1136,3 +1140,28 @@ def run_one_shot_pod_command(
             capture_output=True,
             suppress_error=True,
         )
+
+
+def get_pod_status(pod):
+    """Extracts the Status column of a specific pod, in any phase
+    (Pending, Running, Succeeded, Failed, Unknown) or any other error
+    states
+
+    Args:
+        pod (str): The FULL name of the pod to check
+    Returns: 
+        status (str): Pod status (Running | Error | CrashLoopBackOff | etc)
+    Raises:
+        None: Returns None if the pod is not found or if there is an error running the command
+    """
+    if not pod:
+        return None
+
+    cmd = f"kubectl get pod {pod} --no-headers | awk '{{print $3}}'"
+    # Run the command and return the raw STATUS column kubectl shows
+    status = run_and_return(cmd)
+
+    if not status:
+        return None
+    # Take the first line of output and strip whitespace to get the status
+    return status.splitlines()[0].strip()

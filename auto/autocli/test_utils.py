@@ -100,12 +100,20 @@ def test_check_docker(mock_declare_error, mock_run):
 
 @patch("subprocess.run")
 def test_get_full_pod_name(mock_run):
-    """Test getting full pod name"""
+    """Test getting full pod name with only_running filter"""
     mock_run.return_value = MagicMock(stdout=b"mypod-12345\n")
 
+    # Case 1: Default (only_running=True)
     name = utils.get_full_pod_name("mypod")
     assert name == "mypod-12345"
-    assert "kubectl get pods" in mock_run.call_args[0][0][0]
+    cmd = mock_run.call_args[0][0][0]
+    assert "kubectl get pods" in cmd
+    assert "grep Running" in cmd
+
+    # Case 2: only_running=False
+    utils.get_full_pod_name("mypod", only_running=False)
+    cmd = mock_run.call_args[0][0][0]
+    assert "grep Running" not in cmd
 
 
 @patch("os.getcwd", return_value="/tmp")
