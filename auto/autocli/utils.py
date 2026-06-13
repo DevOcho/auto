@@ -6,7 +6,6 @@ import configparser
 import os
 import re
 import shlex
-import shutil
 import socket
 import subprocess
 import sys
@@ -458,137 +457,6 @@ def create_minio_bucket(bucket):
         )
 
 
-def check_docker():
-    """Make sure docker exists and the service is running"""
-
-    # Error count
-    errors = 0
-
-    # Verify docker is installed
-    bash_command = """which docker"""
-    if not run_and_wait(bash_command, check_result="docker"):
-        declare_error(
-            """Docker is missing!
-               [yellow]We didn't see docker on your system.  You'll need docker installed to continue""",
-            exit_auto=False,
-        )
-
-        errors += 1
-
-    # Verify docker is running
-    bash_command = """ps aux"""
-    if not run_and_wait(bash_command, check_result="dockerd"):
-        declare_error(
-            """Docker Daemon doesn't appear to be running.
-        Please run the following command:
-          `sudo service docker start`""",
-            exit_auto=False,
-        )
-        errors += 1
-
-    # Verify the `docker` command is available to this user
-    bash_command = """docker ps"""
-    if not run_and_wait(bash_command, check_result="CONTAINER ID"):
-        declare_error(
-            """The `docker` command doesn't appear to be working!
-             Perhaps you need to run the post install steps:
-               https://docs.docker.com/engine/install/linux-postinstall/
-          """,
-            exit_auto=False,
-        )
-        errors += 1
-
-    return errors
-
-
-def check_k8s():
-    """Look for the things necessary to run k3s via k3d"""
-
-    # Error count
-    errors = 0
-
-    # check for the k3d command
-    bash_command = """k3d cluster list"""
-    if not run_and_wait(bash_command, check_result="LOADBALANCER"):
-        declare_error(
-            """The `k3d` command doesn't appear to be installed!
-             Please visit https://k3d.io for installation instructions.
-          """,
-            exit_auto=False,
-        )
-        errors += 1
-
-    # check for the kubectl command
-    bash_command = """kubectl get --help"""
-    if not run_and_wait(bash_command, check_result="Display one or many resources"):
-        declare_error(
-            """The `kubectl` command doesn't appear to be installed!
-             Please install it to continue.
-          """,
-            exit_auto=False,
-        )
-        errors += 1
-
-    return errors
-
-
-def check_helm():
-    """Check for helm — an *optional* dependency.
-
-    Pods deploy via either helm charts or raw kubectl manifests, so helm is
-    only needed by pods that use a chart. A missing helm is therefore a
-    warning, not a fatal error: we let the cluster come up and let the
-    individual helm-based pod install fail loudly later if helm is genuinely
-    required. Always returns 0 so it never blocks startup.
-    """
-
-    # check for the helm command
-    bash_command = """helm version"""
-    if not run_and_wait(bash_command, check_result="clean", suppress_error=True):
-        rprint(
-            "  [yellow]-- Note: `helm` was not found. This is fine unless a pod "
-            "deploys via a helm chart.[/yellow]\n"
-            "  [yellow]   Install it from https://helm.sh/docs/intro/install/ "
-            "if you plan to use helm charts.[/yellow]"
-        )
-
-    # Helm is optional, so its absence never counts as a dependency error.
-    return 0
-
-
-def check_registry_host_entry():
-    """Check that appropriate host entries are made"""
-
-    # Error count
-    errors = 0
-
-    # check for the k3d-registry.local host entry
-    if not check_host_entry("k3d-registry", exit_auto=False):
-        errors += 1
-
-    return errors
-
-
-def check_host_entry(host, exit_auto: bool = True):
-    """Check that a host entry for the pod has been made"""
-
-    # check for the k3d-registry.local host entry
-    bash_command = """cat /etc/hosts"""
-    if not run_and_wait(bash_command, check_result=host):
-        declare_error(
-            f"""No registry entry in /etc/hosts !
-       Please add the following to your /etc/hosts file
-       127.0.0.1      {host}.local
-          """,
-            exit_auto=exit_auto,
-        )
-
-        return False
-
-    # We found the entry so tell them everything is ok
-    return True
-
-
 def pull_repo(repo, code_folder):
     """Pull a code repository to the code folder"""
 
@@ -873,30 +741,6 @@ def build_pod_table(namespace, all_namespaces):
         table.add_row(*row_data)
 
     return table
-
-
-def check_certutil():
-    """Check if libnss3-tools is installed"""
-    if not shutil.which("certutil"):
-        declare_error(
-            "certutil is not installed (required for mkcert).\n"
-            "  Please install it:\n"
-            "  - Ubuntu/Debian: sudo apt install libnss3-tools\n"
-            "  - Fedora: sudo dnf install nss-tools\n"
-            "  - Arch: sudo pacman -S nss"
-        )
-
-
-def check_mkcert():
-    """Check if mkcert is installed"""
-    if not shutil.which("mkcert"):
-        declare_error(
-            "mkcert is not installed. Please install it to use HTTPS.\n"
-            "    See: https://github.com/FiloSottile/mkcert"
-            "Or set `HTTPS: false` in `~/.auto/config/local.yaml`"
-        )
-    # Also check for certutil so we don't fail partially
-    check_certutil()
 
 
 def create_local_certs(cert_path, additional_domains=None):

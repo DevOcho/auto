@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 import yaml
-from autocli import registry, runner, services, utils
+from autocli import checks, registry, runner, services, utils
 from autocli.config import CONFIG
 from rich import print as rprint
 from rich.console import Console, Group
@@ -21,7 +21,7 @@ from rich.text import Text
 def _setup_https_certificates(pods):
     """Helper to setup HTTPS certificates interactively"""
     rprint("[deep_sky_blue1]Setting up HTTPS certificates...[/]")
-    utils.check_mkcert()
+    checks.check_mkcert()
 
     pod_domains = []
     for repo in pods:
@@ -125,7 +125,7 @@ def _print_access_hints(pods, use_https):
 
     for repo in pods:
         pod_name = repo["repo"].split("/")[-1:][0].replace(".git", "")
-        if utils.check_host_entry(pod_name):
+        if checks.check_host_entry(pod_name):
             rprint(f"[italic]  http://{pod_name}.local:8088/")
 
 
@@ -842,17 +842,17 @@ def verify_dependencies():
     errors = 0
 
     # Check for the docker daemon running and command being available
-    errors += utils.check_docker()
+    errors += checks.check_docker()
 
     # Check for k3d and kubectl
-    errors += utils.check_k8s()
+    errors += checks.check_k8s()
 
     # Check for helm — optional, so it warns but never adds to the fatal
     # error count (pods can deploy via raw kubectl manifests instead).
-    utils.check_helm()
+    checks.check_helm()
 
     # Check for hosts entries
-    errors += utils.check_registry_host_entry()
+    errors += checks.check_registry_host_entry()
 
     if errors:
         rprint(f"[red]There were {errors} so we stopped the command[/red]")
@@ -860,7 +860,7 @@ def verify_dependencies():
 
     # If HTTPS is enabled, check for mkcert and certutil
     if CONFIG.get("https", False):
-        utils.check_mkcert()
+        checks.check_mkcert()
 
 
 def show_status(namespace="default", all_namespaces=False, watch=False):
