@@ -98,6 +98,31 @@ def test_check_docker(mock_declare_error, mock_run):
     mock_declare_error.assert_called()
 
 
+@patch("autocli.utils.declare_error")
+@patch("autocli.utils.run_and_wait")
+def test_check_helm_present_is_no_error(mock_run, mock_declare_error):
+    """Helm installed: no warning, no error."""
+    mock_run.return_value = 1  # `helm version` matched "clean"
+    assert utils.check_helm() == 0
+    mock_declare_error.assert_not_called()
+
+
+@patch("autocli.utils.rprint")
+@patch("autocli.utils.declare_error")
+@patch("autocli.utils.run_and_wait")
+def test_check_helm_missing_is_optional(mock_run, mock_declare_error, mock_rprint):
+    """Helm is optional: a missing helm warns but never blocks startup.
+
+    Regression test for #15 — `auto start` must not abort just because helm
+    isn't installed, since pods can deploy via raw kubectl manifests.
+    """
+    mock_run.return_value = 0  # `helm version` failed / not found
+    # Returns 0 (no fatal error) and does NOT route through declare_error.
+    assert utils.check_helm() == 0
+    mock_declare_error.assert_not_called()
+    mock_rprint.assert_called_once()  # a yellow warning was shown instead
+
+
 @patch("subprocess.run")
 def test_get_full_pod_name(mock_run):
     """Test getting full pod name with only_running filter"""
@@ -311,9 +336,7 @@ def test_run_one_shot_pod_command_waits_for_container_start(
     # streaming; post-stream poll: Succeeded.
     mock_run_return.side_effect = ["Pending", "Running", "Succeeded"]
 
-    rc = utils.run_one_shot_pod_command(
-        "api", command_args=["x"], action_label="init"
-    )
+    rc = utils.run_one_shot_pod_command("api", command_args=["x"], action_label="init")
 
     assert rc == 0
     # Two pre-stream polls (Pending -> Running) plus one post-stream poll.
@@ -350,9 +373,7 @@ def test_run_one_shot_pod_command_waits_for_terminal_phase(
     # Running for a moment, then settles on Succeeded.
     mock_run_return.side_effect = ["Running", "Running", "Succeeded"]
 
-    rc = utils.run_one_shot_pod_command(
-        "api", command_args=["x"], action_label="init"
-    )
+    rc = utils.run_one_shot_pod_command("api", command_args=["x"], action_label="init")
 
     assert rc == 0
     assert mock_system.called  # logs were streamed before the phase settled
@@ -384,9 +405,7 @@ def test_run_one_shot_pod_command_stops_when_pod_vanishes(
     # Pre-stream poll: Running (start streaming). Post-stream poll: empty (gone).
     mock_run_return.side_effect = ["Running", ""]
 
-    rc = utils.run_one_shot_pod_command(
-        "api", command_args=["x"], action_label="init"
-    )
+    rc = utils.run_one_shot_pod_command("api", command_args=["x"], action_label="init")
 
     assert rc == 1
     # One pre-stream poll plus a single post-stream poll — no 60-iteration spin.
@@ -419,9 +438,7 @@ def test_run_one_shot_pod_command_stops_on_interrupt(
     mock_system.return_value = signal.SIGINT
     mock_run_return.side_effect = ["Running"]  # only the pre-stream poll runs
 
-    rc = utils.run_one_shot_pod_command(
-        "api", command_args=["x"], action_label="init"
-    )
+    rc = utils.run_one_shot_pod_command("api", command_args=["x"], action_label="init")
 
     assert rc == 1
     assert mock_run_return.call_count == 1  # no post-stream phase polling

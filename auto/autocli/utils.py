@@ -330,7 +330,10 @@ def get_full_pod_name(pod, only_running=True) -> str:
     """Get the full name of the pod for a k3s pod by application name"""
 
     if only_running:
-        cmd = f"kubectl get pods | grep {pod} " + "| grep Running | awk 'NR==1{{print $1}}'"
+        cmd = (
+            f"kubectl get pods | grep {pod} "
+            + "| grep Running | awk 'NR==1{{print $1}}'"
+        )
     else:
         cmd = f"kubectl get pods | grep {pod} " + "| awk 'NR==1{{print $1}}'"
 
@@ -533,23 +536,27 @@ def check_k8s():
 
 
 def check_helm():
-    """Look for the things necessary to run helm"""
+    """Check for helm — an *optional* dependency.
 
-    # Error count
-    errors = 0
+    Pods deploy via either helm charts or raw kubectl manifests, so helm is
+    only needed by pods that use a chart. A missing helm is therefore a
+    warning, not a fatal error: we let the cluster come up and let the
+    individual helm-based pod install fail loudly later if helm is genuinely
+    required. Always returns 0 so it never blocks startup.
+    """
 
     # check for the helm command
     bash_command = """helm version"""
-    if not run_and_wait(bash_command, check_result="clean"):
-        declare_error(
-            """The `helm` command doesn't appear to be installed!
-             Please visit https://helm.sh/docs/intro/install/ for installation instructions.
-          """,
-            exit_auto=False,
+    if not run_and_wait(bash_command, check_result="clean", suppress_error=True):
+        rprint(
+            "  [yellow]-- Note: `helm` was not found. This is fine unless a pod "
+            "deploys via a helm chart.[/yellow]\n"
+            "  [yellow]   Install it from https://helm.sh/docs/intro/install/ "
+            "if you plan to use helm charts.[/yellow]"
         )
-        errors += 1
 
-    return errors
+    # Helm is optional, so its absence never counts as a dependency error.
+    return 0
 
 
 def check_registry_host_entry():
@@ -1014,6 +1021,94 @@ def _build_runner_pod_manifest(
     }
 
 
+def _runner_phase(phase_cmd):
+    """Read a runner pod's phase, normalized (jsonpath wraps it in quotes)."""
+    return run_and_return(phase_cmd).strip().strip("'")
+
+
+def _create_runner_pod(manifest_yaml, runner_name, action_label, namespace):
+    """Apply the runner manifest and wait for it to schedule.
+
+    Returns True once the pod is created and scheduled. On failure it prints
+    diagnostics (the apply error, or a describe dump) and returns False — a
+    short schedule timeout, because if the pod can't even schedule something
+    structural is wrong (missing image, bad envFrom secret, etc.).
+    """
+    result = subprocess.run(
+        "kubectl apply -f -",
+        shell=True,
+        input=manifest_yaml,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        rprint(f"[red]Failed to create {action_label} pod[/red]")
+        print(result.stderr)
+        return False
+
+    sched_cmd = (
+        f"kubectl wait --for=condition=PodScheduled "
+        f"pod/{runner_name} -n {namespace} --timeout=60s"
+    )
+    if not run_and_wait(sched_cmd, capture_output=True, suppress_error=True):
+        rprint(f"[red]{action_label} pod failed to schedule — describe output:[/red]")
+        run_and_wait(
+            f"kubectl describe pod/{runner_name} -n {namespace}",
+            capture_output=False,
+        )
+        return False
+
+    return True
+
+
+def _wait_for_runner_start(phase_cmd, action_label, pod_name):
+    """Block until the runner container starts (leaves Pending) or ~120s passes.
+
+    PodScheduled fires before the image is pulled, so streaming logs too early
+    races the container start and bails with "is waiting to start". We poll the
+    phase and return once it leaves Pending; if it never does, we warn and let
+    the caller stream anyway.
+    """
+    for _ in range(240):  # up to ~120s at 0.5s per cycle
+        phase = _runner_phase(phase_cmd)
+        if phase and phase != "Pending":
+            return
+        sleep(0.5)
+    rprint(
+        f"  -- [yellow]{action_label} pod for {pod_name} still not "
+        f"running after 120s; streaming anyway[/yellow]"
+    )
+
+
+def _wait_for_runner_finish(phase_cmd):
+    """Block until the runner pod reaches a terminal phase or vanishes (~30s).
+
+    `kubectl logs -f` can return a beat before the phase flips off Running, so
+    reading the phase once would misreport a finished run. An empty phase means
+    the pod was deleted/evicted (or kubectl errored) — stop immediately rather
+    than spin the full window. Returns the last phase seen.
+    """
+    phase = ""
+    for _ in range(60):  # up to ~30s at 0.5s per cycle
+        phase = _runner_phase(phase_cmd)
+        if phase in ("Succeeded", "Failed") or not phase:
+            return phase
+        sleep(0.5)
+    return phase
+
+
+def _log_stream_interrupted(log_status):
+    """True if the user Ctrl-C'd the `kubectl logs -f` stream.
+
+    os.system ignores SIGINT in the parent, so the only signal is the child's
+    exit status: killed by SIGINT, or exit code 130 (128+SIGINT).
+    """
+    if os.WIFSIGNALED(log_status):
+        return os.WTERMSIG(log_status) == signal.SIGINT
+    return os.WEXITSTATUS(log_status) == 130
+
+
 def run_one_shot_pod_command(
     pod_name,
     command_args,
@@ -1052,78 +1147,29 @@ def run_one_shot_pod_command(
         namespace,
     )
     manifest_yaml = yaml.safe_dump(pod_manifest)
+    phase_cmd = (
+        f"kubectl get pod/{runner_name} -n {namespace} " "-o jsonpath='{.status.phase}'"
+    )
 
     try:
         rprint(f"  -- Spawning {action_label} pod for {pod_name}")
-        result = subprocess.run(
-            "kubectl apply -f -",
-            shell=True,
-            input=manifest_yaml,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            rprint(f"[red]Failed to create {action_label} pod[/red]")
-            print(result.stderr)
+        if not _create_runner_pod(manifest_yaml, runner_name, action_label, namespace):
             return 1
 
-        # Short timeout — if the migrator can't even schedule, something
-        # structural is wrong (missing image, bad envFrom secret, etc.)
-        sched_cmd = (
-            f"kubectl wait --for=condition=PodScheduled "
-            f"pod/{runner_name} -n {namespace} --timeout=60s"
-        )
-        if not run_and_wait(sched_cmd, capture_output=True, suppress_error=True):
-            rprint(
-                f"[red]{action_label} pod failed to schedule "
-                f"— describe output:[/red]"
-            )
-            run_and_wait(
-                f"kubectl describe pod/{runner_name} -n {namespace}",
-                capture_output=False,
-            )
-            return 1
-
-        phase_cmd = (
-            f"kubectl get pod/{runner_name} -n {namespace} "
-            "-o jsonpath='{.status.phase}'"
-        )
-        for _ in range(240):  # up to ~120s at 0.5s per cycle
-            phase = run_and_return(phase_cmd).strip().strip("'")
-            if phase and phase != "Pending":
-                break
-            sleep(0.5)
-        else:
-            rprint(
-                f"  -- [yellow]{action_label} pod for {pod_name} still not "
-                f"running after 120s; streaming anyway[/yellow]"
-            )
+        _wait_for_runner_start(phase_cmd, action_label, pod_name)
 
         # Stream logs until the container exits. os.system avoids buffering
         # so the user sees output in real time.
         rprint(f"  -- Streaming {action_label} output for {pod_name}")
         log_status = os.system(f"kubectl logs -f pod/{runner_name} -n {namespace}")
 
-        # If the user Ctrl-C'd the stream, don't wait for a terminal phase.
-        # os.system ignores SIGINT in the parent, so the only signal is the
-        # child's exit status: killed by SIGINT, or exit code 130 (128+SIGINT).
-        if os.WIFSIGNALED(log_status):
-            interrupted = os.WTERMSIG(log_status) == signal.SIGINT
-        else:
-            interrupted = os.WEXITSTATUS(log_status) == 130
-        if interrupted:
+        # If the user Ctrl-C'd the stream, don't wait for a terminal phase that
+        # will never come.
+        if _log_stream_interrupted(log_status):
             rprint(f"  -- [yellow]{action_label} for {pod_name} interrupted[/yellow]")
             return 1
 
-        for _ in range(60):  # up to ~30s at 0.5s per cycle
-            phase = run_and_return(phase_cmd).strip().strip("'")
-            if phase in ("Succeeded", "Failed"):
-                break
-            if not phase:  # pod deleted/evicted or kubectl error — stop waiting
-                break
-            sleep(0.5)
-
+        phase = _wait_for_runner_finish(phase_cmd)
         if phase == "Succeeded":
             rprint(f"  -- [green]{action_label} for {pod_name} completed[/green]")
             return 0
@@ -1149,7 +1195,7 @@ def get_pod_status(pod):
 
     Args:
         pod (str): The FULL name of the pod to check
-    Returns: 
+    Returns:
         status (str): Pod status (Running | Error | CrashLoopBackOff | etc)
     Raises:
         None: Returns None if the pod is not found or if there is an error running the command

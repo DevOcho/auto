@@ -9,14 +9,13 @@ import time
 from pathlib import Path
 
 import yaml
+from autocli import registry, services, utils
+from autocli.config import CONFIG
 from rich import print as rprint
 from rich.console import Console, Group
 from rich.live import Live
 from rich.progress import Progress
 from rich.text import Text
-
-from autocli import registry, services, utils
-from autocli.config import CONFIG
 
 
 def _setup_https_certificates(pods):
@@ -848,8 +847,9 @@ def verify_dependencies():
     # Check for k3d and kubectl
     errors += utils.check_k8s()
 
-    # Check for helm
-    errors += utils.check_helm()
+    # Check for helm — optional, so it warns but never adds to the fatal
+    # error count (pods can deploy via raw kubectl manifests instead).
+    utils.check_helm()
 
     # Check for hosts entries
     errors += utils.check_registry_host_entry()
