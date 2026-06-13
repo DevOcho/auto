@@ -1,7 +1,10 @@
 """System Pods and Database Services Management"""
 
 import concurrent.futures
+import shlex
+import subprocess
 import time
+from subprocess import CalledProcessError
 
 from autocli import runner, utils
 from autocli.config import CONFIG
@@ -88,27 +91,27 @@ def install_system_pods():
 
         # MinIO has some extra setup stuff needed to use it
         if pod_name == "minio":
-            utils.setup_minio()
+            setup_minio()
 
 
 def _process_mysql_databases(system_pod):
     """Helper to process MySQL database creation"""
     for database in system_pod.get("databases", []):
-        utils.create_mysql_database(database["name"])
+        create_mysql_database(database["name"])
         rprint(f"      *  Created MySQL database:[bright_cyan]{database['name']}")
 
 
 def _process_minio_buckets(system_pod):
     """Helper to process MinIO bucket creation"""
     for bucket in system_pod.get("buckets", []):
-        utils.create_minio_bucket(bucket["name"])
+        create_minio_bucket(bucket["name"])
         rprint(f"      *  Created MinIO bucket:[bright_cyan]{bucket['name']}")
 
 
 def _process_postgres_databases(system_pod):
     """Helper to process Postgres database creation"""
     for database in system_pod.get("databases", []):
-        utils.create_postgres_database(database["name"])
+        create_postgres_database(database["name"])
         rprint(f"      *  Created Postgres database:[bright_cyan]{database['name']}")
 
 
@@ -163,8 +166,8 @@ def _verify_required_dbs_ready(needs):
     True if all required DB pods are ready (or none were required).
     """
     checks = {
-        "mysql": ("MySQL", utils.wait_for_mysql_socket),
-        "postgres": ("Postgres", utils.wait_for_postgres_socket),
+        "mysql": ("MySQL", wait_for_mysql_socket),
+        "postgres": ("Postgres", wait_for_postgres_socket),
     }
     targets = {name: checks[name] for name in needs if name in checks}
 
@@ -222,12 +225,12 @@ def create_databases_for_pod(pod_name):
 
 def connect_to_mysql() -> None:
     """Connect to the MySQL cluster inside the k3s cluster"""
-    utils.connect_to_db()
+    _connect_to_db()
 
 
 def connect_to_postgres() -> None:
     """Connect to the PostgreSQL cluster inside the k3s cluster"""
-    utils.connect_to_db_postgres()
+    _connect_to_db_postgres()
 
 
 def connect_to_minio() -> None:
@@ -236,7 +239,7 @@ def connect_to_minio() -> None:
     rprint("Press ctrl+c to exit\n")
     rprint("Username: minio")
     rprint("Password: minio123\n")
-    utils.connect_to_minio()
+    _connect_to_minio()
 
 
 def seed_pod(pod):
@@ -263,3 +266,195 @@ def init_pod_db(pod):
     )
     if rc == 0:
         rprint(f"  -- {pod} database initialized")
+
+
+# --- Low-level database / object-store operations -------------------------
+# These exec directly against the system pods (MySQL, Postgres, MinIO). They
+# are idempotent and retry on startup races so the orchestration helpers above
+# can call them freely.
+
+
+def wait_for_mysql_socket(retries=30) -> bool:
+    """Wait for MySQL socket to be available inside the pod"""
+    pod_name = utils.get_full_pod_name("mysql").strip("\n")
+    if not pod_name:
+        return False
+
+    for _ in range(retries):
+        # We use a real query to test connectivity, not just admin ping
+        cmd = f'kubectl exec {pod_name} -- mysql -uroot -ppassword -e "SELECT 1"'
+        try:
+            subprocess.run(cmd, capture_output=True, shell=True, check=True)
+            return True
+        except CalledProcessError:
+            time.sleep(1)
+    return False
+
+
+def wait_for_postgres_socket(retries=30) -> bool:
+    """Wait for Postgres socket to be available inside the pod"""
+    pod_name = utils.get_full_pod_name("postgres").strip("\n")
+    if not pod_name:
+        return False
+
+    for _ in range(retries):
+        # We use a real query to test connectivity
+        cmd = f'kubectl exec {pod_name} -- psql -U root -d postgres -c "SELECT 1"'
+        try:
+            subprocess.run(cmd, capture_output=True, shell=True, check=True)
+            return True
+        except CalledProcessError:
+            time.sleep(1)
+    return False
+
+
+def create_postgres_database(database, retries=0):
+    """Create a database inside postgres"""
+    # We use a quick bash command to see if the DB exists, and create it if it doesn't.
+    # This prevents Postgres from throwing errors on subsequent "auto start" runs.
+    container_cmd = f'sh -c "psql -U root -lqt | grep -qw {database} || createdb -U root {database}"'
+    pod_name = utils.get_full_pod_name("postgres").strip("\n")
+
+    if pod_name:
+        cmd = f"kubectl exec {pod_name} -- {container_cmd}"
+
+        try:
+            # Run the command silently
+            utils.run_silent(cmd)
+        except CalledProcessError:
+            if retries < 10:  # Allow up to 30s for slower startups
+                time.sleep(3)
+                create_postgres_database(database, retries=retries + 1)
+            else:
+                rprint(f"  [red]FAILED: Could not create database[/] {database}")
+
+    else:
+        # If pod_name not found, wait and retry
+        if retries < 10:
+            time.sleep(3)
+            create_postgres_database(database, retries=retries + 1)
+        else:
+            rprint(f"  [red]FAILED: Could not create database[/] {database}")
+
+
+def create_mysql_database(database, retries=0):
+    """Create a database inside mysql"""
+
+    # IF NOT EXISTS prevents a failed retry loop when the database already exists
+    container_cmd = (
+        f'mysql -uroot -ppassword --execute="CREATE DATABASE IF NOT EXISTS {database}"'
+    )
+    pod_name = utils.get_full_pod_name("mysql").strip("\n")
+
+    if pod_name:
+        cmd = f"kubectl exec {pod_name} -- {container_cmd}"
+
+        try:
+            # Run the command silently.
+            # We suppress output to hide "ERROR 2002" messages during startup.
+            utils.run_silent(cmd)
+        except CalledProcessError:
+            if retries < 10:  # Allow up to 30s for slower startups
+                time.sleep(3)
+                create_mysql_database(database, retries=retries + 1)
+            else:
+                rprint(f"  [red]FAILED: Could not create database[/] {database}")
+
+    else:
+        # If pod_name not found, wait and retry
+        if retries < 10:
+            time.sleep(3)
+            create_mysql_database(database, retries=retries + 1)
+        else:
+            rprint(f"  [red]FAILED: Could not create database[/] {database}")
+
+
+def create_minio_bucket(bucket):
+    """Create a bucket in MinIO"""
+
+    pod_name = utils.get_full_pod_name("minio").strip("\n")
+
+    if pod_name:
+        # Batch all three mc commands into a single exec call to avoid subprocess overhead per bucket
+        combined = (
+            f"mc mb --quiet myminio/{bucket} ; "  # disable file list
+            f"mc anonymous --quiet set none myminio/{bucket} && "  # enable full path access
+            f"mc anonymous --quiet set download myminio/{bucket}/*"
+        )
+        cmd = f"kubectl exec {pod_name} -- sh -c {shlex.quote(combined)}"
+        utils.run_silent(cmd, merge_stderr=True)
+
+
+def setup_minio(retries=5):
+    """Setup the credentials and configure and deploy nginx"""
+
+    container_cmds = [
+        "mc alias -q set myminio http://minio.default.svc.cluster.local:9000 minio minio123"
+    ]
+    pod_name = utils.get_full_pod_name("minio").strip("\n")
+
+    if pod_name:
+        # Let's run the commands in the container to setup the access creds
+        for container_cmd in container_cmds:
+            full_cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
+
+            # Run the command silently
+            utils.run_silent(full_cmd, merge_stderr=True)
+
+    else:
+        if retries > 1:
+            time.sleep(3)
+            setup_minio(retries - 1)
+
+
+def _connect_to_db() -> None:
+    """Open an interactive mysql shell inside the MySQL system pod"""
+
+    # The command we will send to the mysql pod
+    container_cmd = "mysql -uroot -ppassword"
+
+    # Determine which pod to exec against and build the command
+    pod_name = utils.get_full_pod_name("mysql").strip("\n")
+    cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
+
+    # Make this command safe to run
+    cmd = shlex.quote(cmd)
+    args = shlex.split(cmd)
+
+    # Run the command and return the output
+    subprocess.run(args, shell=True, check=True)
+
+
+def _connect_to_db_postgres() -> None:
+    """Open an interactive psql shell inside the Postgres system pod"""
+
+    # The command we will send to the postgres pod
+    container_cmd = "psql -U root postgres"
+
+    # Determine which pod to exec against and build the command
+    pod_name = utils.get_full_pod_name("postgres").strip("\n")
+    cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
+
+    # Make this command safe to run
+    cmd = shlex.quote(cmd)
+    args = shlex.split(cmd)
+
+    # Run the command and return the output
+    subprocess.run(args, shell=True, check=True)
+
+
+def _connect_to_minio() -> None:
+    """This opens the port-forward to MinIO to allow dev access"""
+
+    # Determine which pod to exec against and build the command
+    pod_name = utils.get_full_pod_name("minio").strip("\n")
+
+    # The command we are going to run
+    cmd = f"kubectl port-forward {pod_name} 9090:9090"
+
+    # Make this command safe to run
+    cmd = shlex.quote(cmd)
+    args = shlex.split(cmd)
+
+    # Run the command and return the output
+    subprocess.run(args, shell=True, check=True)

@@ -2,10 +2,26 @@
 
 # pylint: disable=protected-access
 
-from unittest.mock import patch
+import subprocess
+from unittest.mock import MagicMock, patch
 
 from autocli import services
 from autocli.config import CONFIG
+
+
+@patch("autocli.utils.get_full_pod_name")
+@patch("subprocess.run")
+def test_create_mysql_database(mock_run, mock_pod_name):
+    """Test database creation with retries"""
+    mock_pod_name.return_value = "mysql-pod"
+
+    services.create_mysql_database("mydb")
+    mock_run.assert_called()
+
+    mock_run.side_effect = [subprocess.CalledProcessError(1, "cmd"), MagicMock()]
+    with patch("time.sleep"):
+        services.create_mysql_database("mydb", retries=0)
+    assert mock_run.call_count == 3
 
 
 @patch("autocli.utils.get_pod_config")
@@ -92,7 +108,7 @@ def test_verify_required_dbs_ready_only_targets_db_pods():
         assert mock_check.call_args[0][0] == "mysql"
 
 
-@patch("autocli.utils.create_minio_bucket")
+@patch("autocli.services.create_minio_bucket")
 def test_process_pod_databases_minio_buckets(mock_create_bucket):
     """_process_pod_databases iterates buckets for minio pods."""
     pod_config = {
@@ -107,7 +123,7 @@ def test_process_pod_databases_minio_buckets(mock_create_bucket):
     assert bucket_names == ["uploads", "thumbs"]
 
 
-@patch("autocli.utils.create_minio_bucket")
+@patch("autocli.services.create_minio_bucket")
 def test_process_pod_databases_skips_skipped_pods(mock_create_bucket):
     """Pods in skipped-system-pods are not processed."""
     pod_config = {

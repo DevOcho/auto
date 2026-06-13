@@ -122,21 +122,6 @@ def test_pull_repo(mock_run, mock_exists, mock_chdir, _mock_getcwd):
     assert "git clone" in mock_run.call_args_list[2][0][0]
 
 
-@patch("autocli.utils.get_full_pod_name")
-@patch("subprocess.run")
-def test_create_mysql_database(mock_run, mock_pod_name):
-    """Test database creation with retries"""
-    mock_pod_name.return_value = "mysql-pod"
-
-    utils.create_mysql_database("mydb")
-    mock_run.assert_called()
-
-    mock_run.side_effect = [subprocess.CalledProcessError(1, "cmd"), MagicMock()]
-    with patch("time.sleep"):
-        utils.create_mysql_database("mydb", retries=0)
-    assert mock_run.call_count == 3
-
-
 @patch("os.path.isfile")
 @patch("builtins.open", new_callable=mock_open, read_data="name: test\n")
 @patch("yaml.safe_load")

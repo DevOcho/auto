@@ -179,6 +179,23 @@ def run_and_return(cmd: str) -> str:
         return ""
 
 
+def run_silent(cmd, merge_stderr=False):
+    """Run a shell command discarding its output, raising on failure.
+
+    The shared "fire it and don't care about output, but blow up if it fails"
+    pattern used by the database/object-store helpers (which retry on the
+    resulting CalledProcessError). ``merge_stderr=True`` routes stderr into the
+    (discarded) stdout, matching callers that previously set stderr=STDOUT.
+    """
+    subprocess.run(
+        cmd,
+        shell=True,
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.STDOUT if merge_stderr else subprocess.DEVNULL,
+    )
+
+
 def run_async(cmd: str) -> bytes:
     """Run a Bash command and keep moving"""
 
@@ -253,75 +270,6 @@ def wait_for_pod_status(podname: str, status: str, max_wait_time=60) -> bool:
     return bool(pod_complete)
 
 
-def wait_for_mysql_socket(retries=30) -> bool:
-    """Wait for MySQL socket to be available inside the pod"""
-    pod_name = get_full_pod_name("mysql").strip("\n")
-    if not pod_name:
-        return False
-
-    for _ in range(retries):
-        # We use a real query to test connectivity, not just admin ping
-        cmd = f'kubectl exec {pod_name} -- mysql -uroot -ppassword -e "SELECT 1"'
-        try:
-            subprocess.run(cmd, capture_output=True, shell=True, check=True)
-            return True
-        except CalledProcessError:
-            sleep(1)
-    return False
-
-
-def wait_for_postgres_socket(retries=30) -> bool:
-    """Wait for Postgres socket to be available inside the pod"""
-    pod_name = get_full_pod_name("postgres").strip("\n")
-    if not pod_name:
-        return False
-
-    for _ in range(retries):
-        # We use a real query to test connectivity
-        cmd = f'kubectl exec {pod_name} -- psql -U root -d postgres -c "SELECT 1"'
-        try:
-            subprocess.run(cmd, capture_output=True, shell=True, check=True)
-            return True
-        except CalledProcessError:
-            sleep(1)
-    return False
-
-
-def create_postgres_database(database, retries=0):
-    """Create a database inside postgres"""
-    # We use a quick bash command to see if the DB exists, and create it if it doesn't.
-    # This prevents Postgres from throwing errors on subsequent "auto start" runs.
-    container_cmd = f'sh -c "psql -U root -lqt | grep -qw {database} || createdb -U root {database}"'
-    pod_name = get_full_pod_name("postgres").strip("\n")
-
-    if pod_name:
-        cmd = f"kubectl exec {pod_name} -- {container_cmd}"
-
-        try:
-            # Run the command silently
-            subprocess.run(
-                cmd,
-                shell=True,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except CalledProcessError:
-            if retries < 10:  # Allow up to 30s for slower startups
-                sleep(3)
-                create_postgres_database(database, retries=retries + 1)
-            else:
-                rprint(f"  [red]FAILED: Could not create database[/] {database}")
-
-    else:
-        # If pod_name not found, wait and retry
-        if retries < 10:
-            sleep(3)
-            create_postgres_database(database, retries=retries + 1)
-        else:
-            rprint(f"  [red]FAILED: Could not create database[/] {database}")
-
-
 def get_full_pod_name(pod, only_running=True) -> str:
     """Get the full name of the pod for a k3s pod by application name"""
 
@@ -342,119 +290,6 @@ def get_full_pod_name(pod, only_running=True) -> str:
 
     # give the people what they want
     return pod_name.stdout.decode().strip("\n")
-
-
-def connect_to_db() -> None:
-    """Get the full name of the pod for a k3s pod by application name"""
-
-    # The command we will send to the mysql pod
-    container_cmd = "mysql -uroot -ppassword"
-
-    # Determine which pod to exec against and build the command
-    pod_name = get_full_pod_name("mysql").strip("\n")
-    cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
-
-    # Make this command safe to run
-    cmd = shlex.quote(cmd)
-    args = shlex.split(cmd)
-
-    # Run the command and return the output
-    subprocess.run(args, shell=True, check=True)
-
-
-def connect_to_db_postgres() -> None:
-    """Get the full name of the pod for a k3s pod by application name"""
-
-    # The command we will send to the mysql pod
-    container_cmd = "psql -U root postgres"
-
-    # Determine which pod to exec against and build the command
-    pod_name = get_full_pod_name("postgres").strip("\n")
-    cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
-
-    # Make this command safe to run
-    cmd = shlex.quote(cmd)
-    args = shlex.split(cmd)
-
-    # Run the command and return the output
-    subprocess.run(args, shell=True, check=True)
-
-
-def connect_to_minio() -> None:
-    """This opens the port-forward to MinIO to allow dev access"""
-
-    # Determine which pod to exec against and build the command
-    pod_name = get_full_pod_name("minio").strip("\n")
-
-    # The command we are going to run
-    cmd = f"kubectl port-forward {pod_name} 9090:9090"
-
-    # Make this command safe to run
-    cmd = shlex.quote(cmd)
-    args = shlex.split(cmd)
-
-    # Run the command and return the output
-    subprocess.run(args, shell=True, check=True)
-
-
-def create_mysql_database(database, retries=0):
-    """Create a database inside mysql"""
-
-    # IF NOT EXISTS prevents a failed retry loop when the database already exists
-    container_cmd = (
-        f'mysql -uroot -ppassword --execute="CREATE DATABASE IF NOT EXISTS {database}"'
-    )
-    pod_name = get_full_pod_name("mysql").strip("\n")
-
-    if pod_name:
-        cmd = f"kubectl exec {pod_name} -- {container_cmd}"
-
-        try:
-            # Run the command silently.
-            # We capture output to suppress "ERROR 2002" messages during startup.
-            subprocess.run(
-                cmd,
-                shell=True,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except CalledProcessError:
-            if retries < 10:  # Allow up to 30s for slower startups
-                sleep(3)
-                create_mysql_database(database, retries=retries + 1)
-            else:
-                rprint(f"  [red]FAILED: Could not create database[/] {database}")
-
-    else:
-        # If pod_name not found, wait and retry
-        if retries < 10:
-            sleep(3)
-            create_mysql_database(database, retries=retries + 1)
-        else:
-            rprint(f"  [red]FAILED: Could not create database[/] {database}")
-
-
-def create_minio_bucket(bucket):
-    """Create a bucket in MinIO"""
-
-    pod_name = get_full_pod_name("minio").strip("\n")
-
-    if pod_name:
-        # Batch all three mc commands into a single exec call to avoid subprocess overhead per bucket
-        combined = (
-            f"mc mb --quiet myminio/{bucket} ; "  # disable file list
-            f"mc anonymous --quiet set none myminio/{bucket} && "  # enable full path access
-            f"mc anonymous --quiet set download myminio/{bucket}/*"
-        )
-        cmd = f"kubectl exec {pod_name} -- sh -c {shlex.quote(combined)}"
-        subprocess.run(
-            cmd,
-            shell=True,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.STDOUT,
-        )
 
 
 def pull_repo(repo, code_folder):
@@ -533,38 +368,6 @@ def get_pod_config(pod):
         config = yaml.safe_load(config_handle)
 
     return config
-
-
-def setup_minio(retries=5):
-    """Setup the credentials and configure and deploy nginx"""
-
-    container_cmds = [
-        "mc alias -q set myminio http://minio.default.svc.cluster.local:9000 minio minio123"
-    ]
-    pod_name = get_full_pod_name("minio").strip("\n")
-
-    if pod_name:
-        # Let's run the commands in the container to setup the access creds
-        for container_cmd in container_cmds:
-            full_cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
-
-            # Make this command safe to run
-            full_cmd = shlex.quote(full_cmd)
-            cmd_with_args = shlex.split(full_cmd)
-
-            # Run the command and return the output
-            subprocess.run(
-                cmd_with_args,
-                shell=True,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.STDOUT,
-            )
-
-    else:
-        if retries > 1:
-            sleep(3)
-            setup_minio(retries - 1)
 
 
 def get_required_system_pods(config):
@@ -759,13 +562,7 @@ def create_local_certs(cert_path, additional_domains=None):
     # Install the local CA
     # Try silently first (success if already installed or no sudo needed)
     try:
-        subprocess.run(
-            "mkcert -install",
-            shell=True,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        run_silent("mkcert -install")
     except CalledProcessError:
         # If silent fail, run interactively (likely needs sudo password)
         rprint("  -- Installing local CA (may prompt for password)")
@@ -780,13 +577,7 @@ def create_local_certs(cert_path, additional_domains=None):
     )
 
     try:
-        subprocess.run(
-            cmd,
-            shell=True,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
+        subprocess.run(cmd, shell=True, check=True, capture_output=True)
     except CalledProcessError as e:
         rprint("[red]Error generating certificates:[/red]")
         print(e.stderr.decode())
