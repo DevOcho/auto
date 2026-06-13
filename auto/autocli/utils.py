@@ -1,7 +1,5 @@
 """Utils for the auto commands"""
 
-# pylint: disable=too-many-lines
-
 import configparser
 import os
 import re
@@ -544,45 +542,6 @@ def build_pod_table(namespace, all_namespaces):
         table.add_row(*row_data)
 
     return table
-
-
-def create_local_certs(cert_path, additional_domains=None):
-    """Create local certificates using mkcert"""
-
-    if additional_domains is None:
-        additional_domains = []
-
-    # Create the directory if it doesn't exist
-    if not os.path.isdir(cert_path):
-        os.makedirs(cert_path)
-
-    key_file = os.path.join(cert_path, "key.pem")
-    cert_file = os.path.join(cert_path, "cert.pem")
-
-    # Install the local CA
-    # Try silently first (success if already installed or no sudo needed)
-    try:
-        run_silent("mkcert -install")
-    except CalledProcessError:
-        # If silent fail, run interactively (likely needs sudo password)
-        rprint("  -- Installing local CA (may prompt for password)")
-        os.system("mkcert -install")
-
-    # Generate the certs
-    # We suppress output here unless it fails
-    domain_args = " ".join(additional_domains)
-    cmd = (
-        f"mkcert -key-file {key_file} -cert-file {cert_file} "
-        f"'*.local' localhost 127.0.0.1 ::1 {domain_args}"
-    )
-
-    try:
-        subprocess.run(cmd, shell=True, check=True, capture_output=True)
-    except CalledProcessError as e:
-        rprint("[red]Error generating certificates:[/red]")
-        print(e.stderr.decode())
-
-    return key_file, cert_file
 
 
 def get_pod_status(pod):
