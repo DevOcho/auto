@@ -3,7 +3,7 @@
 import concurrent.futures
 import time
 
-from autocli import utils
+from autocli import runner, utils
 from autocli.config import CONFIG
 from rich import print as rprint
 
@@ -243,7 +243,7 @@ def seed_pod(pod):
     """Run the seed script in an ephemeral pod that mirrors the deployment"""
     config = utils.get_pod_config(pod)
     seed_command = config["seed-command"]
-    rc = utils.run_one_shot_pod_command(
+    rc = runner.run_one_shot_pod_command(
         pod,
         command_args=[f"/mnt/code/{pod}/{seed_command}"],
         action_label="seed",
@@ -256,7 +256,7 @@ def init_pod_db(pod):
     """Run the initdb script in an ephemeral pod that mirrors the deployment"""
     config = utils.get_pod_config(pod)
     init_command = config["init-command"]
-    rc = utils.run_one_shot_pod_command(
+    rc = runner.run_one_shot_pod_command(
         pod,
         command_args=[f"/mnt/code/{pod}/{init_command}"],
         action_label="init",

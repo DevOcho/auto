@@ -325,7 +325,7 @@ def test_bootstrap_single_pod_dry_run(  # pylint: disable=too-many-arguments
 # --- migrate / rollback ---------------------------------------------------
 
 
-@patch("autocli.utils.run_one_shot_pod_command")
+@patch("autocli.runner.run_one_shot_pod_command")
 def test_migrate_uses_ephemeral_pod(mock_run):
     """migrate should run smalls.py in a one-shot pod, not via kubectl exec."""
     mock_run.return_value = 0

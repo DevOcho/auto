@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 import yaml
-from autocli import registry, services, utils
+from autocli import registry, runner, services, utils
 from autocli.config import CONFIG
 from rich import print as rprint
 from rich.console import Console, Group
@@ -979,7 +979,7 @@ def migrate_with_smalls(pod):
     Running because it depends on schema state — the migrator pod has its
     own lifecycle and exits when smalls.py finishes.
     """
-    return utils.run_one_shot_pod_command(
+    return runner.run_one_shot_pod_command(
         pod,
         command_args=[f"/mnt/code/{pod}/smalls.py", "migrate"],
         action_label="migrate",

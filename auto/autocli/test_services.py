@@ -124,7 +124,7 @@ def test_process_pod_databases_skips_skipped_pods(mock_create_bucket):
 # --- init / seed ----------------------------------------------------------
 
 
-@patch("autocli.utils.run_one_shot_pod_command", return_value=0)
+@patch("autocli.runner.run_one_shot_pod_command", return_value=0)
 @patch("autocli.utils.get_pod_config")
 def test_init_pod_db_uses_ephemeral_pod(mock_get_config, mock_run):
     """init runs the configured init-command in a one-shot pod."""
@@ -139,7 +139,7 @@ def test_init_pod_db_uses_ephemeral_pod(mock_get_config, mock_run):
     assert kwargs["action_label"] == "init"
 
 
-@patch("autocli.utils.run_one_shot_pod_command", return_value=0)
+@patch("autocli.runner.run_one_shot_pod_command", return_value=0)
 @patch("autocli.utils.get_pod_config")
 def test_seed_pod_uses_ephemeral_pod(mock_get_config, mock_run):
     """seed runs the configured seed-command in a one-shot pod."""
