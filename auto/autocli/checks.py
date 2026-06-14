@@ -6,6 +6,8 @@ whether to abort. Split out of utils.py to keep startup preflight logic in one
 place.
 """
 
+import json
+import os
 import shutil
 
 from autocli.utils import declare_error, run_and_wait
@@ -153,6 +155,37 @@ def check_certutil():
             "  - Fedora: sudo dnf install nss-tools\n"
             "  - Arch: sudo pacman -S nss"
         )
+
+
+def check_docker_insecure_registry():
+    """Verify k3d-registry.local:12345 is in Docker's insecure-registries list.
+
+    Docker rejects HTTP pushes to registries not explicitly listed as insecure.
+    k3d's local registry runs over plain HTTP, so it must be whitelisted.
+    Returns 1 if missing, 0 if configured correctly.
+    """
+    registry_host = "k3d-registry.local:12345"
+    daemon_json = "/etc/docker/daemon.json"
+
+    try:
+        if os.path.isfile(daemon_json):
+            with open(daemon_json, encoding="utf-8") as f:
+                config = json.load(f)
+            insecure = config.get("insecure-registries", [])
+            if registry_host in insecure:
+                return 0
+    except (json.JSONDecodeError, OSError):
+        pass
+
+    declare_error(
+        f'Docker is missing "{registry_host}" in insecure-registries!\n'
+        f"  Docker blocks HTTP pushes to registries not listed as insecure.\n"
+        f"  Add the following to {daemon_json} (create it if it does not exist):\n\n"
+        f'  {{\n    "insecure-registries": ["{registry_host}"]\n  }}\n\n'
+        f"  Then restart Docker: sudo systemctl restart docker",
+        exit_auto=False,
+    )
+    return 1
 
 
 def check_mkcert():

@@ -109,7 +109,8 @@ def test_pull_repo(mock_run, mock_exists, mock_chdir, _mock_getcwd):
     repo = {"repo": "git@github.com:org/repo.git", "branch": "main"}
 
     mock_exists.return_value = True
-    mock_run.side_effect = [True, True]
+    # git status + git fetch + git reset --hard FETCH_HEAD
+    mock_run.side_effect = [True, True, True]
 
     utils.pull_repo(repo, "/code")
     assert mock_chdir.call_count >= 2
@@ -119,7 +120,8 @@ def test_pull_repo(mock_run, mock_exists, mock_chdir, _mock_getcwd):
     mock_run.side_effect = [True, True]
 
     utils.pull_repo(repo, "/code")
-    assert "git clone" in mock_run.call_args_list[2][0][0]
+    # index 3 because exists=True path consumed calls 0-2 above
+    assert "git clone" in mock_run.call_args_list[3][0][0]
 
 
 @patch("os.path.isfile")

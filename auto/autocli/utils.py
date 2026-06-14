@@ -314,8 +314,9 @@ def pull_repo(repo, code_folder):
             os.chdir(cwd)
             return
 
-        # `git pull` the repo
-        cmd = f"git pull {repo['repo']}"
+        # Fetch then reset to remote HEAD — avoids divergent-branch failures
+        run_and_wait(f"git fetch {repo['repo']}", capture_output=True)
+        cmd = "git reset --hard FETCH_HEAD"
         if not run_and_wait(cmd):
             rprint(f"[yellow]       :warning: Skipping {repo['repo']}")
 
