@@ -33,8 +33,10 @@ def _print_access_hints(pods, use_https):
 
     for repo in pods:
         pod_name = repo["repo"].split("/")[-1:][0].replace(".git", "")
-        if checks.check_host_entry(pod_name):
+        if checks.check_host_entry(pod_name, exit_auto=False):
             rprint(f"[italic]  http://{pod_name}.local:8088/")
+        else:
+            https._warn_missing_host_entries([f"{pod_name}.local"])
 
 
 def _run_bootstrap_step(msg, success_msg, execute, func=None, **kwargs):

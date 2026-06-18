@@ -59,6 +59,19 @@ def test_refresh_https_noop_without_hosts(mock_discover, mock_certs, mock_update
     mock_update.assert_not_called()
 
 
+@patch("autocli.utils.run_and_wait")
+@patch("autocli.https.rprint")
+@patch("shutil.which", return_value=None)
+def test_install_nginx_ingress_skips_when_helm_absent(mock_which, mock_rprint, mock_run):
+    """When helm is not on PATH, install_nginx_ingress emits a yellow advisory and returns without running any subprocess."""
+    https.install_nginx_ingress(False, None, None)
+
+    mock_run.assert_not_called()
+    advisory_calls = [str(call.args[0]) for call in mock_rprint.call_args_list]
+    assert any("helm not found" in msg for msg in advisory_calls)
+    assert any("[yellow]" in msg for msg in advisory_calls)
+
+
 @patch("autocli.utils.run_and_return")
 def test_warn_missing_host_entries_reports_only_missing(mock_return):
     """Only hosts absent from /etc/hosts are flagged."""
