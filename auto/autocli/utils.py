@@ -314,11 +314,18 @@ def pull_repo(repo, code_folder):
             os.chdir(cwd)
             return
 
-        # Fetch then reset to remote HEAD — avoids divergent-branch failures
+        # Fetch then fast-forward only — never discards local commits.
+        # On divergence (incl. remote force-push), --ff-only fails cleanly
+        # with zero working-tree mutation instead of resetting.
         run_and_wait(f"git fetch {repo['repo']}", capture_output=True)
-        cmd = "git reset --hard FETCH_HEAD"
+        cmd = "git merge --ff-only FETCH_HEAD"
         if not run_and_wait(cmd):
-            rprint(f"[yellow]       :warning: Skipping {repo['repo']}")
+            rprint(
+                f"[yellow]       :warning: {repo['repo']} is out of sync with the remote "
+                "(local commits not on remote) — left untouched"
+            )
+            os.chdir(cwd)
+            return
 
     else:
         try:
