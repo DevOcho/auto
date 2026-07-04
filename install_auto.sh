@@ -87,8 +87,6 @@ if [ -z "${EXTRACTED_DIR}" ]; then
     exit 1
 fi
 
-ls -lah ${TEMP_DIR}
-
 # Clean existing binary to prevent "file busy" lock issues
 echo " - Removing old executable..."
 rm -f ~/.auto/auto
