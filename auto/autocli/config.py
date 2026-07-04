@@ -70,50 +70,46 @@ system-pods:
   - pod:
       name: mysql
       active: false
-      commands:[
-          "kubectl apply -f ~/.auto/k3s/mysql/pv.yaml",
-          "kubectl apply -f ~/.auto/k3s/mysql/pvc.yaml",
-          "kubectl apply -f ~/.auto/k3s/mysql/deployment.yaml",
-          "kubectl apply -f ~/.auto/k3s/mysql/service.yaml",
-          "kubectl apply -f ~/.auto/k3s/mysql/ingress.yaml",
-        ]
+      commands:
+        - "kubectl apply -f ~/.auto/k3s/mysql/pv.yaml"
+        - "kubectl apply -f ~/.auto/k3s/mysql/pvc.yaml"
+        - "kubectl apply -f ~/.auto/k3s/mysql/deployment.yaml"
+        - "kubectl apply -f ~/.auto/k3s/mysql/service.yaml"
+        - "kubectl apply -f ~/.auto/k3s/mysql/ingress.yaml"
       databases:
         - name: portal
   - pod:
       name: postgres
       active: false
-      commands:[
-          "kubectl apply -f ~/.auto/k3s/postgres/configmap.yaml",
-          "kubectl apply -f ~/.auto/k3s/postgres/pv.yaml",
-          "kubectl apply -f ~/.auto/k3s/postgres/pvc.yaml",
-          "kubectl apply -f ~/.auto/k3s/postgres/deployment.yaml",
-          "kubectl apply -f ~/.auto/k3s/postgres/service.yaml",
-          "kubectl apply -f ~/.auto/k3s/postgres/ingress.yaml",
-        ]
+      commands:
+        - "kubectl apply -f ~/.auto/k3s/postgres/configmap.yaml"
+        - "kubectl apply -f ~/.auto/k3s/postgres/pv.yaml"
+        - "kubectl apply -f ~/.auto/k3s/postgres/pvc.yaml"
+        - "kubectl apply -f ~/.auto/k3s/postgres/deployment.yaml"
+        - "kubectl apply -f ~/.auto/k3s/postgres/service.yaml"
+        - "kubectl apply -f ~/.auto/k3s/postgres/ingress.yaml"
       databases:
         - name: portal
   - pod:
       name: minio
       active: false
-      commands:[
-          "kubectl apply -f ~/.auto/k3s/minio/pv.yaml",
-          "kubectl apply -f ~/.auto/k3s/minio/pvc.yaml",
-          "kubectl apply -f ~/.auto/k3s/minio/deployment.yaml",
-          "kubectl apply -f ~/.auto/k3s/minio/service.yaml",
-          "kubectl apply -f ~/.auto/k3s/minio/ingress.yaml",
-        ]
+      commands:
+        - "kubectl apply -f ~/.auto/k3s/minio/pv.yaml"
+        - "kubectl apply -f ~/.auto/k3s/minio/pvc.yaml"
+        - "kubectl apply -f ~/.auto/k3s/minio/deployment.yaml"
+        - "kubectl apply -f ~/.auto/k3s/minio/service.yaml"
+        - "kubectl apply -f ~/.auto/k3s/minio/ingress.yaml"
       databases:
         - name: portal
   - pod:
       name: redis
       active: false
-      commands:[
-          "kubectl apply -f ~/.auto/k3s/redis/pv.yaml",
-          "kubectl apply -f ~/.auto/k3s/redis/pvc.yaml",
-          "kubectl apply -f ~/.auto/k3s/redis/deployment.yaml",
-          "kubectl apply -f ~/.auto/k3s/redis/service.yaml",
-          "kubectl apply -f ~/.auto/k3s/redis/ingress.yaml",
-        ]
+      commands:
+        - "kubectl apply -f ~/.auto/k3s/redis/pv.yaml"
+        - "kubectl apply -f ~/.auto/k3s/redis/pvc.yaml"
+        - "kubectl apply -f ~/.auto/k3s/redis/deployment.yaml"
+        - "kubectl apply -f ~/.auto/k3s/redis/service.yaml"
+        - "kubectl apply -f ~/.auto/k3s/redis/ingress.yaml"
 """
     config_dir = os.path.expanduser("~") + "/.auto/config"
     config_file = config_dir + "/local.yaml"

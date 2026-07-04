@@ -64,6 +64,12 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 # Copy the source tree
 COPY . .
 
+# Provide a minimal valid local.yaml so config.py can load at import time
+# without prompting for input or failing on a missing code directory.
+RUN mkdir -p /root/.auto/config /tmp/auto-code && \
+    printf 'code: /tmp/auto-code\nhttps: false\npods: []\nsystem-pods: []\n' \
+      > /root/.auto/config/local.yaml
+
 # autocli lives under auto/, so add that directory to PYTHONPATH so that
 # `from autocli import ...` resolves correctly when pytest runs from the repo root.
 ENV PYTHONPATH=/app/auto
