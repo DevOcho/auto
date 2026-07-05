@@ -62,25 +62,52 @@ if [ -f ~/.auto/config/local.yaml ]; then
     cp -f ~/.auto/config/local.yaml ${TEMP_DIR}/local.yaml.bak
 fi
 
-# Download the latest release tar.gz from GitHub
-echo " - Downloading latest release from GitHub..."
-LATEST_URL="https://api.github.com/repos/${REPO}/releases/latest"
-ASSET_URL=$(curl -sL "${LATEST_URL}" \
-    | grep "browser_download_url" \
+# Install the exact release pinned by AUTO_VERSION (e.g. AUTO_VERSION=0.7.1), or the latest
+AUTO_VERSION="${AUTO_VERSION:-}"
+if [ -n "${AUTO_VERSION}" ]; then
+    AUTO_VERSION="${AUTO_VERSION#v}"
+    if ! printf '%s' "${AUTO_VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        echo "Error: invalid AUTO_VERSION '${AUTO_VERSION}' (expected X.Y.Z)."
+        exit 1
+    fi
+    RELEASE_URL="https://api.github.com/repos/${REPO}/releases/tags/v${AUTO_VERSION}"
+    echo " - Downloading auto v${AUTO_VERSION} from GitHub..."
+else
+    RELEASE_URL="https://api.github.com/repos/${REPO}/releases/latest"
+    echo " - Downloading latest release from GitHub..."
+fi
+
+# Fetch the release metadata (the HTTP status tells us if a pinned version is missing)
+RELEASE_JSON="${TEMP_DIR}/release.json"
+HTTP_STATUS=$(curl -sL -w '%{http_code}' -o "${RELEASE_JSON}" "${RELEASE_URL}")
+if [ "${HTTP_STATUS}" != "200" ]; then
+    case "${HTTP_STATUS}" in
+        404) echo "Error: auto v${AUTO_VERSION} not found (no such release)." ;;
+        403|429) echo "Error: GitHub API rate limit reached (HTTP ${HTTP_STATUS}); try again later." ;;
+        *) echo "Error: failed to fetch release metadata (HTTP ${HTTP_STATUS})." ;;
+    esac
+    exit 1
+fi
+
+ASSET_URL=$(grep "browser_download_url" "${RELEASE_JSON}" \
     | grep "auto-.*${ASSET_SUFFIX}\.tar\.gz" \
     | cut -d '"' -f 4)
 if [ -z "${ASSET_URL}" ]; then
-    echo "Error: No release asset matching ${ASSET_SUFFIX} found."
+    if [ -n "${AUTO_VERSION}" ]; then
+        echo "Error: release v${AUTO_VERSION} has no ${ASSET_SUFFIX} asset (release too old or unsupported)."
+    else
+        echo "Error: No release asset matching ${ASSET_SUFFIX} found."
+    fi
     exit 1
 fi
-if ! curl -sL -o "${TEMP_DIR}/auto-latest.tar.gz" "${ASSET_URL}"; then
-    echo "Error: Failed to download the latest release."
+if ! curl -sL -o "${TEMP_DIR}/auto-release.tar.gz" "${ASSET_URL}"; then
+    echo "Error: Failed to download the release."
     exit 1
 fi
 
 # Extract the tar.gz file
 echo " - Extracting release..."
-tar -xzf "${TEMP_DIR}/auto-latest.tar.gz" -C "${TEMP_DIR}"
+tar -xzf "${TEMP_DIR}/auto-release.tar.gz" -C "${TEMP_DIR}"
 EXTRACTED_DIR=$(ls -d ${TEMP_DIR}/auto-*/ | head -n 1)
 if [ -z "${EXTRACTED_DIR}" ]; then
     echo "Error: Could not find extracted directory."
