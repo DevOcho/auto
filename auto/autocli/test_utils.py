@@ -109,7 +109,8 @@ def test_pull_repo(mock_run, mock_exists, mock_chdir, _mock_getcwd):
     repo = {"repo": "git@github.com:org/repo.git", "branch": "main"}
 
     mock_exists.return_value = True
-    mock_run.side_effect = [True, True]
+    # git status + git fetch + git merge --ff-only FETCH_HEAD
+    mock_run.side_effect = [True, True, True]
 
     utils.pull_repo(repo, "/code")
     assert mock_chdir.call_count >= 2
@@ -119,7 +120,38 @@ def test_pull_repo(mock_run, mock_exists, mock_chdir, _mock_getcwd):
     mock_run.side_effect = [True, True]
 
     utils.pull_repo(repo, "/code")
-    assert "git clone" in mock_run.call_args_list[2][0][0]
+    # index 3 because exists=True path consumed calls 0-2 above
+    assert "git clone" in mock_run.call_args_list[3][0][0]
+
+
+@patch("autocli.utils.rprint")
+@patch("os.getcwd", return_value="/tmp")
+@patch("os.chdir")
+@patch("os.path.exists")
+@patch("autocli.utils.run_and_wait")
+def test_pull_repo_divergence_leaves_untouched(
+    mock_run, mock_exists, mock_chdir, _mock_getcwd, mock_rprint
+):
+    """Divergent local branch: ff-only merge fails, repo is left untouched"""
+    repo = {"repo": "git@github.com:org/repo.git", "branch": "main"}
+
+    mock_exists.return_value = True
+    # git status (clean) + git fetch (ok) + git merge --ff-only (fails: diverged)
+    mock_run.side_effect = [True, True, False]
+
+    utils.pull_repo(repo, "/code")
+
+    # No destructive fallback command — only status, fetch, and the failed merge
+    assert mock_run.call_count == 3
+
+    # cwd must be restored after the failed ff-only merge
+    mock_chdir.assert_called_with("/tmp")
+
+    # Warning must communicate "out of sync" + "left untouched", not "Skipping"
+    warning_text = mock_rprint.call_args[0][0]
+    assert "out of sync" in warning_text
+    assert "left untouched" in warning_text
+    assert "Skipping" not in warning_text
 
 
 @patch("os.path.isfile")

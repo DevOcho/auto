@@ -16,7 +16,7 @@ def start_registry():
     """Start a container registry"""
 
     # Do we have a registry or do we need to create one?
-    bash_command = """/usr/local/bin/k3d registry list"""
+    bash_command = """k3d registry list"""
     if not utils.run_and_wait(bash_command, check_result="k3d-registry.local"):
         # No registry found so we need to make one
         rprint(" -- Creating new registry")

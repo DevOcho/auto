@@ -7,6 +7,7 @@ core.py calls; the rest is internal to this module.
 """
 
 import os
+import shutil
 import subprocess
 from subprocess import CalledProcessError
 
@@ -146,6 +147,12 @@ def refresh_https_for_ingresses():
 
 def install_nginx_ingress(use_https, key_file, cert_file):
     """Install and configure Nginx Ingress Controller"""
+    if shutil.which("helm") is None:
+        rprint(
+            "  -- [yellow]helm not found; skipping Nginx Ingress install. "
+            "Ingress will not be available until helm is installed.[/]"
+        )
+        return
     rprint("     = Installing Nginx Ingress Controller...")
     utils.run_and_wait(
         "helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx",

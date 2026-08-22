@@ -340,6 +340,22 @@ def test_migrate_uses_ephemeral_pod(mock_run):
     assert {"name": "SMALLS_ENV", "value": "PROD"} in kwargs["extra_env"]
 
 
+@patch("autocli.https._warn_missing_host_entries")
+@patch("autocli.checks.check_host_entry", return_value=False)
+def test_print_access_hints_missing_host_shows_advisory_not_exit(
+    mock_check, mock_warn
+):
+    """When host entry is absent, _print_access_hints calls _warn_missing_host_entries
+    and does NOT raise SystemExit."""
+    pods = [{"repo": "git@github.com:user/myapp.git"}]
+
+    import sys
+    with patch.object(sys, "exit", side_effect=AssertionError("sys.exit must not be called")):
+        core._print_access_hints(pods, use_https=False)
+
+    mock_warn.assert_called_once_with(["myapp.local"])
+
+
 @patch("autocli.utils.run_command_inside_pod")
 def test_rollback_stays_on_kubectl_exec(mock_exec):
     """rollback stays on kubectl exec because smalls.py prompts for confirmation."""

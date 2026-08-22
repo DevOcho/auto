@@ -33,8 +33,10 @@ def _print_access_hints(pods, use_https):
 
     for repo in pods:
         pod_name = repo["repo"].split("/")[-1:][0].replace(".git", "")
-        if checks.check_host_entry(pod_name):
+        if checks.check_host_entry(pod_name, exit_auto=False):
             rprint(f"[italic]  http://{pod_name}.local:8088/")
+        else:
+            https._warn_missing_host_entries([f"{pod_name}.local"])
 
 
 def _run_bootstrap_step(msg, success_msg, execute, func=None, **kwargs):
@@ -270,7 +272,7 @@ def start_cluster(progress, task, key_file="", cert_file=""):
         )
 
     # 1. CHECK EXISTING CLUSTER
-    bash_command = """/usr/local/bin/k3d cluster list"""
+    bash_command = """k3d cluster list"""
     if utils.run_and_wait(bash_command, check_result="k3s-default"):
         rprint("  -- Found existing cluster")
 
@@ -304,7 +306,7 @@ def start_cluster(progress, task, key_file="", cert_file=""):
     # I'm opening port 8088 outside the cluster for access to the sites
     # Ports for databases are dynamically opened when needed by pods
     bash_command = (
-        f"/usr/local/bin/k3d cluster create "
+        f"k3d cluster create "
         f"--volume {code_dir}:/mnt/code "
         f"--registry-use k3d-registry.local:12345 "
         f"--registry-config ~/.auto/k3s/registries.yaml "
@@ -353,7 +355,7 @@ def stop_cluster(progress, task) -> None:
     """Stop the cluster"""
 
     print("  -- Stopping cluster")
-    bash_command = """/usr/local/bin/k3d cluster stop"""
+    bash_command = """k3d cluster stop"""
     utils.run_and_wait(bash_command)
     progress.update(task, advance=50)
 
@@ -364,7 +366,7 @@ def delete_cluster(progress, task) -> None:
     rprint("  -- Deleting cluster :skull::skull:")
 
     # Explicitly target k3s-default
-    delete_cmd = "/usr/local/bin/k3d cluster delete k3s-default"
+    delete_cmd = "k3d cluster delete k3s-default"
 
     # Run delete
     utils.run_and_wait(delete_cmd)
@@ -375,7 +377,7 @@ def delete_cluster(progress, task) -> None:
         try:
             # Check k3d list
             k3d_result = subprocess.run(
-                "/usr/local/bin/k3d cluster list",
+                "k3d cluster list",
                 shell=True,
                 capture_output=True,
                 text=True,
@@ -700,6 +702,9 @@ def verify_dependencies():
 
     # Check for hosts entries
     errors += checks.check_registry_host_entry()
+
+    # Check Docker insecure-registries for k3d local registry
+    errors += checks.check_docker_insecure_registry()
 
     if errors:
         rprint(f"[red]There were {errors} so we stopped the command[/red]")
