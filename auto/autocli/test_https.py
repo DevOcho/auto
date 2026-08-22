@@ -62,8 +62,14 @@ def test_refresh_https_noop_without_hosts(mock_discover, mock_certs, mock_update
 @patch("autocli.utils.run_and_wait")
 @patch("autocli.https.rprint")
 @patch("shutil.which", return_value=None)
-def test_install_nginx_ingress_skips_when_helm_absent(mock_which, mock_rprint, mock_run):
-    """When helm is not on PATH, install_nginx_ingress emits a yellow advisory and returns without running any subprocess."""
+def test_install_nginx_ingress_skips_when_helm_absent(
+    _mock_which, mock_rprint, mock_run
+):
+    """Without helm on PATH, the install is skipped with a yellow advisory.
+
+    Nothing should reach a subprocess -- helm is optional, so a missing helm
+    warns rather than erroring out mid-install.
+    """
     https.install_nginx_ingress(False, None, None)
 
     mock_run.assert_not_called()
