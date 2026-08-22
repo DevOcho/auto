@@ -2,6 +2,7 @@
 
 # pylint: disable=protected-access,unused-argument
 
+import sys
 from unittest.mock import MagicMock, mock_open, patch
 
 from autocli import core, registry
@@ -340,17 +341,21 @@ def test_migrate_uses_ephemeral_pod(mock_run):
     assert {"name": "SMALLS_ENV", "value": "PROD"} in kwargs["extra_env"]
 
 
-@patch("autocli.https._warn_missing_host_entries")
-@patch("autocli.checks.check_host_entry", return_value=False)
+@patch("autocli.https.warn_missing_host_entries")
+@patch("autocli.https.discover_ingress_hosts", return_value=["myapp.local"])
 def test_print_access_hints_missing_host_shows_advisory_not_exit(
-    mock_check, mock_warn
+    mock_discover, mock_warn
 ):
-    """When host entry is absent, _print_access_hints calls _warn_missing_host_entries
-    and does NOT raise SystemExit."""
+    """A missing /etc/hosts entry is an advisory, never the end of a good start.
+
+    check_host_entry defaults to exit_auto=True, so the old hint path ended a
+    successful start with sys.exit once everything was already up.
+    """
     pods = [{"repo": "git@github.com:user/myapp.git"}]
 
-    import sys
-    with patch.object(sys, "exit", side_effect=AssertionError("sys.exit must not be called")):
+    with patch.object(
+        sys, "exit", side_effect=AssertionError("sys.exit must not be called")
+    ):
         core._print_access_hints(pods, use_https=False)
 
     mock_warn.assert_called_once_with(["myapp.local"])
