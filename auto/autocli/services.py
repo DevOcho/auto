@@ -242,6 +242,14 @@ def connect_to_minio() -> None:
     _connect_to_minio()
 
 
+def connect_to_mailpit() -> None:
+    """Open a port-forward to the Mailpit inbox and tell the user where to look"""
+    rprint("Open a browser and visit: http://127.0.0.1:8025/")
+    rprint("(the ingress also serves it at http://mailpit.local/)")
+    rprint("Press ctrl+c to exit\n")
+    _connect_to_mailpit()
+
+
 def seed_pod(pod):
     """Run the seed script in an ephemeral pod that mirrors the deployment"""
     config = utils.get_pod_config(pod)
@@ -434,6 +442,23 @@ def _connect_to_db_postgres() -> None:
     # Determine which pod to exec against and build the command
     pod_name = utils.get_full_pod_name("postgres").strip("\n")
     cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
+
+    # Make this command safe to run
+    cmd = shlex.quote(cmd)
+    args = shlex.split(cmd)
+
+    # Run the command and return the output
+    subprocess.run(args, shell=True, check=True)
+
+
+def _connect_to_mailpit() -> None:
+    """This opens the port-forward to the Mailpit web UI to allow dev access"""
+
+    # Determine which pod to exec against and build the command
+    pod_name = utils.get_full_pod_name("mailpit").strip("\n")
+
+    # 8025 is Mailpit's web UI; 1025 (SMTP) stays in-cluster where pods use it
+    cmd = f"kubectl port-forward {pod_name} 8025:8025"
 
     # Make this command safe to run
     cmd = shlex.quote(cmd)

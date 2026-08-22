@@ -195,6 +195,13 @@ def minio(self):  # pylint: disable=unused-argument
 
 
 @auto.command()
+@click.pass_context
+def mailpit(self):  # pylint: disable=unused-argument
+    """Open the Mailpit inbox (email sent by your pods)"""
+    services.connect_to_mailpit()
+
+
+@auto.command()
 @click.argument("pod", shell_complete=get_pod_names)
 @click.pass_context
 def logs(self, pod):  # pylint: disable=unused-argument

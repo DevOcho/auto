@@ -168,3 +168,17 @@ def test_seed_pod_uses_ephemeral_pod(mock_get_config, mock_run):
     assert args[0] == "api"
     assert kwargs["command_args"] == ["/mnt/code/api/seed.py"]
     assert kwargs["action_label"] == "seed"
+
+
+@patch("autocli.utils.get_full_pod_name")
+@patch("subprocess.run")
+def test_connect_to_mailpit_forwards_the_ui_port(mock_run, mock_pod_name):
+    """`auto mailpit` port-forwards the web UI, not the SMTP port."""
+    mock_pod_name.return_value = "mailpit-9f6997588-9lzmn\n"
+
+    services.connect_to_mailpit()
+
+    cmd = mock_run.call_args.args[0]
+    assert "port-forward" in " ".join(cmd)
+    assert "8025:8025" in " ".join(cmd)
+    assert "mailpit-9f6997588-9lzmn" in " ".join(cmd)

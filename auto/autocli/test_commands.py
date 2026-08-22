@@ -207,3 +207,12 @@ def test_install_script_supports_auto_version():
         content = handle.read()
     assert "AUTO_VERSION" in content
     assert "releases/tags/v" in content
+
+
+@patch("autocli.services.connect_to_mailpit")
+def test_mailpit_command(mock_connect):
+    """Test the mailpit command mapping to services"""
+    runner = CliRunner()
+    result = runner.invoke(commands.mailpit)
+    assert result.exit_code == 0
+    mock_connect.assert_called()
