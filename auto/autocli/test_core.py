@@ -417,3 +417,36 @@ def test_access_hints_fall_back_to_pod_names(mock_discover, mock_warn):
         if "://" in str(call.args[0])
     ]
     assert urls == ["[italic]  http://portal.local:8088/"]
+
+
+@patch("autocli.registry.cache_running_images")
+@patch("autocli.https.refresh_https_for_ingresses")
+@patch("autocli.core.start_pod")
+@patch("autocli.core.stop_pod")
+@patch("autocli.utils.verify_pod_is_installed", return_value=False)
+def test_restart_pod_refreshes_certs_and_caches_images(
+    mock_installed, mock_stop, mock_start, mock_refresh, mock_cache
+):
+    """restart owes the same post-start work as start -- notably the cert refresh.
+
+    Without it a pod whose ingress gained a hostname comes back up serving a
+    certificate that doesn't cover it, with nothing in auto's output saying so.
+    """
+    with patch.dict(CONFIG, {"https": True}):
+        core.restart_pod("portal")
+
+    mock_stop.assert_called_once_with("portal")
+    mock_start.assert_called_once_with("portal")
+    mock_refresh.assert_called_once()
+    mock_cache.assert_called_once()
+
+
+@patch("autocli.registry.cache_running_images")
+@patch("autocli.https.refresh_https_for_ingresses")
+def test_finish_pod_start_skips_cert_refresh_without_https(mock_refresh, mock_cache):
+    """With https disabled there is no cert to re-issue, but images still cache."""
+    with patch.dict(CONFIG, {"https": False}):
+        core.finish_pod_start()
+
+    mock_refresh.assert_not_called()
+    mock_cache.assert_called_once()

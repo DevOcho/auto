@@ -53,6 +53,30 @@ def _print_access_hints(pods, use_https):
         https.warn_missing_host_entries(hosts)
 
 
+def finish_pod_start():
+    """Post-start steps every single-pod path owes the cluster.
+
+    A pod is not really "started" until these run, so `auto start <pod>` and
+    `auto restart <pod>` both go through here -- restart used to call start_pod
+    directly and silently skip them.
+
+    The cert refresh matters most: a pod's ingress can declare a hostname the
+    current certificate does not cover, and the '*.local' wildcard matches a
+    single label, so 'careers.devocho.local' needs its own SAN entry. Without
+    this the pod comes up, serves HTTPS, and the browser shows a full-page
+    warning on the new host only -- with nothing in auto's output to explain it.
+    """
+    if CONFIG.get("https", False):
+        # The pod's ingress now exists; re-issue the cert so any hostnames it
+        # adds (e.g. a second 'portal.<pod>.local') are covered too.
+        https.refresh_https_for_ingresses()
+
+    # Cache any external images this pod pulled (sidecars, init containers,
+    # third-party images) into the local registry and local.yaml, matching what
+    # the full-start path does at the end.
+    registry.cache_running_images()
+
+
 def _run_bootstrap_step(msg, success_msg, execute, func=None, **kwargs):
     """Helper to orchestrate standard bootstrap steps cleanly"""
     rprint(f"[deep_sky_blue1]{msg}[/]")
@@ -146,14 +170,7 @@ def bootstrap_cluster(pod, dry_run, offline):
             services.create_databases_for_pod(pod)
         start_pod(pod)
         if not dry_run:
-            # The pod's ingress now exists; re-issue the cert so any hostnames it
-            # adds (e.g. a second 'portal.<pod>.local') are covered too.
-            if use_https:
-                https.refresh_https_for_ingresses()
-            # Cache any external images this pod pulled (sidecars, init
-            # containers, third-party images) into the local registry and
-            # local.yaml, matching what the full-start path does at the end.
-            registry.cache_running_images()
+            finish_pod_start()
         return
 
     with Progress(transient=False) as progress:
@@ -635,6 +652,11 @@ def restart_pod(pod) -> None:
         time.sleep(2)
         max_retries -= 1
     start_pod(pod)
+
+    # "restart" reads as "stop then start", so it owes the same post-start work
+    # a start does -- otherwise an ingress hostname added since the last full
+    # start comes back up uncovered by the certificate.
+    finish_pod_start()
 
 
 def install_pods_in_cluster() -> None:
