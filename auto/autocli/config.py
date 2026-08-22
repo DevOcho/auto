@@ -25,8 +25,22 @@ def load_config():
         )
         create_initial_config()
 
-    with open(config_path, encoding="utf-8") as yaml_file:
-        config = yaml.safe_load(yaml_file)
+    # A malformed local.yaml is a hand-editing mistake, not a bug, so report it
+    # the way every other CLI error is reported. Without this the YAMLError
+    # escapes as a traceback from the module-level CONFIG assignment below,
+    # which breaks every command -- even `auto --help`.
+    try:
+        with open(config_path, encoding="utf-8") as yaml_file:
+            config = yaml.safe_load(yaml_file)
+    except yaml.YAMLError as error:
+        _fatal_error(
+            f"Could not read {config_path}\n"
+            f"[yellow]The file is not valid YAML:[/yellow]\n{error}"
+        )
+
+    # safe_load returns None for an empty file, and every caller expects a dict
+    if config is None:
+        config = {}
 
     if "code" in config:
         expanded_path = os.path.expanduser(config["code"])
@@ -51,6 +65,9 @@ def load_config():
 
 def create_initial_config():
     """Create a default config file if none is present"""
+    # NOTE: keep this valid YAML -- load_config() reads it straight back in.
+    # `key:` must be followed by a space or a newline; `commands:[` is a plain
+    # scalar, not a list, and makes the whole file unparsable.
     default_config = """
 ---
 # The code folder is where you want us to download all of your pod code repositories
@@ -99,7 +116,7 @@ system-pods:
         - "kubectl apply -f ~/.auto/k3s/minio/deployment.yaml"
         - "kubectl apply -f ~/.auto/k3s/minio/service.yaml"
         - "kubectl apply -f ~/.auto/k3s/minio/ingress.yaml"
-      databases:
+      buckets:
         - name: portal
   - pod:
       name: redis
@@ -110,6 +127,15 @@ system-pods:
         - "kubectl apply -f ~/.auto/k3s/redis/deployment.yaml"
         - "kubectl apply -f ~/.auto/k3s/redis/service.yaml"
         - "kubectl apply -f ~/.auto/k3s/redis/ingress.yaml"
+  # Local SMTP catch-all.  Pods send mail to `mailpit` on port 1025 and
+  # read it in the browser at http://mailpit.local/
+  - pod:
+      name: mailpit
+      active: false
+      commands:
+        - "kubectl apply -f ~/.auto/k3s/mailpit/deployment.yaml"
+        - "kubectl apply -f ~/.auto/k3s/mailpit/service.yaml"
+        - "kubectl apply -f ~/.auto/k3s/mailpit/ingress.yaml"
 """
     config_dir = os.path.expanduser("~") + "/.auto/config"
     config_file = config_dir + "/local.yaml"
