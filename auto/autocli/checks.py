@@ -9,6 +9,7 @@ place.
 import json
 import os
 import shutil
+import socket
 
 from autocli.utils import declare_error, run_and_wait
 from rich import print as rprint
@@ -158,34 +159,56 @@ def check_certutil():
 
 
 def check_docker_insecure_registry():
-    """Verify k3d-registry.local:12345 is in Docker's insecure-registries list.
+    """Warn if Docker looks unable to push to the k3d registry over plain HTTP.
 
-    Docker rejects HTTP pushes to registries not explicitly listed as insecure.
-    k3d's local registry runs over plain HTTP, so it must be whitelisted.
-    Returns 1 if missing, 0 if configured correctly.
+    Docker refuses HTTP pushes to registries it considers secure, but it treats
+    anything resolving into 127.0.0.0/8 or ::1/128 as insecure automatically --
+    and check_registry_host_entry() already requires k3d-registry.local in
+    /etc/hosts. So the usual setup needs no daemon.json entry at all, and
+    demanding one would block startup on a machine that pushes fine.
+
+    That makes this advisory, like check_helm: it speaks up only when the
+    registry host resolves somewhere other than loopback and no Docker config
+    whitelists it, and it never adds to the fatal error count.
     """
-    registry_host = "k3d-registry.local:12345"
-    daemon_json = "/etc/docker/daemon.json"
+    registry_host = "k3d-registry.local"
+    registry_port = "12345"
+    endpoint = f"{registry_host}:{registry_port}"
 
+    # Loopback is insecure-by-default in Docker, so there is nothing to check
     try:
-        if os.path.isfile(daemon_json):
-            with open(daemon_json, encoding="utf-8") as f:
-                config = json.load(f)
-            insecure = config.get("insecure-registries", [])
-            if registry_host in insecure:
-                return 0
-    except (json.JSONDecodeError, OSError):
-        pass
+        resolved = socket.gethostbyname(registry_host)
+        if resolved.startswith("127.") or resolved == "::1":
+            return 0
+    except OSError:
+        # Name doesn't resolve at all -- check_registry_host_entry covers that
+        return 0
 
-    declare_error(
-        f'Docker is missing "{registry_host}" in insecure-registries!\n'
-        f"  Docker blocks HTTP pushes to registries not listed as insecure.\n"
-        f"  Add the following to {daemon_json} (create it if it does not exist):\n\n"
-        f'  {{\n    "insecure-registries": ["{registry_host}"]\n  }}\n\n'
-        f"  Then restart Docker: sudo systemctl restart docker",
-        exit_auto=False,
+    # Docker Desktop keeps its daemon config under the user's home directory,
+    # the Linux daemon under /etc; check both before saying anything.
+    daemon_configs = [
+        "/etc/docker/daemon.json",
+        os.path.expanduser("~/.docker/daemon.json"),
+    ]
+    for daemon_json in daemon_configs:
+        try:
+            if not os.path.isfile(daemon_json):
+                continue
+            with open(daemon_json, encoding="utf-8") as config_file:
+                config = json.load(config_file)
+            if endpoint in config.get("insecure-registries", []):
+                return 0
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    rprint(
+        f'  [yellow]-- Note: "{endpoint}" resolves to {resolved}, not loopback, '
+        "and no Docker config lists it as an insecure registry.[/yellow]\n"
+        "  [yellow]   Pushes to the local registry may be refused. Add this to "
+        f"{daemon_configs[0]} and restart Docker if they are:[/yellow]\n"
+        f'  [yellow]   {{"insecure-registries": ["{endpoint}"]}}[/yellow]'
     )
-    return 1
+    return 0
 
 
 def check_mkcert():

@@ -42,3 +42,22 @@ def test_check_helm_missing_is_optional(mock_run, mock_declare_error, mock_rprin
     assert checks.check_helm() == 0
     mock_declare_error.assert_not_called()
     mock_rprint.assert_called_once()  # a yellow warning was shown instead
+
+
+@patch("autocli.checks.socket.gethostbyname", return_value="127.0.0.1")
+def test_insecure_registry_check_silent_for_loopback(_mock_resolve):
+    """Docker trusts 127.0.0.0/8 by default, so a loopback registry needs no config."""
+    with patch("autocli.checks.rprint") as mock_print:
+        assert checks.check_docker_insecure_registry() == 0
+    mock_print.assert_not_called()
+
+
+@patch("os.path.isfile", return_value=False)
+@patch("autocli.checks.socket.gethostbyname", return_value="192.168.1.50")
+def test_insecure_registry_check_warns_but_never_blocks(_mock_resolve, _mock_isfile):
+    """A non-loopback registry with no daemon.json entry warns without failing the start."""
+    with patch("autocli.checks.rprint") as mock_print:
+        assert checks.check_docker_insecure_registry() == 0
+    assert any(
+        "insecure registry" in str(call.args[0]) for call in mock_print.call_args_list
+    )

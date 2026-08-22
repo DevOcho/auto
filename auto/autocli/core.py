@@ -739,8 +739,9 @@ def verify_dependencies():
     # Check for hosts entries
     errors += checks.check_registry_host_entry()
 
-    # Check Docker insecure-registries for k3d local registry
-    errors += checks.check_docker_insecure_registry()
+    # Check Docker can push to the local registry — advisory like helm, since
+    # a loopback registry needs no insecure-registries entry at all.
+    checks.check_docker_insecure_registry()
 
     if errors:
         rprint(f"[red]There were {errors} so we stopped the command[/red]")
