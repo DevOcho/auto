@@ -17,6 +17,7 @@ Features:
  - Nginx ingress
  - HTTPS support for local development
  - Quick access to databases installed in the cluster (i.e. mysql, postgres, minio, redis, mssql, proxysql, matomo, etc.)
+ - Local email capture with mailpit (read what your pods send in a browser)
  - Shell autocompletion for commands and pod names
 
 Made with love by [DevOcho - Custom Software](https://www.devocho.com)
@@ -170,21 +171,78 @@ registry:
 This list is auto-populated by `auto images` and is also updated automatically
 after each successful `auto start`, so you rarely need to edit it by hand.
 
-#### System pod flags
+#### System Pods
 
-Each system pod in the `system-pods:` section supports an `active:` flag:
+`auto` ships ready-made manifests for the services your pods depend on, so you
+don't have to package them yourself:
+
+| System pod | What it gives you | Reachable at |
+| ---------- | ----------------- | ------------ |
+| `mysql`    | MySQL database    | `mysql:3306` (and `localhost:3306`) |
+| `postgres` | Postgres database | `postgres:5432` (and `localhost:5432`) |
+| `redis`    | Redis cache/broker | `redis:6379` (and `localhost:6379`) |
+| `minio`    | S3-compatible object storage | `minio:9000`, console via `auto minio` |
+| `matomo`   | Analytics | `http://matomo.local/` |
+| `mailpit`  | SMTP catch-all + web inbox | `mailpit:1025` (SMTP), `http://mailpit.local/` (inbox) |
+
+Manifests for `mssql` and `proxysql` ship in `~/.auto/k3s/` as well, but are
+not listed in the default config.
+
+They are all off by default. You can turn one on globally by setting `active:
+true` on it in the `system-pods` section of your `~/.auto/config/local.yaml`:
 
 ```yaml
 system-pods:
-  - name: mysql
-    active: true
-  - name: redis
-    active: false
+  - pod:
+      name: mailpit
+      active: true
+      commands:
+        - kubectl apply -f ~/.auto/k3s/mailpit/deployment.yaml
+        - kubectl apply -f ~/.auto/k3s/mailpit/service.yaml
+        - kubectl apply -f ~/.auto/k3s/mailpit/ingress.yaml
 ```
 
-A system pod is also activated implicitly when any application pod's
-`.auto/config.yaml` lists it in its own `system-pods:` section, regardless of
-the global `active:` flag.
+You usually don't need to do that, though. A pod that asks for a system pod in
+its own `.auto/config.yaml` (see below) starts it implicitly, so cloning a repo
+that needs mailpit is all it takes to get mailpit.
+
+#### Catching Email with Mailpit
+
+Any pod that sends email can deliver it to the `mailpit` system pod instead of
+a real mail provider, and you read the messages in a browser rather than
+digging through worker logs. Ask for it in your pod's `.auto/config.yaml`:
+
+```yaml
+system-pods:
+  - name: mailpit
+```
+
+Then point your application's SMTP settings at it. There is no TLS and no
+authentication, so turn both off (mailpit accepts any credentials you do send):
+
+```
+EMAIL_HOST=mailpit
+EMAIL_PORT=1025
+EMAIL_USE_TLS=False
+EMAIL_HOST_USER=
+EMAIL_HOST_PASSWORD=
+```
+
+The inbox is at [http://mailpit.local/](http://mailpit.local/) (or
+`https://mailpit.local/` when `https: true`). Like every other `.local`
+hostname, it needs an `/etc/hosts` entry:
+
+```
+127.0.0.1      mailpit.local
+```
+
+`auto start` lists the hostnames it deployed and prints the `/etc/hosts` lines
+you are still missing, so you don't have to remember this one. If you'd rather
+skip the host entry entirely, `auto mailpit` port-forwards the inbox to
+<http://127.0.0.1:8025/>.
+
+Messages live inside the pod and are dropped when it restarts, which keeps
+yesterday's experiments out of today's inbox.
 
 #### Extra cluster creation args
 
@@ -367,6 +425,12 @@ way as `auto mysql` but connects to the Postgres pod.
 Port-forwards to the MinIO pod and prints the browser URL
 (`http://127.0.0.1:9090/`) along with the default credentials so you can log
 in immediately.
+
+### `auto mailpit`
+
+Port-forward the Mailpit inbox to <http://127.0.0.1:8025/> so you can read the
+email your pods sent. Handy when `mailpit.local` isn't in your `/etc/hosts`, or
+when you'd rather not add it. Press ctrl+c to close the forward.
 
 ### `auto init <pod>`
 

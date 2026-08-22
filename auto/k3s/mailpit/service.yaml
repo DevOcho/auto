@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mailpit
+  namespace: default
+spec:
+  selector:
+    app: mailpit
+  ports:
+  # SMTP. Pods send mail here (EMAIL_HOST=mailpit, EMAIL_PORT=1025).
+  - name: smtp
+    protocol: TCP
+    port: 1025
+    targetPort: 1025
+  # Web UI. Exposed on 80 so the ingress can reach it at mailpit.local.
+  - name: http
+    protocol: TCP
+    port: 80
+    targetPort: 8025
+  type: ClusterIP

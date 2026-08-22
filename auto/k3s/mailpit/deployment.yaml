@@ -1,0 +1,61 @@
+# Mailpit: catches every outbound email sent inside the cluster so developers
+# can read the messages their pods send (signup confirmations, password resets,
+# job/candidate notifications) instead of hunting through worker logs.
+#
+# Any pod can use it by pointing its SMTP settings at host `mailpit` port 1025.
+# The inbox is at http://mailpit.local/ (add `127.0.0.1 mailpit.local` to
+# /etc/hosts).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mailpit
+  namespace: default
+  labels:
+    app: mailpit
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mailpit
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: mailpit
+    spec:
+      containers:
+      - name: mailpit
+        image: k3d-registry.local:12345/axllent/mailpit:v1.20
+        ports:
+        - containerPort: 1025
+          name: smtp
+        - containerPort: 8025
+          name: http
+        env:
+        # Mailpit keeps messages in a scratch database inside the container
+        # (no MP_DATABASE set), so the inbox goes away with the pod. That is
+        # wanted: a dev inbox that survives restarts just accumulates confusing
+        # history from previous experiments.
+        - name: MP_MAX_MESSAGES
+          value: "500"
+        # Accept whatever credentials a pod sends (or none at all) over plain
+        # SMTP. Apps configured for a real provider in production can keep their
+        # username/password set locally without mailpit rejecting the login.
+        - name: MP_SMTP_AUTH_ACCEPT_ANY
+          value: "1"
+        - name: MP_SMTP_AUTH_ALLOW_INSECURE
+          value: "1"
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "10m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8025
+          initialDelaySeconds: 5
+          periodSeconds: 20
