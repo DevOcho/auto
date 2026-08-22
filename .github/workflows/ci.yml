@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+
+jobs:
+  test-linux:
+    name: Test (${{ matrix.distro }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        distro:
+          - ubuntu:24.04
+          - ubuntu:22.04
+          - debian:bookworm
+          - fedora:latest
+          - archlinux:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build test image
+        run: |
+          docker build \
+            --build-arg BASE_IMAGE=${{ matrix.distro }} \
+            -f docker/test.Dockerfile \
+            -t auto-test:${{ strategy.job-index }} \
+            .
+
+      - name: Show Python version
+        run: |
+          docker run --rm auto-test:${{ strategy.job-index }} \
+            python3 --version
+
+      - name: Run pytest
+        run: |
+          docker run --rm auto-test:${{ strategy.job-index }} \
+            python3 -m pytest --tb=short -v
+
+  test-macos:
+    name: Test (macOS)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Python
+        run: brew install python
+
+      - name: Show Python version
+        run: python3 --version
+
+      - name: Install test dependencies
+        run: |
+          pip3 install --break-system-packages \
+            click \
+            rich \
+            pyfiglet \
+            dulwich \
+            gitpython \
+            "charset_normalizer<=3.4.4" \
+            toml \
+            PyYAML \
+            requests \
+            pytest \
+            pytest-cov \
+            coverage
+
+      - name: Run pytest
+        env:
+          PYTHONPATH: ${{ github.workspace }}/auto
+        run: python3 -m pytest --tb=short -v

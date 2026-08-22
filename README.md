@@ -16,7 +16,7 @@ Features:
  - Kubernetes local development environment
  - Nginx ingress
  - HTTPS support for local development
- - Quick access to databases installed in the cluster (i.e. mysql, postgres, minio, etc.)
+ - Quick access to databases installed in the cluster (i.e. mysql, postgres, minio, redis, mssql, proxysql, matomo, etc.)
  - Shell autocompletion for commands and pod names
 
 Made with love by [DevOcho - Custom Software](https://www.devocho.com)
@@ -63,8 +63,8 @@ This is what we add to your shell rc file:
 export PATH="$PATH:$HOME/.auto"
 ```
 
-If you are using a shell other than Bash or Zsh, you will want to add the
-`~/.auto` folder to your path manually.
+If you are using a shell other than Bash or Zsh, the installer will write the
+path entry to `~/.profile` automatically.
 
 On macOS, the installer also clears the `com.apple.quarantine` attribute that
 Gatekeeper applies to downloaded binaries, so `auto` runs on first invocation
@@ -75,6 +75,17 @@ You can verify `auto` is installed with the following command:
 ```bash
 auto --version
 ```
+
+### `/etc/hosts` requirement
+
+`auto start` requires the following entry in `/etc/hosts`:
+
+```
+127.0.0.1 k3d-registry.local
+```
+
+If this entry is missing, `auto start` will fail with an error. Add it once
+and you will not need to touch it again.
 
 ## Shell Autocompletion
 
@@ -115,16 +126,22 @@ This is what I have set for mine:
 code: /home/rogue/source/devocho
 ```
 
-#### Enabling HTTPS
+#### HTTPS
 
-If you want your local cluster to run with SSL/HTTPS enabled, add the following line to your config:
+HTTPS is enabled by default in the shipped `local.yaml`:
 
 ```yaml
 # Enable https in local development?
 https: true
 ```
 
-*Note: This requires `mkcert` to be installed on your system.*
+If you want to disable HTTPS, set it to `false`:
+
+```yaml
+https: false
+```
+
+*Note: HTTPS requires `mkcert` to be installed on your system.*
 
 #### Adding Your Pods
 
@@ -138,6 +155,44 @@ Below is an example to show you how to setup a pod:
 pods:
   - repo: git@github.com:DevOcho/portal.git
     branch: main
+```
+
+#### The `registry:` key
+
+The `registry:` key holds a list of Docker images to pre-load into the local
+registry when the cluster starts, which significantly speeds up startup time:
+
+```yaml
+registry:
+  - image: registry.company.com/project/service:tag
+```
+
+This list is auto-populated by `auto images` and is also updated automatically
+after each successful `auto start`, so you rarely need to edit it by hand.
+
+#### System pod flags
+
+Each system pod in the `system-pods:` section supports an `active:` flag:
+
+```yaml
+system-pods:
+  - name: mysql
+    active: true
+  - name: redis
+    active: false
+```
+
+A system pod is also activated implicitly when any application pod's
+`.auto/config.yaml` lists it in its own `system-pods:` section, regardless of
+the global `active:` flag.
+
+#### Extra cluster creation args
+
+Use `extra-args:` to pass arbitrary flags directly to `k3d cluster create` at
+cluster creation time:
+
+```yaml
+extra-args: "--agents 2 --k3s-arg '--disable=traefik@server:*'"
 ```
 
 ### Setting up your application to run in `auto`
@@ -209,17 +264,21 @@ power comes much responsibility.
 
 ## HTTPS Support
 
-When `https: true` is set in your `local.yaml`, `auto` will automatically:
+HTTPS is enabled by default. When `https: true` is set in your `local.yaml`, `auto` will automatically:
 1. Generate a local Certificate Authority (CA) using `mkcert`.
 2. Generate SSL certificates for `localhost`, `*.local`, and your specific pod names (e.g., `portal.local`).
 3. Configure the Nginx Ingress Controller in the cluster to use these certificates.
 4. Expose port `443` on the load balancer.
 
+After pods are installed, `auto` re-issues the TLS certificate to cover every
+host declared in deployed Ingress resources. This means multi-label subdomains
+like `portal.app.local` are covered automatically — not just `*.local`.
+
 **Prerequisites:**
 You must install `mkcert` and `certutil` (often found in `libnss3-tools`) for this to work.
 *   **Ubuntu/Debian:** `sudo apt install libnss3-tools` and follow mkcert installation instructions.
 *   **Fedora:** `sudo dnf install nss-tools`
-*   **Arch:** `sudo pacman -S nss`
+*   **Arch:** `sudo pacman -S nss` — `mkcert` is available from the AUR: `yay -S mkcert`
 *   **macOS:** `brew install mkcert nss`
 
 On the first run, `auto start` may prompt you for your `sudo` password to install the local CA into your system's trust store.
@@ -239,6 +298,17 @@ Here are the most common commands:
 
 Start the cluster and all pods.
 
+Pass `--dry-run` to print what would happen without making any changes.
+Pass `--offline` to skip git pulls and registry operations (useful when working without network access).
+
+### `auto start <pod>`
+
+When a pod name is given, starts only that single pod (assumes the cluster is
+already running). Pulls the repo, builds the image, installs its
+databases/buckets, and refreshes HTTPS if needed.
+
+Pass `--dry-run` to preview without making changes.
+
 ### `auto stop`
 
 Stop the cluster.
@@ -246,16 +316,39 @@ Stop the cluster.
 Optionally you can `--delete-cluster` to remove the entire cluster from
 your machine.
 
+Pass `--dry-run` to print what would happen without making any changes.
+
+### `auto stop <pod>`
+
+When a pod name is given, stops only that pod without touching the rest of the
+cluster.
+
+Pass `--dry-run` to preview without making changes.
+
+### `auto status`
+
+Prints a table showing cluster status, registry status, and all running pods.
+
+Options:
+- `--namespace`/`-n` — filter by namespace
+- `--all-namespaces`/`-a` — show pods across all namespaces
+- `--watch`/`-w` — refresh the table every 3 seconds
+
 ### `auto restart <pod>`
 
 This will remove and recreate the pod in the cluster.  This is nice if you are
 working on the config or Dockerfile.
 
+### `auto logs <pod>`
+
+Streams live pod logs, filtering out health-check noise. Reports pod state if
+the pod is not in Running status.
+
 ### `auto autocomplete`
 
 Setup shell integration for tab completion.
 
-### `auto images` (or `auto container-list`)
+### `auto images`
 
 Scans the running cluster and outputs a YAML list of container images. You can copy this output into the `registry:` section of your `local.yaml` to speed up cluster startup by pre-loading images.
 
@@ -263,6 +356,17 @@ Scans the running cluster and outputs a YAML list of container images. You can c
 
 Start a MySQL shell to the service MySQL pod in your cluster.  Nice for creating
 databases or quick debugging.
+
+### `auto postgres`
+
+Opens an interactive `psql` shell to the postgres system pod. Works the same
+way as `auto mysql` but connects to the Postgres pod.
+
+### `auto minio`
+
+Port-forwards to the MinIO pod and prints the browser URL
+(`http://127.0.0.1:9090/`) along with the default credentials so you can log
+in immediately.
 
 ### `auto init <pod>`
 
@@ -272,8 +376,8 @@ and before migrations).
 
 ### `auto seed <pod>`
 
-This is a convenience method for running a database seed script in your pod
-that will provide test data.
+Runs the `init-command` to reset the database, then the `seed-command` to
+populate test data.
 
 ### `auto migrate <pod>`
 
@@ -294,6 +398,10 @@ The above example will rollback the database to the 0123 migration.
 This will build the local pod image, tag it, and upload it to the local
 repository.
 
+### `auto upgrade <pod>`
+
+Rebuilds and repopulates the local container registry for the given pod.
+
 ### `auto update [VERSION]`
 
 Update `auto` itself to the latest release.  Optionally you can pass a
@@ -306,6 +414,15 @@ If the version doesn't exist, `auto` will tell you and leave your current
 install untouched.  You can add `--dry-run` to preview the change without
 installing anything.  The install script honors the same pin through the
 `AUTO_VERSION` environment variable if you prefer to run it directly.
+
+Pass `--force` to reinstall even when already on the latest version.
+
+### `auto install <git_repo>`
+
+Clones a parent/project config repo, backs up the current `local.yaml`, and
+installs the repo's `local.yaml` into `~/.auto/config/`. This is the
+recommended way to share `auto` configs across a team (see "Sharing configs"
+below).
 
 ## Sharing the auto configs with your team
 
@@ -325,7 +442,7 @@ the following:
 
 1. Install Auto
 2. Clone the "parent" repository with the auto config
-3. Run `make && make install` which loads the config in the ~/.auto/config folder
+3. Run `auto install <git_repo>` (or `make && make install`) which loads the config in the ~/.auto/config folder
 4. Run `auto start`
 
 Auto will automatically clone all the git repositories, download docker images
