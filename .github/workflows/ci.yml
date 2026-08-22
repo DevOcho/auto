@@ -71,6 +71,15 @@ jobs:
             pytest-cov \
             coverage
 
+      # config.py builds CONFIG at import time: with no local.yaml it writes a
+      # default and then asks whether to create the code directory, which has
+      # no answer on a runner and fails collection for every test module.
+      - name: Seed a minimal auto config
+        run: |
+          mkdir -p ~/.auto/config /tmp/auto-code
+          printf 'code: /tmp/auto-code\nhttps: false\npods: []\nsystem-pods: []\n' \
+            > ~/.auto/config/local.yaml
+
       - name: Run pytest
         env:
           PYTHONPATH: ${{ github.workspace }}/auto
