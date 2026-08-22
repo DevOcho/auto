@@ -25,7 +25,7 @@ def test_discover_ingress_hosts_empty(mock_return):
     assert https.discover_ingress_hosts() == []
 
 
-@patch("autocli.https._warn_missing_host_entries")
+@patch("autocli.https.warn_missing_host_entries")
 @patch("autocli.https._update_tls_secrets")
 @patch("autocli.https.create_local_certs")
 @patch("autocli.https.discover_ingress_hosts")
@@ -77,7 +77,7 @@ def test_warn_missing_host_entries_reports_only_missing(mock_return):
     """Only hosts absent from /etc/hosts are flagged."""
     mock_return.return_value = "127.0.0.1 new-d8.local\n"
     with patch("autocli.https.rprint") as mock_print:
-        https._warn_missing_host_entries(["new-d8.local", "portal.new-d8.local"])
+        https.warn_missing_host_entries(["new-d8.local", "portal.new-d8.local"])
 
     # Only the missing host gets its own "127.0.0.1 <host>" suggestion line.
     host_lines = [

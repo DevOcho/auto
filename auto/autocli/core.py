@@ -24,19 +24,33 @@ def _print_access_hints(pods, use_https):
     rprint("[italic]Hint: Some items may still be starting in k3s.")
     rprint("[italic]You can access your pod(s) via the following URLs:")
 
-    if use_https:
-        # HTTPS serves on 443 and covers every hostname the deployed ingresses
-        # declare -- not just '<podname>.local' -- so list the real ones.
-        for host in https.discover_ingress_hosts():
-            rprint(f"[italic]  https://{host}/")
-        return
+    # The cluster is the source of truth for hostnames -- not just
+    # '<podname>.local'. A pod's chart can expose several (e.g. 'app.local' and
+    # 'portal.app.local'), and system pods bring their own ingress too, so
+    # mailpit.local / minio.local / matomo.local belong in this list as much as
+    # the application pods do.
+    hosts = https.discover_ingress_hosts()
 
-    for repo in pods:
-        pod_name = repo["repo"].split("/")[-1:][0].replace(".git", "")
-        if checks.check_host_entry(pod_name, exit_auto=False):
-            rprint(f"[italic]  http://{pod_name}.local:8088/")
-        else:
-            https._warn_missing_host_entries([f"{pod_name}.local"])
+    if not hosts:
+        # Nothing declared an ingress yet (a dry run, or a cluster that never
+        # came up), so fall back to the pod names we were asked to start.
+        hosts = [
+            repo["repo"].split("/")[-1:][0].replace(".git", "") + ".local"
+            for repo in pods
+        ]
+
+    # HTTPS serves on 443; plain HTTP goes through the load balancer on 8088.
+    port = "" if use_https else ":8088"
+    scheme = "https" if use_https else "http"
+    for host in hosts:
+        rprint(f"[italic]  {scheme}://{host}{port}/")
+
+    # Every one of those hostnames has to resolve to 127.0.0.1 or the browser
+    # just fails. refresh_https_for_ingresses already warned in the HTTPS case;
+    # this covers the plain-HTTP path, which used to check application pods
+    # only and never mentioned the system pods at all.
+    if not use_https:
+        https.warn_missing_host_entries(hosts)
 
 
 def _run_bootstrap_step(msg, success_msg, execute, func=None, **kwargs):

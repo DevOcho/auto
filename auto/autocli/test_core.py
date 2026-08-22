@@ -361,3 +361,59 @@ def test_rollback_stays_on_kubectl_exec(mock_exec):
     """rollback stays on kubectl exec because smalls.py prompts for confirmation."""
     core.rollback_with_smalls("api", "0003")
     mock_exec.assert_called_once_with("api", "./smalls.py rollback 0003")
+
+
+@patch("autocli.https.warn_missing_host_entries")
+@patch("autocli.https.discover_ingress_hosts")
+def test_access_hints_list_every_ingress_host(mock_discover, mock_warn):
+    """System pods have ingresses too, so their hosts belong in the hints."""
+    mock_discover.return_value = ["mailpit.local", "minio.local", "portal.local"]
+
+    with patch("autocli.core.rprint") as mock_print:
+        core._print_access_hints([{"repo": "git@host:org/portal.git"}], False)
+
+    urls = [
+        str(call.args[0])
+        for call in mock_print.call_args_list
+        if "://" in str(call.args[0])
+    ]
+    assert any("http://mailpit.local:8088/" in url for url in urls)
+    assert len(urls) == 3
+
+    # Plain HTTP has no cert refresh, so this is the only /etc/hosts nudge.
+    mock_warn.assert_called_once_with(["mailpit.local", "minio.local", "portal.local"])
+
+
+@patch("autocli.https.warn_missing_host_entries")
+@patch("autocli.https.discover_ingress_hosts")
+def test_access_hints_https_does_not_double_warn(mock_discover, mock_warn):
+    """refresh_https_for_ingresses already warned, so don't repeat it here."""
+    mock_discover.return_value = ["mailpit.local"]
+
+    with patch("autocli.core.rprint") as mock_print:
+        core._print_access_hints([], True)
+
+    urls = [
+        str(call.args[0])
+        for call in mock_print.call_args_list
+        if "://" in str(call.args[0])
+    ]
+    assert urls == ["[italic]  https://mailpit.local/"]
+    mock_warn.assert_not_called()
+
+
+@patch("autocli.https.warn_missing_host_entries")
+@patch("autocli.https.discover_ingress_hosts")
+def test_access_hints_fall_back_to_pod_names(mock_discover, mock_warn):
+    """With no ingresses deployed (dry run) we still name the pods we started."""
+    mock_discover.return_value = []
+
+    with patch("autocli.core.rprint") as mock_print:
+        core._print_access_hints([{"repo": "git@host:org/portal.git"}], False)
+
+    urls = [
+        str(call.args[0])
+        for call in mock_print.call_args_list
+        if "://" in str(call.args[0])
+    ]
+    assert urls == ["[italic]  http://portal.local:8088/"]

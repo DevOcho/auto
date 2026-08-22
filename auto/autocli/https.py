@@ -2,8 +2,9 @@
 
 Split out of core.py so the bootstrap orchestrator stays focused. The public
 entry points (setup_https_certificates, refresh_https_for_ingresses,
-discover_ingress_hosts, install_nginx_ingress, create_local_certs) are what
-core.py calls; the rest is internal to this module.
+discover_ingress_hosts, warn_missing_host_entries, install_nginx_ingress,
+create_local_certs) are what core.py calls; the rest is internal to this
+module.
 """
 
 import os
@@ -106,12 +107,15 @@ def discover_ingress_hosts():
     return sorted(hosts)
 
 
-def _warn_missing_host_entries(hosts):
+def warn_missing_host_entries(hosts):
     """Warn about ingress hosts that won't resolve until added to /etc/hosts.
 
     Each ingress host must point at 127.0.0.1 locally; auto does not edit
     /etc/hosts for the user, so surface exactly which lines are missing rather
     than letting the browser fail with an opaque resolution error.
+
+    Public because core calls it for the plain-HTTP path too -- system pods
+    like mailpit and minio serve on a hostname whether or not HTTPS is on.
     """
     current = utils.run_and_return("cat /etc/hosts")
     missing = [host for host in hosts if host not in current]
@@ -142,7 +146,7 @@ def refresh_https_for_ingresses():
     cert_path = os.path.expanduser("~") + "/.auto/certs"
     key_file, cert_file = create_local_certs(cert_path, additional_domains=hosts)
     _update_tls_secrets(key_file, cert_file)
-    _warn_missing_host_entries(hosts)
+    warn_missing_host_entries(hosts)
 
 
 def install_nginx_ingress(use_https, key_file, cert_file):
