@@ -6,6 +6,8 @@
 
 import json
 import os
+import re
+import subprocess
 
 import click
 from autocli import core, registry, services, utils
@@ -269,16 +271,115 @@ def status(self, namespace, all_namespaces, watch):  # pylint: disable=unused-ar
     core.show_status(namespace, all_namespaces, watch)
 
 
+_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+INSTALLER = "curl -fsSL https://www.devocho.com/auto.sh | bash"
+
+
+def _normalize_version(raw):
+    """Strip a single leading 'v' and return the X.Y.Z version (None if invalid)"""
+    candidate = raw[1:] if raw.startswith("v") else raw
+    return candidate if _VERSION_RE.match(candidate) else None
+
+
+def _release_http_status(version):
+    """Return the HTTP status of the GitHub release-tag lookup ('' if curl failed)"""
+    result = subprocess.run(
+        [
+            "curl",
+            "-s",
+            "-o",
+            os.devnull,
+            "-w",
+            "%{http_code}",
+            f"https://api.github.com/repos/devocho/auto/releases/tags/v{version}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip()
+
+
+def _describe_direction(target):
+    """Human phrase for moving from the running VERSION to the target one"""
+    try:
+        current = tuple(int(part) for part in VERSION.split("."))
+        wanted = tuple(int(part) for part in target.split("."))
+    except ValueError:
+        return "Switching to"
+    if wanted < current:
+        return "Rolling back"
+    if wanted > current:
+        return "Updating"
+    return "Reinstalling"
+
+
+def _update_to_version(version, force, dry_run):
+    """Pin auto to a specific release (works as an upgrade or a rollback)"""
+    if force:
+        rprint(
+            "[red]--force has no effect with an explicit VERSION[/] "
+            "(it only applies when updating to latest)."
+        )
+        raise SystemExit(1)
+
+    target = _normalize_version(version)
+    if target is None:
+        rprint(f"[red]Invalid version:[/] '{version}'. Expected X.Y.Z (e.g. 0.7.1).")
+        raise SystemExit(1)
+
+    # Confirm the release exists before touching the installed binary
+    http_status = _release_http_status(target)
+    if http_status == "404":
+        rprint(f"[red]auto v{target} not found[/] (no such release).")
+        raise SystemExit(1)
+    if http_status in ("403", "429"):
+        rprint(
+            f"[red]GitHub API rate limit reached[/] (HTTP {http_status}); try again shortly."
+        )
+        raise SystemExit(1)
+    if http_status != "200":
+        detail = http_status or "no response"
+        rprint(
+            f"[red]Could not reach GitHub to verify v{target}[/] ({detail}); check your connection."
+        )
+        raise SystemExit(1)
+
+    rprint(f"[steel_blue]{_describe_direction(target)} {VERSION} -> {target}...[/]")
+
+    if dry_run:
+        rprint(f"[grey58]Dry run:[/] would run AUTO_VERSION={target} {INSTALLER}")
+        return
+
+    # The version travels via the environment so it never touches a shell string
+    subprocess.run(
+        ["bash", "-c", INSTALLER],
+        env={**os.environ, "AUTO_VERSION": target},
+        check=False,
+    )
+
+
 @auto.command()
 @click.pass_context
+@click.argument("version", required=False)
 @click.option(
     "--force",
     is_flag=True,
     default=False,
-    help="Force update even if already at the latest version.",
+    help="Force update even if already at the latest version (ignored with VERSION).",
 )
-def update(self, force):  # pylint: disable=unused-argument
-    """Update auto CLI to the latest version"""
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Show what would happen without changing anything.",
+)
+def update(self, version, force, dry_run):  # pylint: disable=unused-argument
+    """Update auto to the latest release, or roll back/forward to a specific VERSION (e.g. 0.7.1)"""
+    if version is not None:
+        _update_to_version(version, force, dry_run)
+        return
+
     latest_version_json = utils.run_and_return(
         "curl -s https://api.github.com/repos/devocho/auto/releases/latest"
     )
@@ -310,4 +411,7 @@ def update(self, force):  # pylint: disable=unused-argument
             rprint(f"[steel_blue]Updating from {VERSION} to {latest_version}...[/]")
         except Exception:  # pylint: disable=broad-except
             pass
-    os.system("curl -fsSL https://www.devocho.com/auto.sh | bash")
+    if dry_run:
+        rprint(f"[grey58]Dry run:[/] would run {INSTALLER}")
+        return
+    os.system(INSTALLER)

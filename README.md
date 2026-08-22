@@ -294,6 +294,19 @@ The above example will rollback the database to the 0123 migration.
 This will build the local pod image, tag it, and upload it to the local
 repository.
 
+### `auto update [VERSION]`
+
+Update `auto` itself to the latest release.  Optionally you can pass a
+version to go to that exact release instead (up or down), which is nice
+if you need to roll back an update.
+
+Example: ```auto update 0.7.1```
+
+If the version doesn't exist, `auto` will tell you and leave your current
+install untouched.  You can add `--dry-run` to preview the change without
+installing anything.  The install script honors the same pin through the
+`AUTO_VERSION` environment variable if you prefer to run it directly.
+
 ## Sharing the auto configs with your team
 
 One frequent question we get is how do you share the auto configs with
