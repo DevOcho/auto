@@ -317,12 +317,19 @@ def pull_repo(repo, code_folder):
         # Fetch then fast-forward only — never discards local commits.
         # On divergence (incl. remote force-push), --ff-only fails cleanly
         # with zero working-tree mutation instead of resetting.
-        run_and_wait(f"git fetch {repo['repo']}", capture_output=True)
+        #
+        # Name the branch explicitly: a bare `git fetch <url>` puts the remote's
+        # default branch in FETCH_HEAD, so a pod pinned to another branch (say
+        # `development`) would try to fast-forward onto `main` and always fail.
+        # install_config_from_repo passes a repo with no branch key, so fall
+        # back to the default branch when none is configured.
+        branch = repo.get("branch", "")
+        run_and_wait(f"git fetch {repo['repo']} {branch}".strip(), capture_output=True)
         cmd = "git merge --ff-only FETCH_HEAD"
         if not run_and_wait(cmd):
             rprint(
                 f"[yellow]       :warning: {repo['repo']} is out of sync with the remote "
-                "(local commits not on remote) — left untouched"
+                "(local commits, or a diverged branch) — left untouched"
             )
             os.chdir(cwd)
             return
