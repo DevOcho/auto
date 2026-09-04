@@ -86,7 +86,7 @@ system-pods:
    # Floci AWS config
   - pod:
       name: floci-aws
-      active: True  # set this to true if you want it to start
+      active: false  # set this to true if you want it to start
       commands:
         - kubectl apply -f ~/.auto/k3s/floci/serviceaccount.yaml
         - kubectl apply -f ~/.auto/k3s/floci/role.yaml
@@ -97,7 +97,7 @@ system-pods:
   # Floci UI config
   - pod:
       name: floci-ui
-      active: True  # set this to true if you want it to start
+      active: false  # set this to true if you want it to start
       commands:
         - kubectl apply -f ~/.auto/k3s/floci/ui-deployment.yaml
         - kubectl apply -f ~/.auto/k3s/floci/ui-service.yaml
