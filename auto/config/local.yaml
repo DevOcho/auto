@@ -82,3 +82,24 @@ system-pods:
         - kubectl apply -f ~/.auto/k3s/mailpit/deployment.yaml
         - kubectl apply -f ~/.auto/k3s/mailpit/service.yaml
         - kubectl apply -f ~/.auto/k3s/mailpit/ingress.yaml
+ 
+   # Floci AWS config
+  - pod:
+      name: floci-aws
+      active: false  # set this to true if you want it to start
+      commands:
+        - kubectl apply -f ~/.auto/k3s/floci/serviceaccount.yaml
+        - kubectl apply -f ~/.auto/k3s/floci/role.yaml
+        - kubectl apply -f ~/.auto/k3s/floci/rolebinding.yaml
+        - kubectl apply -f ~/.auto/k3s/floci/deployment.yaml
+        - kubectl apply -f ~/.auto/k3s/floci/service.yaml
+        - kubectl apply -f ~/.auto/k3s/floci/ingress.yaml
+  # Floci UI config
+  - pod:
+      name: floci-ui
+      active: false  # set this to true if you want it to start
+      commands:
+        - kubectl apply -f ~/.auto/k3s/floci/ui-deployment.yaml
+        - kubectl apply -f ~/.auto/k3s/floci/ui-service.yaml
+        - kubectl apply -f ~/.auto/k3s/floci/ui-ingress.yaml
+

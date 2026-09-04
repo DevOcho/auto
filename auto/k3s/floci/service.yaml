@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: floci-aws
+spec:
+  selector:
+    app: floci-aws
+  ports:
+    - port: 4566
+      targetPort: 4566

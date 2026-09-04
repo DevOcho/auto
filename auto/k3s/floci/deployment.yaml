@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: floci-aws
+  labels:
+    app: floci-aws
+spec:
+  selector:
+    matchLabels:
+      app: floci-aws
+  template:
+    metadata:
+      labels:
+        app: floci-aws
+    spec:
+      serviceAccountName: floci
+      # Kubernetes injects a FLOCI_PORT=tcp://<ip>:4566 env var into every
+      # pod in this namespace if a Service is literally named "floci"
+      # (service-links convention). Our Service is named "floci-aws", so
+      # this specific collision doesn't apply — kept anyway per floci's own
+      # documented recommendation, no downside.
+      enableServiceLinks: false
+      containers:
+        - name: floci-aws
+          image: floci/floci:latest
+          ports:
+            - containerPort: 4566
+          env:
+            - name: FLOCI_HOSTNAME
+              value: "floci-aws"
+            - name: FLOCI_DEFAULT_REGION
+              value: "us-east-1"
+            - name: FLOCI_STORAGE_MODE
+              value: "memory"
+            # Runs each Lambda invocation as a real Kubernetes pod via the
+            # ServiceAccount/Role above, instead of a docker.sock sibling
+            # container — no docker.sock mount, no hostNetwork, no
+            # `extra-args` cluster-recreation dance needed anymore.
+            # Verified end-to-end (create-function + invoke, real
+            # floci-lambda-<fn>-<hash> pods visible via `kubectl get pods
+            # -w`) before being migrated here from the old docker.sock +
+            # hostNetwork setup.
+            - name: FLOCI_SERVICES_LAMBDA_EXECUTOR
+              value: "kubernetes"
+            - name: FLOCI_SERVICES_LAMBDA_KUBERNETES_NAMESPACE
+              value: "default"
+          readinessProbe:
+            httpGet:
+              path: /_floci/health
+              port: 4566
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /_floci/health
+              port: 4566
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            failureThreshold: 3

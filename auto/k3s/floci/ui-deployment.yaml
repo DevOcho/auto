@@ -1,0 +1,43 @@
+# floci ships its own web dashboard image (floci/floci-ui) but auto-
+# launches it as a sidecar via docker.sock the moment floci gets socket
+# access — DO NOT rely on that. It's spawned on the host's Docker daemon,
+# outside the cluster's pod network, so it can never resolve floci-aws (a
+# Kubernetes Service DNS name) and permanently shows "Runtime unavailable".
+# We run it ourselves as a normal pod instead — FLOCI_ENDPOINT resolves
+# normally via CoreDNS from here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: floci-ui
+  labels:
+    app: floci-ui
+spec:
+  selector:
+    matchLabels:
+      app: floci-ui
+  template:
+    metadata:
+      labels:
+        app: floci-ui
+    spec:
+      containers:
+        - name: floci-ui
+          image: floci/floci-ui:latest
+          ports:
+            - containerPort: 4500
+          env:
+            - name: FLOCI_ENDPOINT
+              value: "http://floci-aws:4566"
+            - name: AWS_REGION
+              value: "us-east-1"
+            - name: AWS_ACCESS_KEY_ID
+              value: "test"
+            - name: AWS_SECRET_ACCESS_KEY
+              value: "test"
+            - name: PORT
+              value: "4500"
+          readinessProbe:
+            tcpSocket:
+              port: 4500
+            initialDelaySeconds: 5
+            periodSeconds: 5

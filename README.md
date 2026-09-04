@@ -184,6 +184,8 @@ don't have to package them yourself:
 | `minio`    | S3-compatible object storage | `minio:9000`, console via `auto minio` |
 | `matomo`   | Analytics | `http://matomo.local/` |
 | `mailpit`  | SMTP catch-all + web inbox | `mailpit:1025` (SMTP), `http://mailpit.local/` (inbox) |
+| `floci-aws` | Floci AWS emulator | `http://floci-aws.local/` |
+| `floci-ui` | Floci UI | `http://floci-ui.local/` |
 
 Manifests for `mssql` and `proxysql` ship in `~/.auto/k3s/` as well, but are
 not listed in the default config.
