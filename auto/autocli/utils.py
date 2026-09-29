@@ -290,6 +290,21 @@ def get_full_pod_name(pod, only_running=True) -> str:
     return pod_name.stdout.decode().strip("\n")
 
 
+def get_pod_instances(pod) -> list:
+    """Names of the pods that belong to the deployment or statefulset `pod`
+
+    Only whole generated names match -- `api-<hash>-<id>` from a deployment,
+    `api-0` from a statefulset -- so `api` doesn't also catch `api-gateway-...`.
+    """
+
+    output = run_and_return(
+        "kubectl get pods --no-headers -o custom-columns=:metadata.name"
+    )
+    name = re.escape(pod)
+    pattern = re.compile(rf"^{name}-[a-z0-9]{{6,10}}-[a-z0-9]{{5}}$|^{name}-\d+$")
+    return [line for line in output.splitlines() if pattern.match(line.strip())]
+
+
 def pull_repo(repo, code_folder):
     """Pull a code repository to the code folder"""
 

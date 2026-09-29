@@ -292,14 +292,19 @@ def list_cluster_images():
         print(f"  - image: {img}")
     print()
 
-def pod_exists(code_path, pod):
-    return os.path.isdir(os.path.join(code_path, pod))
 
-def tag_pod_docker_image(pod, refresh_pod = False) -> None:
-    """Tag and push a new docker image to local registry"""
+def tag_pod_docker_image(pod) -> bool:
+    """Tag and push a new docker image to local registry (True if it was pushed)"""
 
     # Local vars
     code_path = CONFIG["code"]
+
+    # Verify the pod is real using the users source code folder.  Check before
+    # reading its config so a typo gets this message, not a FileNotFoundError.
+    if not os.path.isdir(os.path.join(code_path, pod)):
+        print("")
+        rprint(f"[red bold]ERROR: Portal {pod} does not exist")
+        return False
 
     # We need to load the pod's config and see what version we are on
     pod_config_path = os.path.join(code_path, pod, ".auto", "config.yaml")
@@ -308,55 +313,26 @@ def tag_pod_docker_image(pod, refresh_pod = False) -> None:
     version = pod_config["version"]
 
     rprint(f"  -- Building and Tagging: [bright_cyan]{pod} {version}")
+    rprint(f"     = Found pod {pod}")
 
-    # Verify the pod is real using the users source code folder
-    if pod_exists(code_path, pod):
-        rprint(f"     = Found pod {pod}")
-
-        # Perform docker build
-        rprint(f"     = Building [bright_cyan]{pod}[/] container")
-        command = f"docker build -t {pod}:{version} {code_path}/{pod}"
-        utils.run_and_wait(command)
-
-        # Tag the image for the registry
-        rprint(f"     = Tagging [bright_cyan]{pod}[/] image for the registry")
-        command = f"docker tag {pod}:{version} k3d-registry.local:12345/{pod}:{version}"
-        utils.run_and_wait(command)
-
-        # Push the image to the registry
-        rprint(f"     = Pushing [bright_cyan]{pod}[/] image to the registry")
-        command = f"docker push k3d-registry.local:12345/{pod}:{version}"
-        utils.run_and_wait(command)
-
-        # clean up your mess
-        rprint("  -- Cleaning unused images")
-        command = "docker image prune -f"
-        utils.run_and_wait(command)
-
-        if refresh_pod:
-            delete_pod(pod)
-
-    # They tried to build a pod that didn't exist.  Maybe a typo?
-    else:
-        print("")
-        rprint(f"[red bold]ERROR: Portal {pod} does not exist")
-
-def delete_pod(pod, by_refresh_command = False):
-    # Deleting (refreshing) pod
-
-    if by_refresh_command:
-        code_path = CONFIG["code"]
-        if not pod_exists(code_path, pod):
-            rprint(f"[red bold]ERROR: Portal {pod} does not exist")
-            return
-
-    command = f"kubectl get pods --no-headers -o custom-columns=\":metadata.name\" | grep \"{pod}\""
-    complete_pod = str(utils.run_and_return(command))
-
-    if "\n" in complete_pod:
-        rprint(f"  [red bold]-- ERROR: Cannot refresh pod {pod} cause it has many references, refresh it yourself")
-        return
-
-    rprint(f"  -- Refreshing pod [bright_cyan]{complete_pod}[/]")
-    command = f"kubectl delete pod {complete_pod}"
+    # Perform docker build
+    rprint(f"     = Building [bright_cyan]{pod}[/] container")
+    command = f"docker build -t {pod}:{version} {code_path}/{pod}"
     utils.run_and_wait(command)
+
+    # Tag the image for the registry
+    rprint(f"     = Tagging [bright_cyan]{pod}[/] image for the registry")
+    command = f"docker tag {pod}:{version} k3d-registry.local:12345/{pod}:{version}"
+    utils.run_and_wait(command)
+
+    # Push the image to the registry
+    rprint(f"     = Pushing [bright_cyan]{pod}[/] image to the registry")
+    command = f"docker push k3d-registry.local:12345/{pod}:{version}"
+    utils.run_and_wait(command)
+
+    # clean up your mess
+    rprint("  -- Cleaning unused images")
+    command = "docker image prune -f"
+    utils.run_and_wait(command)
+
+    return True

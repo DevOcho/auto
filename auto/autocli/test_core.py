@@ -1,6 +1,6 @@
 """Tests for auto.autocli.core and auto.autocli.registry"""
 
-# pylint: disable=protected-access,unused-argument
+# pylint: disable=protected-access,unused-argument,too-many-positional-arguments
 
 import sys
 from unittest.mock import MagicMock, mock_open, patch
@@ -455,3 +455,83 @@ def test_finish_pod_start_skips_cert_refresh_without_https(mock_refresh, mock_ca
 
     mock_refresh.assert_not_called()
     mock_cache.assert_called_once()
+
+
+@patch("autocli.utils.run_and_wait")
+@patch("autocli.utils.get_pod_instances", return_value=["api-7d9f8c6b5-x2x9z", "api-0"])
+def test_refresh_pod_deletes_every_instance(mock_instances, mock_run):
+    """Every replica gets recreated so none keeps running the old image"""
+    assert core.refresh_pod("api") is True
+    mock_run.assert_called_once_with("kubectl delete pod api-7d9f8c6b5-x2x9z api-0")
+
+
+@patch("autocli.utils.run_and_wait")
+@patch("autocli.utils.get_pod_instances", return_value=[])
+def test_refresh_pod_not_running(mock_instances, mock_run):
+    """No matching pods means no bare `kubectl delete pod` with no name"""
+    assert core.refresh_pod("api") is False
+    mock_run.assert_not_called()
+
+
+@patch("autocli.core.time.sleep")
+def test_quit_key_pressed_without_terminal(mock_sleep):
+    """With no terminal there's no key to read; just wait out the interval"""
+    assert core._quit_key_pressed(3, interactive=False) is False
+    mock_sleep.assert_called_once_with(3)
+
+
+@patch("autocli.core.os.read", return_value=b"xQ")
+@patch("autocli.core.select.select")
+def test_quit_key_pressed_q(mock_select, mock_read):
+    """Q (either case, even after another key) stops the watch right away"""
+    mock_select.return_value = ([sys.stdin], [], [])
+    with patch("autocli.core.sys.stdin") as mock_stdin:
+        mock_stdin.fileno.return_value = 0
+        assert core._quit_key_pressed(3, interactive=True) is True
+
+
+@patch("autocli.core.os.read", return_value=b"x")
+@patch("autocli.core.select.select")
+def test_quit_key_pressed_other_key_keeps_waiting(mock_select, mock_read):
+    """Any other key is ignored and the wait continues until the timeout"""
+    mock_select.side_effect = [([sys.stdin], [], []), ([], [], [])]
+    with patch("autocli.core.sys.stdin") as mock_stdin, patch(
+        "autocli.core.time.monotonic", side_effect=[0, 1, 3]
+    ):
+        mock_stdin.fileno.return_value = 0
+        assert core._quit_key_pressed(3, interactive=True) is False
+    assert mock_select.call_count == 2
+
+
+@patch("autocli.core._quit_key_pressed", side_effect=[False, KeyboardInterrupt])
+@patch("autocli.core.Live")
+@patch("autocli.core.termios")
+def test_watch_status_without_terminal(mock_termios, mock_live, mock_quit):
+    """Piped stdin must not crash on termios, and Ctrl+C restores the cursor"""
+    console = MagicMock()
+    content = MagicMock()
+    with patch("autocli.core.sys.stdin") as mock_stdin:
+        mock_stdin.isatty.return_value = False
+        core._watch_status(console, content)
+
+    mock_termios.tcgetattr.assert_not_called()
+    mock_termios.tcsetattr.assert_not_called()
+    mock_live.return_value.__enter__.return_value.update.assert_called_once()
+    console.show_cursor.assert_called_once_with(True)
+
+
+@patch("autocli.core._quit_key_pressed", return_value=True)
+@patch("autocli.core.Live")
+@patch("autocli.core.tty")
+@patch("autocli.core.termios")
+def test_watch_status_restores_terminal(mock_termios, mock_tty, mock_live, mock_quit):
+    """Pressing Q puts the terminal back the way we found it"""
+    console = MagicMock()
+    with patch("autocli.core.sys.stdin") as mock_stdin:
+        mock_stdin.isatty.return_value = True
+        core._watch_status(console, MagicMock())
+
+    mock_tty.setcbreak.assert_called_once()
+    mock_termios.tcsetattr.assert_called_once()
+    assert mock_termios.tcsetattr.call_args[0][2] is mock_termios.tcgetattr.return_value
+    console.show_cursor.assert_called_once_with(True)

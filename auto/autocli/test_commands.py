@@ -216,3 +216,39 @@ def test_mailpit_command(mock_connect):
     result = runner.invoke(commands.mailpit)
     assert result.exit_code == 0
     mock_connect.assert_called()
+
+
+@patch("autocli.core.refresh_pod")
+@patch("autocli.registry.tag_pod_docker_image", return_value=True)
+def test_tag_with_refresh(mock_tag, mock_refresh):
+    """`auto tag -r` refreshes the pod once the image is pushed"""
+    result = CliRunner().invoke(commands.tag, ["portal", "-r"])
+    assert result.exit_code == 0
+    mock_tag.assert_called_once_with("portal")
+    mock_refresh.assert_called_once_with("portal")
+
+
+@patch("autocli.core.refresh_pod")
+@patch("autocli.registry.tag_pod_docker_image", return_value=False)
+def test_tag_refresh_skipped_when_tag_fails(_mock_tag, mock_refresh):
+    """No image was pushed, so there's nothing new to refresh onto"""
+    result = CliRunner().invoke(commands.tag, ["typo", "--refresh"])
+    assert result.exit_code == 0
+    mock_refresh.assert_not_called()
+
+
+@patch("autocli.core.refresh_pod")
+@patch("autocli.registry.tag_pod_docker_image", return_value=True)
+def test_tag_without_refresh(_mock_tag, mock_refresh):
+    """Plain `auto tag` leaves the running pod alone"""
+    result = CliRunner().invoke(commands.tag, ["portal"])
+    assert result.exit_code == 0
+    mock_refresh.assert_not_called()
+
+
+@patch("autocli.core.refresh_pod")
+def test_refresh_command(mock_refresh):
+    """`auto refresh <pod>` is wired to core.refresh_pod"""
+    result = CliRunner().invoke(commands.auto, ["refresh", "mysql"])
+    assert result.exit_code == 0
+    mock_refresh.assert_called_once_with("mysql")
