@@ -22,7 +22,7 @@ spec:
       enableServiceLinks: false
       containers:
         - name: floci-aws
-          image: floci/floci:latest
+          image: floci/floci:2.1.0
           ports:
             - containerPort: 4566
           env:

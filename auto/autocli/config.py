@@ -136,6 +136,25 @@ system-pods:
         - "kubectl apply -f ~/.auto/k3s/mailpit/deployment.yaml"
         - "kubectl apply -f ~/.auto/k3s/mailpit/service.yaml"
         - "kubectl apply -f ~/.auto/k3s/mailpit/ingress.yaml"
+  # Local AWS emulator (runs alongside MinIO).  Pods reach it at
+  # `floci-aws:4566`; the dashboard is at http://floci-ui.local/
+  - pod:
+      name: floci-aws
+      active: false
+      commands:
+        - "kubectl apply -f ~/.auto/k3s/floci/serviceaccount.yaml"
+        - "kubectl apply -f ~/.auto/k3s/floci/role.yaml"
+        - "kubectl apply -f ~/.auto/k3s/floci/rolebinding.yaml"
+        - "kubectl apply -f ~/.auto/k3s/floci/deployment.yaml"
+        - "kubectl apply -f ~/.auto/k3s/floci/service.yaml"
+        - "kubectl apply -f ~/.auto/k3s/floci/ingress.yaml"
+  - pod:
+      name: floci-ui
+      active: false
+      commands:
+        - "kubectl apply -f ~/.auto/k3s/floci/ui-deployment.yaml"
+        - "kubectl apply -f ~/.auto/k3s/floci/ui-service.yaml"
+        - "kubectl apply -f ~/.auto/k3s/floci/ui-ingress.yaml"
 """
     config_dir = os.path.expanduser("~") + "/.auto/config"
     config_file = config_dir + "/local.yaml"

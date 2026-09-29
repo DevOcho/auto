@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: floci-ui
-          image: floci/floci-ui:latest
+          image: floci/floci-ui:0.5.0
           ports:
             - containerPort: 4500
           env:

@@ -82,8 +82,10 @@ system-pods:
         - kubectl apply -f ~/.auto/k3s/mailpit/deployment.yaml
         - kubectl apply -f ~/.auto/k3s/mailpit/service.yaml
         - kubectl apply -f ~/.auto/k3s/mailpit/ingress.yaml
- 
-   # Floci AWS config
+
+  # Floci config (AWS emulator; runs alongside MinIO, not in place of it).
+  # The API is at http://floci-aws.local/ and pods reach it at floci-aws:4566.
+  # Storage is in-memory, so anything in it is lost when the pod restarts.
   - pod:
       name: floci-aws
       active: false  # set this to true if you want it to start
@@ -94,7 +96,8 @@ system-pods:
         - kubectl apply -f ~/.auto/k3s/floci/deployment.yaml
         - kubectl apply -f ~/.auto/k3s/floci/service.yaml
         - kubectl apply -f ~/.auto/k3s/floci/ingress.yaml
-  # Floci UI config
+
+  # Floci UI config (web dashboard for floci-aws at http://floci-ui.local/)
   - pod:
       name: floci-ui
       active: false  # set this to true if you want it to start
@@ -102,4 +105,3 @@ system-pods:
         - kubectl apply -f ~/.auto/k3s/floci/ui-deployment.yaml
         - kubectl apply -f ~/.auto/k3s/floci/ui-service.yaml
         - kubectl apply -f ~/.auto/k3s/floci/ui-ingress.yaml
-
