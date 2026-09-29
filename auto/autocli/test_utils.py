@@ -100,6 +100,39 @@ def test_get_full_pod_name(mock_run):
     assert "grep Running" not in cmd
 
 
+@patch("autocli.utils.run_and_return")
+def test_get_pod_instances_matches_whole_names(mock_return):
+    """`api` must not pick up the pods of `api-gateway` or `api-v2`"""
+    mock_return.return_value = "\n".join(
+        [
+            "api-7d9f8c6b5-x2x9z",
+            "api-7d9f8c6b5-q8w7e",
+            "api-gateway-5c4b8d9f7-abcde",
+            "api-v2-6b7c8d9f5-zzzzz",
+            "api-gateway-0",
+            "mysql-0",
+            "api-0",
+        ]
+    )
+
+    assert utils.get_pod_instances("api") == [
+        "api-7d9f8c6b5-x2x9z",
+        "api-7d9f8c6b5-q8w7e",
+        "api-0",
+    ]
+    assert utils.get_pod_instances("api-gateway") == [
+        "api-gateway-5c4b8d9f7-abcde",
+        "api-gateway-0",
+    ]
+    assert utils.get_pod_instances("missing") == []
+
+
+@patch("autocli.utils.run_and_return", return_value="")
+def test_get_pod_instances_no_cluster(_mock_return):
+    """kubectl failing (cluster down) yields no pods rather than an error"""
+    assert not utils.get_pod_instances("api")
+
+
 @patch("os.getcwd", return_value="/tmp")
 @patch("os.chdir")
 @patch("os.path.exists")
