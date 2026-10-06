@@ -1,7 +1,7 @@
 """Auto Commands
 
-  * `--dry-run`     This is for automated testing and visually testing the output
-  * `--offline`     This disables steps that require internet so you can work without Internet
+* `--dry-run`     This is for automated testing and visually testing the output
+* `--offline`     This disables steps that require internet so you can work without Internet
 """
 
 import json
@@ -15,7 +15,7 @@ from autocli.config import CONFIG
 from rich import print as rprint
 from rich.progress import Progress
 
-VERSION = "0.7.6"
+VERSION = "0.8.0"
 
 
 # Global settings for click
@@ -211,10 +211,26 @@ def logs(self, pod):  # pylint: disable=unused-argument
 
 @auto.command()
 @click.argument("pod", shell_complete=get_pod_names)
+@click.option(
+    "--refresh",
+    "-r",
+    is_flag=True,
+    default=False,
+    help="Refresh the pod afterwards so it runs the new image",
+)
 @click.pass_context
-def tag(self, pod):  # pylint: disable=unused-argument
+def tag(self, pod, refresh):  # pylint: disable=unused-argument
     """Build, Tag, and Load a pod container image in the local repository"""
-    registry.tag_pod_docker_image(pod)
+    if registry.tag_pod_docker_image(pod) and refresh:
+        core.refresh_pod(pod)
+
+
+@auto.command(name="refresh")
+@click.argument("pod", shell_complete=get_pod_names)
+@click.pass_context
+def refresh_pod(self, pod):  # pylint: disable=unused-argument
+    """Refresh a pod by deleting it so k3s recreates it (quicker than restart)"""
+    core.refresh_pod(pod)
 
 
 @auto.command()

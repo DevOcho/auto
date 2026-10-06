@@ -184,6 +184,8 @@ don't have to package them yourself:
 | `minio`    | S3-compatible object storage | `minio:9000`, console via `auto minio` |
 | `matomo`   | Analytics | `http://matomo.local/` |
 | `mailpit`  | SMTP catch-all + web inbox | `mailpit:1025` (SMTP), `http://mailpit.local/` (inbox) |
+| `floci-aws` | Floci AWS emulator | `http://floci-aws.local/` |
+| `floci-ui` | Floci UI | `http://floci-ui.local/` |
 
 Manifests for `mssql` and `proxysql` ship in `~/.auto/k3s/` as well, but are
 not listed in the default config.
@@ -390,12 +392,18 @@ Prints a table showing cluster status, registry status, and all running pods.
 Options:
 - `--namespace`/`-n` — filter by namespace
 - `--all-namespaces`/`-a` — show pods across all namespaces
-- `--watch`/`-w` — refresh the table every 3 seconds
+- `--watch`/`-w` — refresh the table every 3 seconds (press `q` or Ctrl+C to exit)
 
 ### `auto restart <pod>`
 
 This will remove and recreate the pod in the cluster.  This is nice if you are
 working on the config or Dockerfile.
+
+### `auto refresh <pod>`
+
+Deletes the pod's running instances so k3s recreates them.  It's much quicker
+than `auto restart` and is the easy way to pick up an image you just pushed
+with `auto tag`.  Works for system pods too (e.g. `auto refresh mysql`).
 
 ### `auto logs <pod>`
 
@@ -460,7 +468,8 @@ The above example will rollback the database to the 0123 migration.
 ### `auto tag <pod>`
 
 This will build the local pod image, tag it, and upload it to the local
-repository.
+repository.  Add `--refresh`/`-r` to refresh the pod afterwards so it starts
+running the new image.
 
 ### `auto upgrade <pod>`
 

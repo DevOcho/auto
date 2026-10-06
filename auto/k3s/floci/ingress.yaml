@@ -1,0 +1,16 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: floci-aws
+spec:
+  rules:
+    - host: floci-aws.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: floci-aws
+                port:
+                  number: 4566

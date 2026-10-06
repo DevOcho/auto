@@ -2,10 +2,13 @@
 
 import os
 import re
+import select
 import shutil
 import subprocess
 import sys
+import termios
 import time
+import tty
 from pathlib import Path
 
 import yaml
@@ -761,8 +764,20 @@ def show_status(namespace="default", all_namespaces=False, watch=False):
     if watch:
         console.clear()
 
+    quit_hint = (
+        "Press Q or Ctrl+C to exit" if sys.stdin.isatty() else "Press Ctrl+C to exit"
+    )
+
     def generate_content():
         """Generate the renderable content (Group) for the status"""
+        items = status_items()
+        if watch:
+            items.append(Text(""))
+            items.append(Text(quit_hint, style="italic"))
+        return Group(*items)
+
+    def status_items():
+        """The status lines and pod table, as a list of renderables"""
         items = []
 
         # Header
@@ -785,7 +800,7 @@ def show_status(namespace="default", all_namespaces=False, watch=False):
                     style="italic",
                 )
             )
-            return Group(*items)
+            return items
 
         # 3. Pods Table
         items.append(Text(""))  # Spacer
@@ -799,21 +814,77 @@ def show_status(namespace="default", all_namespaces=False, watch=False):
         # Build the table using helper
         items.append(utils.build_pod_table(namespace, all_namespaces))
 
-        return Group(*items)
+        return items
 
     # Main Execution Logic
     if watch:
-        # Use Live to update in-place without strobe
-        with Live(generate_content(), console=console, refresh_per_second=4) as live:
-            while True:
-                try:
-                    time.sleep(3)
-                    live.update(generate_content())
-                except KeyboardInterrupt:
-                    break
+        _watch_status(console, generate_content)
     else:
         # Just print once
         rprint(generate_content())
+
+
+def _watch_status(console, generate_content, interval=3):
+    """Redraw the status in place every `interval` seconds until Q or Ctrl+C"""
+
+    # Reading single keypresses needs a real terminal.  Without one (piped
+    # stdin, CI) there is nothing to read from, so fall back to Ctrl+C only.
+    interactive = sys.stdin.isatty()
+    old_settings = termios.tcgetattr(sys.stdin) if interactive else None
+
+    try:
+        # Use Live to update in-place without strobe
+        with Live(generate_content(), console=console, refresh_per_second=4) as live:
+            if interactive:
+                # cbreak hands us each key as it's pressed (no Enter needed)
+                # but leaves Ctrl+C working
+                tty.setcbreak(sys.stdin.fileno())
+            while not _quit_key_pressed(interval, interactive):
+                live.update(generate_content())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if old_settings is not None:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+        # Live hides the cursor while it runs; make sure it always comes back
+        console.show_cursor(True)
+
+
+def _quit_key_pressed(timeout, interactive):
+    """Wait up to `timeout` seconds, returning True as soon as Q is pressed"""
+
+    if not interactive:
+        time.sleep(timeout)
+        return False
+
+    deadline = time.monotonic() + timeout
+    remaining = timeout
+    while remaining > 0:
+        ready, _, _ = select.select([sys.stdin], [], [], remaining)
+        # Read straight from the fd so keys never sit in Python's buffer where
+        # select() can't see them
+        if ready and b"q" in os.read(sys.stdin.fileno(), 32).lower():
+            return True
+        remaining = deadline - time.monotonic()
+    return False
+
+
+def refresh_pod(pod) -> bool:
+    """Delete a pod's running instances so k3s recreates them
+
+    The quick way to pick up a freshly pushed image (pods pull with
+    `imagePullPolicy: Always`) without the full stop/start of `auto restart`.
+    """
+
+    pod_names = utils.get_pod_instances(pod)
+    if not pod_names:
+        rprint(f"  [red bold]-- ERROR: No pods found for {pod}. Is it running?")
+        return False
+
+    for pod_name in pod_names:
+        rprint(f"  -- Refreshing pod [bright_cyan]{pod_name}[/]")
+    utils.run_and_wait(f"kubectl delete pod {' '.join(pod_names)}")
+    return True
 
 
 def pull_and_build_pods():
