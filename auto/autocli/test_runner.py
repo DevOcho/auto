@@ -82,6 +82,43 @@ def test_run_one_shot_pod_command_builds_manifest(
     assert spec["volumes"][0]["name"] == "code-pvc"
 
 
+def test_build_runner_pod_manifest_mirrors_security_contexts():
+    """Pod- and container-level securityContext are copied to the runner.
+
+    Regression test: without the pod-level supplementalGroups the runner
+    could not read bind-mounted code that the app pod reads fine, so
+    `auto init` / `auto seed` failed with Permission denied.
+    """
+    deployment = _fake_deployment()
+    pod_ctx = {"supplementalGroups": [1001]}
+    container_ctx = {
+        "runAsNonRoot": True,
+        "runAsUser": 1000,
+        "capabilities": {"drop": ["ALL"]},
+    }
+    deployment["spec"]["template"]["spec"]["securityContext"] = pod_ctx
+    deployment["spec"]["template"]["spec"]["containers"][0][
+        "securityContext"
+    ] = container_ctx
+
+    manifest = runner._build_runner_pod_manifest(  # pylint: disable=protected-access
+        "api", "api-seed-x", "seed", ["x"], deployment, [], "default"
+    )
+
+    assert manifest["spec"]["securityContext"] == pod_ctx
+    assert manifest["spec"]["containers"][0]["securityContext"] == container_ctx
+
+
+def test_build_runner_pod_manifest_without_security_contexts():
+    """Deployments with no securityContext produce a runner without one."""
+    manifest = runner._build_runner_pod_manifest(  # pylint: disable=protected-access
+        "api", "api-seed-x", "seed", ["x"], _fake_deployment(), [], "default"
+    )
+
+    assert "securityContext" not in manifest["spec"]
+    assert "securityContext" not in manifest["spec"]["containers"][0]
+
+
 @patch("autocli.runner.declare_error")
 @patch("autocli.runner.get_deployment_spec", return_value=None)
 def test_run_one_shot_pod_command_errors_when_deployment_missing(_mock_get, mock_err):
