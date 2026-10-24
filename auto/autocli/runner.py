@@ -67,6 +67,13 @@ def _build_runner_pod_manifest(
         ],
         "volumes": spec_template.get("volumes", []),
     }
+    # Mirror both security contexts so the runner gets the same uid, groups
+    # (e.g. supplementalGroups granting read on the bind-mounted code) and
+    # hardening as the app container.
+    if "securityContext" in container:
+        pod_spec["containers"][0]["securityContext"] = container["securityContext"]
+    if "securityContext" in spec_template:
+        pod_spec["securityContext"] = spec_template["securityContext"]
     if "serviceAccountName" in spec_template:
         pod_spec["serviceAccountName"] = spec_template["serviceAccountName"]
     if "imagePullSecrets" in spec_template:
