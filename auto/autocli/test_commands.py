@@ -111,6 +111,41 @@ def test_update_latest_dry_run(mock_run, mock_system):
     mock_system.assert_not_called()
 
 
+@patch("autocli.commands.os.system")
+@patch("autocli.utils.run_and_return")
+def test_update_source_build_ahead_of_latest(mock_run, mock_system):
+    """A build that's ahead of the latest release isn't offered a downgrade."""
+    mock_run.return_value = _release_json("v0.0.1")
+    runner = CliRunner()
+    result = runner.invoke(commands.update, [])
+    assert result.exit_code == 0
+    assert "already the latest" in result.output
+    mock_system.assert_not_called()
+
+
+@patch("autocli.update_check.notify_if_outdated")
+@patch("autocli.update_check.should_check", return_value=True)
+@patch("autocli.core.show_status")
+def test_update_notice_runs_after_the_command(_mock_status, mock_should, mock_notify):
+    """Interactive runs look for a newer release once the command finishes."""
+    runner = CliRunner()
+    result = runner.invoke(commands.auto, ["status"])
+    assert result.exit_code == 0
+    mock_should.assert_called_once_with("status")
+    mock_notify.assert_called_once_with(commands.VERSION)
+
+
+@patch("autocli.update_check.notify_if_outdated")
+@patch("autocli.update_check.should_check", return_value=False)
+@patch("autocli.core.show_status")
+def test_update_notice_skipped_when_not_wanted(_mock_status, _mock_should, mock_notify):
+    """Scripts, pipes and the opt-out never reach the network check."""
+    runner = CliRunner()
+    result = runner.invoke(commands.auto, ["status"])
+    assert result.exit_code == 0
+    mock_notify.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # `auto update <version>` — pinned / rollback path
 # ---------------------------------------------------------------------------

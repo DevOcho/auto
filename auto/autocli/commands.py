@@ -10,7 +10,7 @@ import re
 import subprocess
 
 import click
-from autocli import core, registry, services, utils
+from autocli import core, registry, services, update_check, utils
 from autocli.config import CONFIG
 from rich import print as rprint
 from rich.progress import Progress
@@ -60,10 +60,15 @@ def get_namespaces(ctx, param, incomplete):  # pylint: disable=unused-argument
 
 @click.group(context_settings=CONTEXT_SETTINGS)
 @click.version_option(version=VERSION)
-def auto():
+@click.pass_context
+def auto(ctx):
     """Commandline utility to assist with creating/deleting clusters and
     starting/stopping pods."""
-    return
+
+    # Mention a newer release once the command is done, so it's the last thing
+    # on screen instead of scrolling away above a long 'auto start'
+    if update_check.should_check(ctx.invoked_subcommand):
+        ctx.call_on_close(lambda: update_check.notify_if_outdated(VERSION))
 
 
 @auto.command(name="images")
@@ -410,7 +415,15 @@ def update(self, version, force, dry_run):  # pylint: disable=unused-argument
         try:
             latest_version_data = json.loads(latest_version_json)
             latest_version = latest_version_data["tag_name"].lstrip("v")
-            if VERSION == latest_version and not force:
+
+            # Compare as numbers: as strings 0.8.10 sorts before 0.8.9, and a
+            # build from source that's ahead of the release isn't behind it
+            latest = update_check.parse_version(latest_version)
+            running = update_check.parse_version(VERSION)
+            already_latest = (
+                latest is not None and running is not None and latest <= running
+            )
+            if already_latest and not force:
                 rprint(f"[green]Current version ({VERSION}) is already the latest.[/]")
                 rprint(
                     """

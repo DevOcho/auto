@@ -490,6 +490,11 @@ installing anything.  The install script honors the same pin through the
 
 Pass `--force` to reinstall even when already on the latest version.
 
+Once a day, `auto` checks GitHub for a newer release when a command finishes
+and prints a one-line notice if there is one.  It only checks in an
+interactive terminal, never when output is piped or redirected.  Set
+`AUTO_NO_UPDATE_CHECK=1` to turn it off.
+
 ### `auto install <git_repo>`
 
 Clones a parent/project config repo, backs up the current `local.yaml`, and
