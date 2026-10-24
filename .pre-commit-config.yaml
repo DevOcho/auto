@@ -23,7 +23,7 @@ repos:
     hooks:
       - id: codespell
         exclude_types: [json]
-        args: ["-L", "connexion", "--skip=*.map,*.js"]
+        args: ["-L", "connexion,vertexes", "--skip=*.map,*.js"]
 #-   repo: https://github.com/asottile/yesqa
     #rev: v1.3.0
     #hooks:

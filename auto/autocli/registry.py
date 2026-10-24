@@ -6,7 +6,7 @@ import time
 
 import requests
 import yaml
-from autocli import utils
+from autocli import progress, utils
 from autocli.config import CONFIG, add_images_to_local_config
 from requests.exceptions import RequestException
 from rich import print as rprint
@@ -65,13 +65,12 @@ def _load_single_image(image_obj):
 
     bash_cmd = "docker images"
     if not utils.run_and_wait(bash_cmd, check_result=clean_image, suppress_error=True):
-        utils.run_and_wait(f"docker pull {full_image}", capture_output=True)
+        progress.pull_image(full_image)
 
     tag_cmd = f"docker tag {full_image} k3d-registry.local:12345/{clean_image}"
     utils.run_and_wait(tag_cmd, capture_output=True, suppress_error=True)
 
-    push_cmd = f"docker push k3d-registry.local:12345/{clean_image}"
-    utils.run_and_wait(push_cmd, capture_output=True, suppress_error=True)
+    progress.push_image(f"k3d-registry.local:12345/{clean_image}", suppress_error=True)
     rprint(f"  -- Loaded: [bright_cyan]{clean_image}[/]")
 
 
@@ -192,15 +191,12 @@ def _cache_single_image(full_image, clean_image):
 
     inspect_cmd = f"docker image inspect {clean_image}"
     if not utils.run_and_wait(inspect_cmd, capture_output=True, suppress_error=True):
-        utils.run_and_wait(
-            f"docker pull {full_image}", capture_output=True, suppress_error=True
-        )
+        progress.pull_image(full_image, suppress_error=True)
 
     tag_cmd = f"docker tag {full_image} k3d-registry.local:12345/{clean_image}"
     utils.run_and_wait(tag_cmd, capture_output=True, suppress_error=True)
 
-    push_cmd = f"docker push k3d-registry.local:12345/{clean_image}"
-    utils.run_and_wait(push_cmd, capture_output=True, suppress_error=True)
+    progress.push_image(f"k3d-registry.local:12345/{clean_image}", suppress_error=True)
 
 
 def cache_running_images():
@@ -315,20 +311,17 @@ def tag_pod_docker_image(pod) -> bool:
     rprint(f"  -- Building and Tagging: [bright_cyan]{pod} {version}")
     rprint(f"     = Found pod {pod}")
 
-    # Perform docker build
-    rprint(f"     = Building [bright_cyan]{pod}[/] container")
-    command = f"docker build -t {pod}:{version} {code_path}/{pod}"
-    utils.run_and_wait(command)
+    # Perform docker build.  This streams a progress bar with an ETA based
+    # on how long each step took the last few times we built this pod.
+    progress.build_image(pod, version, f"{code_path}/{pod}")
 
-    # Tag the image for the registry
+    # Tag the image for the registry (instant, so no progress bar)
     rprint(f"     = Tagging [bright_cyan]{pod}[/] image for the registry")
     command = f"docker tag {pod}:{version} k3d-registry.local:12345/{pod}:{version}"
     utils.run_and_wait(command)
 
     # Push the image to the registry
-    rprint(f"     = Pushing [bright_cyan]{pod}[/] image to the registry")
-    command = f"docker push k3d-registry.local:12345/{pod}:{version}"
-    utils.run_and_wait(command)
+    progress.push_image(f"k3d-registry.local:12345/{pod}:{version}")
 
     # clean up your mess
     rprint("  -- Cleaning unused images")

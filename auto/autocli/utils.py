@@ -7,6 +7,7 @@ import shlex
 import socket
 import subprocess
 import sys
+from collections import deque
 from subprocess import CalledProcessError
 from time import sleep
 
@@ -164,6 +165,60 @@ def run_and_wait(
             # Use standard print to avoid rich parsing error contents as tags
             print(err_text)
         return 0
+
+
+def run_and_stream(cmd: str, on_line=None, cwd=None, suppress_error=False) -> int:
+    """Run a Bash command, handing each line of output to a callback as it arrives
+
+    ``run_and_wait()`` buffers everything with capture_output until the process
+    exits, which makes a multi-minute ``docker build`` look like a frozen
+    terminal. This variant streams line by line so callers can render progress
+    while the command is still working.
+
+    stderr is merged into stdout because buildkit writes its progress there
+    while docker push/pull write theirs to stdout, and callers want one
+    ordered stream of both.
+
+    Returns 1 on success and 0 on failure, matching run_and_wait's contract.
+    """
+
+    # Hold on to the last few lines so a failure can still show the user why,
+    # even though we streamed (and discarded) everything that came before.
+    tail = deque(maxlen=20)
+
+    try:
+        with subprocess.Popen(
+            cmd,
+            shell=True,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            errors="replace",
+        ) as proc:
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                tail.append(line)
+                if on_line:
+                    on_line(line)
+            returncode = proc.wait()
+
+    except OSError as error:
+        if not suppress_error:
+            rprint(f"\n[red]Command failed:[/red] {cmd}")
+            print(str(error))
+        return 0
+
+    if returncode != 0:
+        if not suppress_error:
+            rprint(f"\n[red]Command failed:[/red] {cmd}")
+            # Use standard print to avoid rich parsing error contents as tags
+            for line in tail:
+                print(line)
+        return 0
+
+    return 1
 
 
 def run_and_return(cmd: str) -> str:
