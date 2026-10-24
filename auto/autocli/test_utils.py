@@ -205,3 +205,58 @@ def test_get_pod_config(mock_yaml, _mock_file, mock_isfile):
         with patch.dict("autocli.config.CONFIG", {"code": "/code"}):
             utils.get_pod_config("mypod")
             mock_err.assert_called()
+
+
+NODES_OUTPUT = (
+    "k3d-k3s-default-serverlb loadbalancer\n"
+    "k3d-k3s-default-agent-0 agent\n"
+    "k3d-k3s-default-server-0 server"
+)
+
+
+@patch("autocli.utils.run_and_wait")
+@patch("autocli.utils.socket.gethostbyname", side_effect=OSError)
+def test_nodes_without_dns_unknown_when_host_offline(_mock_resolve, mock_run):
+    """If the host can't resolve the probe either, there's nothing to compare"""
+    assert utils.nodes_without_dns() is None
+    mock_run.assert_not_called()
+
+
+@patch("autocli.utils.run_and_wait", return_value=1)
+@patch("autocli.utils.run_and_return", return_value=NODES_OUTPUT)
+@patch("autocli.utils.socket.gethostbyname", return_value="140.82.112.3")
+def test_nodes_without_dns_probes_only_server_and_agent(
+    _mock_resolve, _mock_nodes, mock_run
+):
+    """Healthy nodes report nothing, and the load balancer is never probed"""
+    assert utils.nodes_without_dns() == []
+
+    probed = [call.args[0] for call in mock_run.call_args_list]
+    assert probed == [
+        "docker exec k3d-k3s-default-agent-0 nslookup github.com",
+        "docker exec k3d-k3s-default-server-0 nslookup github.com",
+    ]
+
+
+@patch("autocli.utils.run_and_return", return_value=NODES_OUTPUT)
+@patch("autocli.utils.socket.gethostbyname", return_value="140.82.112.3")
+def test_nodes_without_dns_reports_failing_nodes(_mock_resolve, _mock_nodes):
+    """A node whose lookup fails while the host's succeeds is reported"""
+
+    def lookup(cmd, **_kwargs):
+        return 0 if "server-0" in cmd else 1
+
+    with patch("autocli.utils.run_and_wait", side_effect=lookup):
+        assert utils.nodes_without_dns() == ["k3d-k3s-default-server-0"]
+
+
+def test_get_cluster_dns_status():
+    """Each probe outcome maps to a status line for auto status"""
+    with patch("autocli.utils.nodes_without_dns", return_value=[]):
+        assert utils.get_cluster_dns_status() == ("Working", "green")
+    with patch(
+        "autocli.utils.nodes_without_dns", return_value=["k3d-k3s-default-server-0"]
+    ):
+        assert utils.get_cluster_dns_status()[1] == "red"
+    with patch("autocli.utils.nodes_without_dns", return_value=None):
+        assert utils.get_cluster_dns_status()[1] == "yellow"

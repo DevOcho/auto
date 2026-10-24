@@ -546,6 +546,62 @@ def get_registry_status():
     return status, style
 
 
+# Every auto setup already depends on resolving this (pod repos are cloned from
+# it), so it makes a fair test of whether outside DNS works at all
+DNS_PROBE_HOST = "github.com"
+
+
+def nodes_without_dns():
+    """List the cluster's nodes that can't resolve names outside the cluster
+
+    Docker gives each container a snapshot of the host's DNS servers when it
+    starts and never refreshes it.  k3d creates its nodes in Docker's default
+    bridge network mode, so that snapshot is a fixed list of upstream servers
+    rather than a forward to systemd-resolved, and it goes stale whenever the
+    host's network changes.  The common case is a reboot: Docker restarts the
+    nodes before Wi-Fi is up, they capture no servers at all, and every pod
+    gets SERVFAIL for outside names until the nodes are restarted.
+
+    Returns None when the host itself can't resolve the probe name -- it's
+    offline, so restarting the nodes wouldn't help.
+    """
+
+    try:
+        socket.gethostbyname(DNS_PROBE_HOST)
+    except OSError:
+        return None
+
+    nodes_cmd = (
+        "docker ps --filter label=k3d.cluster=k3s-default "
+        """--format '{{.Names}} {{.Label "k3d.role"}}'"""
+    )
+
+    broken = []
+    for line in run_and_return(nodes_cmd).splitlines():
+        name, _, role = line.partition(" ")
+
+        # The load balancer and registry don't run pods, so their DNS is moot
+        if role not in ("server", "agent"):
+            continue
+
+        # The node's resolver is the same path CoreDNS forwards outside names to
+        lookup = f"docker exec {name} nslookup {DNS_PROBE_HOST}"
+        if not run_and_wait(lookup, suppress_error=True):
+            broken.append(name)
+
+    return broken
+
+
+def get_cluster_dns_status():
+    """Helper to check whether pods can resolve names outside the cluster"""
+    broken = nodes_without_dns()
+    if broken is None:
+        return "Unknown (host is offline)", "yellow"
+    if broken:
+        return "Broken - run 'auto start' to fix", "red"
+    return "Working", "green"
+
+
 def build_pod_table(namespace, all_namespaces):
     """Helper to build the pods table"""
     table = Table(show_header=True, header_style="bold magenta", expand=True)

@@ -293,6 +293,34 @@ def _verify_and_heal_connection():
             )
 
 
+def _verify_and_heal_dns():
+    """Restart the cluster if its nodes have lost outside DNS
+
+    Docker only re-reads the host's DNS servers when a node starts, so a
+    restart is the fix (see utils.nodes_without_dns for how they go stale).
+    """
+    broken = utils.nodes_without_dns()
+    if not broken:
+        return
+
+    rprint(
+        f"     [yellow]Warning: {', '.join(broken)} can't resolve outside names "
+        "(Docker kept a stale copy of the host's DNS). Restarting the cluster...[/yellow]"
+    )
+    utils.run_and_wait("k3d cluster stop")
+    if not utils.run_and_wait("k3d cluster start"):
+        utils.declare_error("Failed to restart the cluster.")
+        return
+
+    if utils.nodes_without_dns():
+        rprint(
+            "     [yellow]Warning: Pods still can't resolve outside names. "
+            "Check Docker's DNS settings.[/yellow]"
+        )
+    else:
+        rprint("     = Cluster DNS restored")
+
+
 def start_cluster(progress, task, key_file="", cert_file=""):
     """Start a K3D cluster and return if it is new (true) or existing (false)"""
 
@@ -322,6 +350,10 @@ def start_cluster(progress, task, key_file="", cert_file=""):
             bash_command = """k3d cluster start"""
             if not utils.run_and_wait(bash_command):
                 utils.declare_error("Failed to start existing cluster.")
+
+        # Docker restarts the nodes on its own at boot, often before Wi-Fi is
+        # up, which leaves every pod unable to resolve outside names
+        _verify_and_heal_dns()
 
         # Verify we can actually talk to it
         _verify_and_heal_connection()
@@ -802,7 +834,14 @@ def show_status(namespace="default", all_namespaces=False, watch=False):
             )
             return items
 
-        # 3. Pods Table
+        # 3. Check the pods can resolve outside names. Skipped while watching:
+        # a node with a dead upstream takes seconds to answer, which would
+        # stall every redraw.
+        if not watch:
+            d_stat, d_style = utils.get_cluster_dns_status()
+            items.append(Text.assemble(" DNS:      ", (d_stat, d_style)))
+
+        # 4. Pods Table
         items.append(Text(""))  # Spacer
         table_title = (
             "Pods (All Namespaces)"

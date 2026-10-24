@@ -9,9 +9,10 @@ from autocli import core, registry
 from autocli.config import CONFIG
 
 
+@patch("autocli.utils.nodes_without_dns", return_value=[])
 @patch("autocli.utils.run_and_wait")
 @patch("autocli.utils.verify_cluster_connection")
-def test_start_cluster_existing(mock_verify, mock_run):
+def test_start_cluster_existing(mock_verify, mock_run, mock_dns):
     """Test starting an existing cluster"""
     progress = MagicMock()
     task = MagicMock()
@@ -21,6 +22,56 @@ def test_start_cluster_existing(mock_verify, mock_run):
 
     result = core.start_cluster(progress, task)
     assert result is False
+    mock_dns.assert_called_once()
+
+
+@patch("autocli.utils.nodes_without_dns", return_value=[])
+@patch("autocli.utils.run_and_wait")
+def test_heal_dns_leaves_healthy_cluster_alone(mock_run, _mock_dns):
+    """Nodes that resolve outside names don't get restarted"""
+    core._verify_and_heal_dns()
+    mock_run.assert_not_called()
+
+
+@patch("autocli.utils.nodes_without_dns", return_value=None)
+@patch("autocli.utils.run_and_wait")
+def test_heal_dns_skips_restart_when_host_offline(mock_run, _mock_dns):
+    """An offline host can't be fixed by restarting nodes, so don't try"""
+    core._verify_and_heal_dns()
+    mock_run.assert_not_called()
+
+
+@patch("autocli.core.rprint")
+@patch("autocli.utils.run_and_wait", return_value=1)
+@patch("autocli.utils.nodes_without_dns")
+def test_heal_dns_restarts_cluster_with_stale_dns(mock_dns, mock_run, mock_print):
+    """Nodes that captured no DNS servers at boot get restarted, then rechecked.
+
+    Regression test: Docker restarts the nodes before Wi-Fi is up, so every pod
+    got SERVFAIL for outside names until someone restarted the cluster by hand.
+    """
+    mock_dns.side_effect = [["k3d-k3s-default-server-0"], []]
+
+    core._verify_and_heal_dns()
+
+    commands = [call.args[0] for call in mock_run.call_args_list]
+    assert commands == ["k3d cluster stop", "k3d cluster start"]
+    assert mock_dns.call_count == 2
+    assert "restored" in str(mock_print.call_args_list[-1])
+
+
+@patch("autocli.core.rprint")
+@patch("autocli.utils.declare_error")
+@patch("autocli.utils.run_and_wait", return_value=1)
+@patch("autocli.utils.nodes_without_dns", return_value=["k3d-k3s-default-agent-0"])
+def test_heal_dns_warns_without_failing_if_restart_does_not_help(
+    _mock_dns, _mock_run, mock_err, mock_print
+):
+    """Still-broken DNS after a restart warns but doesn't stop the start"""
+    core._verify_and_heal_dns()
+
+    mock_err.assert_not_called()
+    assert "still can't resolve" in str(mock_print.call_args_list[-1])
 
 
 @patch("autocli.utils.wait_for_pod_status")
