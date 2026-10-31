@@ -3,6 +3,7 @@
 import subprocess
 from unittest.mock import MagicMock, mock_open, patch
 
+import pytest
 from autocli import config, utils
 
 
@@ -260,3 +261,15 @@ def test_get_cluster_dns_status():
         assert utils.get_cluster_dns_status()[1] == "red"
     with patch("autocli.utils.nodes_without_dns", return_value=None):
         assert utils.get_cluster_dns_status()[1] == "yellow"
+
+
+def test_declare_error_exits_non_zero():
+    """A fatal error must not look like success to a script or `script -qec`"""
+    with pytest.raises(SystemExit) as exited:
+        utils.declare_error("boom")
+    assert exited.value.code == 1
+
+
+def test_declare_error_can_continue():
+    """exit_auto=False only reports; callers decide what happens next"""
+    assert utils.declare_error("just saying", exit_auto=False) is None

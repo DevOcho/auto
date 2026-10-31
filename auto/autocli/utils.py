@@ -92,9 +92,11 @@ def declare_error(error_msg: str, exit_auto: bool = True) -> None:
 
     rprint(f"\n [red]:x: Error[/red]: {error_msg}")
 
-    # If they want us to exit then let's stop everything
+    # If they want us to exit then let's stop everything.  Exit non-zero: a bare
+    # sys.exit() exits 0, which told scripts (and `script -qec`) that a failed
+    # run had succeeded.
     if exit_auto:
-        sys.exit()
+        sys.exit(1)
 
 
 def run_and_wait(

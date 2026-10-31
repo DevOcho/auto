@@ -313,15 +313,36 @@ def tag_pod_docker_image(pod) -> bool:
 
     # Perform docker build.  This streams a progress bar with an ETA based
     # on how long each step took the last few times we built this pod.
-    progress.build_image(pod, version, f"{code_path}/{pod}")
+    #
+    # A failed build has to stop everything here.  Docker still holds the last
+    # good {pod}:{version} image under the same tag, so carrying on would tag
+    # and push that stale image, the cluster would run it, and the command
+    # would report success while the new code never arrived.
+    if not progress.build_image(pod, version, f"{code_path}/{pod}"):
+        utils.declare_error(
+            f"Building [bright_cyan]{pod} {version}[/] failed (the docker output is above). "
+            "Nothing was pushed, so anything already running keeps its old image. "
+            "Fix the build and run this again."
+        )
+        return False
 
     # Tag the image for the registry (instant, so no progress bar)
     rprint(f"     = Tagging [bright_cyan]{pod}[/] image for the registry")
     command = f"docker tag {pod}:{version} k3d-registry.local:12345/{pod}:{version}"
-    utils.run_and_wait(command)
+    if not utils.run_and_wait(command):
+        utils.declare_error(
+            f"Could not tag the [bright_cyan]{pod}[/] image for the registry."
+        )
+        return False
 
-    # Push the image to the registry
-    progress.push_image(f"k3d-registry.local:12345/{pod}:{version}")
+    # Push the image to the registry.  Same reasoning as the build: if this
+    # fails, the registry still serves the previous image under this tag.
+    if not progress.push_image(f"k3d-registry.local:12345/{pod}:{version}"):
+        utils.declare_error(
+            f"Pushing [bright_cyan]{pod} {version}[/] to the local registry failed, "
+            "so the cluster would still pull the previous image. Nothing was deployed."
+        )
+        return False
 
     # clean up your mess
     rprint("  -- Cleaning unused images")
