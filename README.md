@@ -77,6 +77,23 @@ You can verify `auto` is installed with the following command:
 auto --version
 ```
 
+### Upgrading from 0.8 to 0.9
+
+0.9 replaces ingress-nginx with Envoy Gateway and needs a newer Kubernetes, so
+every existing cluster has to be recreated once, which resets its local
+databases. Back them up first, then:
+
+```bash
+auto update
+auto stop --delete-cluster
+auto start
+auto seed <pod>   # for each pod, or restore your backup
+```
+
+To go back, run `auto update 0.8.3` and recreate the cluster the same way. The
+full steps, including backup and restore commands, are in
+[docs/releases/0.9.0.md](docs/releases/0.9.0.md).
+
 ### `/etc/hosts` requirement
 
 `auto start` requires the following entry in `/etc/hosts`:
@@ -246,13 +263,25 @@ skip the host entry entirely, `auto mailpit` port-forwards the inbox to
 Messages live inside the pod and are dropped when it restarts, which keeps
 yesterday's experiments out of today's inbox.
 
+#### Cluster size
+
+New clusters get one server and one agent node. Set `agents:` to change the
+number of agent nodes:
+
+```yaml
+agents: 2
+```
+
+`agents: 0` gives a single-node cluster. It is not faster to start: every
+image pull and database start then lands on one node.
+
 #### Extra cluster creation args
 
 Use `extra-args:` to pass arbitrary flags directly to `k3d cluster create` at
 cluster creation time:
 
 ```yaml
-extra-args: "--agents 2 --k3s-arg '--disable=traefik@server:*'"
+extra-args: "--k3s-arg '--disable=metrics-server@server:*'"
 ```
 
 ### Setting up your application to run in `auto`
@@ -326,11 +355,25 @@ power comes much responsibility.
 
 `auto` routes traffic with [Envoy Gateway](https://gateway.envoyproxy.io/), which
 reads Gateway API `HTTPRoute`s. It does **not** read `kind: Ingress` objects
-(ingress-nginx was retired in March 2026), so a pod still shipping an Ingress
-starts fine but its URL never answers. `auto start` names any leftover Ingress
-objects it finds.
+(ingress-nginx was retired in March 2026), so a pod that only ships an Ingress
+starts fine but its URL never answers. `auto start` names any Ingress whose
+hosts no HTTPRoute serves.
 
-Attach your route to the Gateway auto creates, named `auto` in the
+Put your routes in `.auto/routes.yaml` in the pod repo. `auto` 0.9 and newer
+apply that file after the pod's own install command (and delete it when the pod
+stops); `auto` 0.8 never reads it. So during the move a repo carries both: its
+Ingress in the main manifest for anyone still on 0.8, and its HTTPRoute here.
+The Ingress is removed in a later release. Keep HTTPRoutes out of the main
+manifest: on a cluster made by `auto` 0.8 there are no Gateway API CRDs, and an
+HTTPRoute there fails the whole install.
+
+Start from a template:
+
+- [`docs/templates/routes.yaml`](docs/templates/routes.yaml): served on http and https.
+- [`docs/templates/routes-https-only.yaml`](docs/templates/routes-https-only.yaml):
+  HTTPS only, with a 308 redirect from http (what `force-ssl-redirect` did).
+
+Routes attach to the one Gateway `auto` creates, named `auto` in the
 `auto-gateway` namespace:
 
 ```yaml
@@ -353,14 +396,13 @@ spec:
 ```
 
 No `tls:` block is needed: the Gateway terminates HTTPS for every host with the
-local certificate. What the old `nginx.ingress.kubernetes.io/*` annotations
-become:
+local certificate. What the `nginx.ingress.kubernetes.io/*` annotations become:
 
 | ingress-nginx annotation | With Envoy Gateway |
 |---|---|
-| `proxy-body-size` | Drop it. Envoy streams request bodies to your pod, so your app's own limit is the one that applies. |
-| `proxy-read-timeout` / `proxy-send-timeout` | Usually drop it. `auto` turns off Envoy's 15s request timeout and lets a silent request wait up to an hour. To cap a route, add `timeouts: {request: 300s}` to its rule. |
-| `force-ssl-redirect` | Attach the route to the `https` listener only (`sectionName: https` in `parentRefs`), plus a second route on `sectionName: http` with a `RequestRedirect` filter (`scheme: https`). |
+| `proxy-body-size` | Usually drop it. Envoy streams request bodies to your pod with no limit, so your app's own limit applies. A route that wants the proxy to refuse large bodies can opt in with a BackendTrafficPolicy `requestBuffer.limit`, which must also set `mergeType: StrategicMerge`: without it the policy replaces the Gateway's and the route is cut at 15 s. |
+| `proxy-read-timeout` / `proxy-send-timeout` | Usually drop it. `auto`'s Gateway sets no overall cap on a request and lets a silent one wait an hour (its `streamIdleTimeout`, the equivalent of `proxy-read-timeout`). To cap a route, add `timeouts: {request: 300s}` to its rule. |
+| `force-ssl-redirect` | Use [`routes-https-only.yaml`](docs/templates/routes-https-only.yaml): the route answers on the `https` listener only, and a second route redirects http with a 308. |
 | `rewrite-target: /` | Drop it; rewriting `/` to `/` does nothing. Real rewrites use a `URLRewrite` filter. |
 
 ## HTTPS Support
