@@ -636,3 +636,40 @@ def test_watch_status_restores_terminal(mock_termios, mock_tty, mock_live, mock_
     mock_termios.tcsetattr.assert_called_once()
     assert mock_termios.tcsetattr.call_args[0][2] is mock_termios.tcgetattr.return_value
     console.show_cursor.assert_called_once_with(True)
+
+
+@patch("autocli.https.apply_pod_routes")
+@patch("autocli.core._execute_pod_install")
+@patch(
+    "autocli.core._build_install_command",
+    return_value=("kubectl apply -f x", False, "api"),
+)
+@patch("autocli.utils.run_and_wait", return_value=False)
+def test_start_pod_applies_routes_after_installing(
+    _mock_run, _mock_build, mock_install, mock_routes, tmp_path
+):
+    """The pod's own install command runs first, then its .auto/routes.yaml."""
+    (tmp_path / "api" / ".auto").mkdir(parents=True)
+    (tmp_path / "api" / ".auto" / "config.yaml").write_text(
+        "name: api\n", encoding="utf-8"
+    )
+    manager = MagicMock()
+    manager.attach_mock(mock_install, "install")
+    manager.attach_mock(mock_routes, "routes")
+
+    with patch.dict(CONFIG, {"code": str(tmp_path)}):
+        core.start_pod("api")
+
+    assert [c[0] for c in manager.mock_calls] == ["install", "routes"]
+    mock_routes.assert_called_once_with(str(tmp_path / "api"))
+
+
+@patch("autocli.https.delete_pod_routes")
+@patch("autocli.utils.run_and_wait", return_value=False)
+def test_stop_pod_removes_routes_even_when_not_running(
+    _mock_run, mock_routes, tmp_path
+):
+    """Routes come down with the pod, and are cleared even if the pod already stopped."""
+    with patch.dict(CONFIG, {"code": str(tmp_path)}):
+        core.stop_pod("api")
+    mock_routes.assert_called_once_with(str(tmp_path / "api"))

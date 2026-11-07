@@ -3,8 +3,9 @@
 Split out of core.py so the bootstrap orchestrator stays focused. The public
 entry points (setup_https_certificates, refresh_https_for_ingresses,
 discover_ingress_hosts, warn_missing_host_entries, warn_unrouted_ingresses,
-install_envoy_gateway, finish_ingress, require_envoy_gateway, create_local_certs)
-are what core.py calls; the rest is internal to this module.
+install_envoy_gateway, finish_ingress, require_envoy_gateway, apply_pod_routes,
+delete_pod_routes, create_local_certs) are what core.py calls; the rest is
+internal to this module.
 
 Pods are exposed with Gateway API HTTPRoutes attached to one shared Gateway
 (GATEWAY_NAME in GATEWAY_NAMESPACE). Envoy Gateway replaced ingress-nginx,
@@ -13,6 +14,7 @@ Ingress objects at all -- hence warn_unrouted_ingresses.
 """
 
 import os
+import shlex
 import subprocess
 from subprocess import CalledProcessError
 
@@ -158,26 +160,70 @@ def discover_ingress_hosts():
 
 
 def warn_unrouted_ingresses():
-    """Name any Ingress objects still deployed, since nothing serves them now.
+    """Name the Ingress objects nothing serves now.
 
-    Pod repos written for ingress-nginx ship `kind: Ingress`; Envoy Gateway
-    ignores those, so the pod starts fine and its URL simply never answers.
-    Saying which objects need converting beats leaving the user to work out why.
+    Envoy Gateway ignores Ingress objects. While pod repos move over, one can
+    ship its Ingress (for auto 0.8) beside HTTPRoutes for the same hosts in
+    .auto/routes.yaml; that Ingress is expected and stays quiet. An Ingress
+    with a host no HTTPRoute covers is a pod that starts fine and never
+    answers, so say which objects need converting.
     """
+    covered = set(discover_ingress_hosts())
     cmd = (
         "kubectl get ingress --all-namespaces -o jsonpath="
-        "'{range .items[*]}{.metadata.namespace}/{.metadata.name}{\"\\n\"}{end}'"
+        '\'{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\\t"}'
+        '{range .spec.rules[*]}{.host}{" "}{end}{"\\n"}{end}\''
     )
-    output = utils.run_and_return(cmd)
-    names = sorted({line.strip() for line in output.split() if line.strip()})
-    if not names:
+    unrouted = []
+    for line in utils.run_and_return(cmd).splitlines():
+        name, _, hosts = line.partition("\t")
+        if not name.strip():
+            continue
+        hosts = hosts.split()
+        if not hosts or any(host not in covered for host in hosts):
+            unrouted.append(name.strip())
+    if not unrouted:
         return
     rprint(
         "  -- [yellow]These Ingress objects are not served. auto now routes through "
         "Envoy Gateway, so convert them to HTTPRoutes (see the README)[/]:"
     )
-    for name in names:
+    for name in sorted(unrouted):
         rprint(f"       {name}")
+
+
+# A pod repo's HTTPRoutes, kept out of the manifest its install command applies.
+POD_ROUTES_FILE = os.path.join(".auto", "routes.yaml")
+
+
+def apply_pod_routes(pod_folder):
+    """Apply a pod repo's .auto/routes.yaml, if it has one.
+
+    While pod repos move off ingress-nginx they carry both: the Ingress in the
+    manifests their install command applies, which auto 0.8 uses, and their
+    HTTPRoutes here, which only auto 0.9 and newer apply. A cluster made by
+    auto 0.8 has no Gateway API CRDs, so an HTTPRoute in the main manifest
+    would fail the whole install there; in this file auto 0.8 never sees it.
+    """
+    routes = os.path.join(pod_folder, POD_ROUTES_FILE)
+    if not os.path.isfile(routes):
+        return False
+    if utils.run_and_wait(
+        f"kubectl apply -f {shlex.quote(routes)}", capture_output=True
+    ):
+        return True
+    rprint(f"       [red]Could not apply {routes}[/]")
+    return False
+
+
+def delete_pod_routes(pod_folder):
+    """Remove the HTTPRoutes apply_pod_routes created, for a pod being stopped"""
+    routes = os.path.join(pod_folder, POD_ROUTES_FILE)
+    if os.path.isfile(routes):
+        utils.run_and_wait(
+            f"kubectl delete -f {shlex.quote(routes)} --ignore-not-found",
+            capture_output=True,
+        )
 
 
 def warn_missing_host_entries(hosts):

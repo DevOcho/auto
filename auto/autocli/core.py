@@ -364,7 +364,6 @@ def start_cluster(progress, task, key_file="", cert_file=""):
 
         # Clusters made by older versions of auto still run ingress-nginx
         https.require_envoy_gateway()
-
         return False
 
     # 2. CREATE NEW CLUSTER
@@ -493,6 +492,7 @@ def stop_pod(pod) -> None:
         pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
     else:
         pod_name = pod
+    https.delete_pod_routes(os.path.join(code_dir, pod_name))
 
     # Is the pod running?
     if not utils.run_and_wait("""kubectl get pods""", check_result=pod_name):
@@ -668,8 +668,9 @@ def start_pod(pod) -> None:
         pod_config, pod_name, code_dir
     )
 
-    # Run the pod install command inside the repo directory
+    # Run the pod install command inside the repo directory, then its routes
     _execute_pod_install(command, pod_folder, pod_name, is_helm, release_name)
+    https.apply_pod_routes(pod_folder)
 
 
 def restart_pod(pod) -> None:

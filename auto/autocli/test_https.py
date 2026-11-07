@@ -311,8 +311,12 @@ def test_update_tls_secrets_needs_no_restart(mock_run):
     assert not any("ingress-nginx" in c or "rollout restart" in c for c in cmds)
 
 
-@patch("autocli.utils.run_and_return", return_value="default/legacy\nshop/web\n")
-def test_warn_unrouted_ingresses_names_each_one(_mock_return):
+@patch("autocli.https.discover_ingress_hosts", return_value=[])
+@patch(
+    "autocli.utils.run_and_return",
+    return_value="default/legacy\tlegacy.local \nshop/web\tweb.local \n",
+)
+def test_warn_unrouted_ingresses_names_each_one(_mock_return, _mock_hosts):
     """Leftover Ingress objects are named so the user knows what to convert."""
     with patch("autocli.https.rprint") as mock_print:
         https.warn_unrouted_ingresses()
@@ -322,12 +326,74 @@ def test_warn_unrouted_ingresses_names_each_one(_mock_return):
     assert printed[1:] == ["       default/legacy", "       shop/web"]
 
 
+@patch("autocli.https.discover_ingress_hosts", return_value=[])
 @patch("autocli.utils.run_and_return", return_value="")
-def test_warn_unrouted_ingresses_silent_without_ingresses(_mock_return):
+def test_warn_unrouted_ingresses_silent_without_ingresses(_mock_return, _mock_hosts):
     """A fully converted cluster gets no warning at all."""
     with patch("autocli.https.rprint") as mock_print:
         https.warn_unrouted_ingresses()
     mock_print.assert_not_called()
+
+
+@patch(
+    "autocli.https.discover_ingress_hosts",
+    return_value=["new-d8.local", "portal.new-d8.local"],
+)
+@patch(
+    "autocli.utils.run_and_return",
+    return_value=(
+        "default/new-d8\tnew-d8.local portal.new-d8.local \n"
+        "default/kirkland\tkirkland.local \n"
+    ),
+)
+def test_ingress_whose_hosts_have_routes_stays_quiet(_mock_return, _mock_hosts):
+    """A repo shipping its Ingress beside .auto/routes.yaml is not flagged.
+
+    During the transition each repo carries both; only an Ingress with a host
+    no HTTPRoute serves is a pod that never answers.
+    """
+    with patch("autocli.https.rprint") as mock_print:
+        https.warn_unrouted_ingresses()
+    printed = [str(call.args[0]) for call in mock_print.call_args_list]
+    assert printed[1:] == ["       default/kirkland"]
+
+
+@patch("autocli.utils.run_and_wait", return_value=1)
+def test_apply_pod_routes_applies_the_routes_file(mock_run, tmp_path):
+    """auto 0.9 applies .auto/routes.yaml beside the pod's own install command."""
+    (tmp_path / ".auto").mkdir()
+    (tmp_path / ".auto" / "routes.yaml").write_text(
+        "kind: HTTPRoute\n", encoding="utf-8"
+    )
+
+    assert https.apply_pod_routes(str(tmp_path)) is True
+    assert (
+        mock_run.call_args.args[0] == f"kubectl apply -f {tmp_path}/.auto/routes.yaml"
+    )
+
+
+@patch("autocli.utils.run_and_wait")
+def test_pod_without_routes_file_is_left_alone(mock_run, tmp_path):
+    """A repo not yet converted has no routes file; nothing is applied or deleted."""
+    assert https.apply_pod_routes(str(tmp_path)) is False
+    https.delete_pod_routes(str(tmp_path))
+    mock_run.assert_not_called()
+
+
+@patch("autocli.utils.run_and_wait", return_value=1)
+def test_delete_pod_routes_removes_them(mock_run, tmp_path):
+    """Stopping a pod takes its routes down too, so its hosts stop being listed."""
+    (tmp_path / ".auto").mkdir()
+    (tmp_path / ".auto" / "routes.yaml").write_text(
+        "kind: HTTPRoute\n", encoding="utf-8"
+    )
+
+    https.delete_pod_routes(str(tmp_path))
+
+    assert mock_run.call_args.args[0].startswith(
+        f"kubectl delete -f {tmp_path}/.auto/routes.yaml"
+    )
+    assert "--ignore-not-found" in mock_run.call_args.args[0]
 
 
 @patch("autocli.utils.declare_error")
