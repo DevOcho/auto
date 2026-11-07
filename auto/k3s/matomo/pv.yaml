@@ -11,4 +11,17 @@ spec:
   accessModes:
     - ReadWriteOnce
   hostPath:
-    path: "/mnt/data"
+    path: "/mnt/data-matomo"
+  # Pinned to the server node: a hostPath volume lives on one node's disk, so a
+  # pod rescheduled to the other node would find an empty -- or another
+  # service's -- directory. Each service has its own directory for the same
+  # reason: mysql, minio, redis and matomo used to share /mnt/data, and after a
+  # restart MySQL could land on minio's buckets and refuse to initialize.
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - k3d-k3s-default-server-0
