@@ -35,7 +35,6 @@ system-pods:
         - kubectl apply -f ~/.auto/k3s/mysql/pvc.yaml
         - kubectl apply -f ~/.auto/k3s/mysql/deployment.yaml
         - kubectl apply -f ~/.auto/k3s/mysql/service.yaml
-        - kubectl apply -f ~/.auto/k3s/mysql/ingress.yaml
 
   # Minio config
   - pod:
@@ -58,7 +57,6 @@ system-pods:
         - kubectl apply -f ~/.auto/k3s/postgres/pvc.yaml
         - kubectl apply -f ~/.auto/k3s/postgres/deployment.yaml
         - kubectl apply -f ~/.auto/k3s/postgres/service.yaml
-        - kubectl apply -f ~/.auto/k3s/postgres/ingress.yaml
 
   # Matomo config
   - pod:

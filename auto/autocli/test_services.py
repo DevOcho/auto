@@ -304,3 +304,25 @@ def test_db_that_never_runs_is_not_treated_as_ready(mock_wait, mock_rprint):
     socket_check.assert_not_called()
     assert mock_wait.call_args.kwargs["max_wait_time"] >= 360
     assert any("[red]" in str(c.args[0]) for c in mock_rprint.call_args_list)
+
+
+@patch("autocli.services._run_command_with_retry")
+@patch("autocli.utils.get_required_system_pods", return_value={"mysql"})
+def test_retired_database_routes_are_skipped(_mock_required, mock_cmd):
+    """An old local.yaml still lists the database routes auto no longer ships."""
+    mysql = {
+        "pod": {
+            "name": "mysql",
+            "commands": [
+                "kubectl apply -f ~/.auto/k3s/mysql/deployment.yaml",
+                "kubectl apply -f ~/.auto/k3s/mysql/ingress.yaml",
+            ],
+        }
+    }
+    with patch.dict(CONFIG, {"system-pods": [mysql]}), patch(
+        "autocli.services._expose_system_pod_port", return_value=True
+    ):
+        services.install_system_pods()
+    assert [c.args[0] for c in mock_cmd.call_args_list] == [
+        "kubectl apply -f ~/.auto/k3s/mysql/deployment.yaml"
+    ]

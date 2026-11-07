@@ -1,6 +1,7 @@
 """System Pods and Database Services Management"""
 
 import concurrent.futures
+import os
 import shlex
 import subprocess
 import time
@@ -58,6 +59,22 @@ def _expose_system_pod_port(pod_name, mapping):
     return True
 
 
+# Manifests auto no longer ships: HTTP routes to the MySQL, Postgres and Redis
+# ports, which never served anything. Existing local.yaml files still list
+# them, and installing a release never deletes old files from ~/.auto/k3s, so
+# stale copies would otherwise keep being applied on every start.
+RETIRED_MANIFESTS = {
+    os.path.expanduser(f"~/.auto/k3s/{pod}/ingress.yaml")
+    for pod in ("mysql", "postgres", "redis")
+}
+
+
+def _is_retired(command):
+    """True for a `kubectl apply -f` of a manifest auto no longer ships"""
+    words = command.split()
+    return bool(words) and os.path.expanduser(words[-1]) in RETIRED_MANIFESTS
+
+
 # Database ports reachable from the host: host port -> the NodePort behind k3d's
 # load balancer.
 PORT_MAPPINGS = {
@@ -108,7 +125,8 @@ def install_system_pods():
 
         rprint("  -- Starting: " + pod_name)
         for command in sys_pod["pod"]["commands"]:
-            _run_command_with_retry(command)
+            if not _is_retired(command):
+                _run_command_with_retry(command)
         # MinIO's client setup waits for its pod, so it happens where buckets
         # are made (_process_minio_buckets) instead of holding up every start
 

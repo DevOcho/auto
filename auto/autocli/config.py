@@ -92,7 +92,6 @@ system-pods:
         - "kubectl apply -f ~/.auto/k3s/mysql/pvc.yaml"
         - "kubectl apply -f ~/.auto/k3s/mysql/deployment.yaml"
         - "kubectl apply -f ~/.auto/k3s/mysql/service.yaml"
-        - "kubectl apply -f ~/.auto/k3s/mysql/ingress.yaml"
       databases:
         - name: portal
   - pod:
@@ -104,7 +103,6 @@ system-pods:
         - "kubectl apply -f ~/.auto/k3s/postgres/pvc.yaml"
         - "kubectl apply -f ~/.auto/k3s/postgres/deployment.yaml"
         - "kubectl apply -f ~/.auto/k3s/postgres/service.yaml"
-        - "kubectl apply -f ~/.auto/k3s/postgres/ingress.yaml"
       databases:
         - name: portal
   - pod:
@@ -126,7 +124,6 @@ system-pods:
         - "kubectl apply -f ~/.auto/k3s/redis/pvc.yaml"
         - "kubectl apply -f ~/.auto/k3s/redis/deployment.yaml"
         - "kubectl apply -f ~/.auto/k3s/redis/service.yaml"
-        - "kubectl apply -f ~/.auto/k3s/redis/ingress.yaml"
   # Local SMTP catch-all.  Pods send mail to `mailpit` on port 1025 and
   # read it in the browser at http://mailpit.local/
   - pod:
