@@ -1,18 +1,17 @@
-apiVersion: networking.k8s.io/v1
-kind: Ingress
+# Gateway API route (served by Envoy Gateway). Kept under the old ingress.yaml
+# name because every local.yaml's system-pod commands apply this exact path.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
 metadata:
   name: postgres
+  namespace: default
 spec:
-  ingressClassName:
-    nginx
+  parentRefs:
+  - name: auto-gateway
+    namespace: envoy-gateway-system
+  hostnames:
+  - postgres.local
   rules:
-  - host: postgres.local
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: postgres
-            port:
-              number: 5432
+  - backendRefs:
+    - name: postgres
+      port: 5432

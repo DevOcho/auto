@@ -1,20 +1,156 @@
-"""Local HTTPS: mkcert certificate generation and nginx-ingress TLS wiring.
+"""Local HTTPS and ingress: mkcert certificates and the Envoy Gateway that serves pods.
 
 Split out of core.py so the bootstrap orchestrator stays focused. The public
 entry points (setup_https_certificates, refresh_https_for_ingresses,
-discover_ingress_hosts, warn_missing_host_entries, install_nginx_ingress,
-create_local_certs) are what core.py calls; the rest is internal to this
-module.
+discover_ingress_hosts, warn_missing_host_entries, warn_unrouted_ingresses,
+install_envoy_gateway, finish_ingress, require_envoy_gateway, create_local_certs)
+are what core.py calls; the rest is internal to this module.
+
+Pods are exposed with Gateway API HTTPRoutes attached to one shared Gateway
+(GATEWAY_NAME in GATEWAY_NAMESPACE). Envoy Gateway replaced ingress-nginx,
+which was retired in March 2026, and it does not read networking.k8s.io
+Ingress objects at all -- hence warn_unrouted_ingresses.
 """
 
 import os
-import shutil
 import subprocess
 from subprocess import CalledProcessError
 
 from autocli import checks, utils
 from autocli.utils import run_silent
 from rich import print as rprint
+
+# Pinned so every developer's cluster runs the same controller. Bump on purpose,
+# after trying the new release against a real `auto start`.
+ENVOY_GATEWAY_VERSION = "v1.9.3"
+
+# The k3s image core.start_cluster creates clusters with. It lives here because
+# it is coupled to ENVOY_GATEWAY_VERSION: Envoy Gateway v1.9 runs on Kubernetes
+# 1.33-1.36 and its CRDs fail to install on anything older -- including k3d's
+# default 1.31, which is already out of support. Check the compatibility
+# matrix (gateway.envoyproxy.io/news/releases/matrix) when bumping either one.
+K3S_IMAGE = "rancher/k3s:v1.35.9-k3s1"
+GATEWAY_NAMESPACE = "envoy-gateway-system"
+GATEWAY_NAME = "auto-gateway"
+
+# Envoy's defaults are tuned for production edges, not a laptop, and two of
+# them break pods that worked behind nginx:
+#   * every request is cut at 15s (nginx allowed 60s) -- far too short for the
+#     synchronous AI calls several pods make. The route timeout is disabled
+#     here; a pod that wants a cap sets `timeouts.request` on its HTTPRoute.
+#   * a stream with no bytes moving for 5 minutes is reset. Pods already wait
+#     up to an hour on a silent backend (siterev-health), so allow that.
+# Request bodies need no setting: Envoy streams them to the pod instead of
+# enforcing nginx's 1 MiB proxy-body-size, so the app's own limit is the one
+# that applies.
+#
+# The EnvoyProxy shapes the proxy deployment itself. externalTrafficPolicy has
+# to be Cluster: Envoy Gateway defaults to Local, and k3d's load balancer sends
+# host traffic to every node, so a node without the Envoy pod would drop its
+# share of connections. The memory request comes down from Envoy's 512Mi
+# default so it fits beside a laptop's worth of pods (ingress-nginx asked 90Mi).
+_GATEWAY_MANIFEST = """\
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: auto-envoy
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: {name}-proxy
+  namespace: {namespace}
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        name: {name}-envoy
+        externalTrafficPolicy: Cluster
+      envoyDeployment:
+        name: {name}-envoy
+        container:
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {name}
+  namespace: {namespace}
+spec:
+  gatewayClassName: auto-envoy
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: {name}-proxy
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: All
+{https_listener}---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: {name}-timeouts
+  namespace: {namespace}
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {name}
+  timeout:
+    http:
+      streamIdleTimeout: 3600s
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: {name}-timeouts
+  namespace: {namespace}
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: {name}
+  timeout:
+    http:
+      requestTimeout: 0s
+"""
+
+# One HTTPS listener with no hostname terminates TLS for every host with the
+# single mkcert certificate -- the same job nginx's --default-ssl-certificate
+# did, so pods never need a `tls:` block of their own.
+_HTTPS_LISTENER = """\
+  - name: https
+    protocol: HTTPS
+    port: 443
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - kind: Secret
+        name: local-tls
+    allowedRoutes:
+      namespaces:
+        from: All
+"""
+
+
+def gateway_manifest(use_https):
+    """Render the GatewayClass, Gateway and timeout policies auto installs"""
+    return _GATEWAY_MANIFEST.format(
+        name=GATEWAY_NAME,
+        namespace=GATEWAY_NAMESPACE,
+        https_listener=_HTTPS_LISTENER if use_https else "",
+    )
 
 
 def create_local_certs(cert_path, additional_domains=None):
@@ -72,39 +208,73 @@ def setup_https_certificates(pods):
     return key_file, cert_file
 
 
-def _update_tls_secrets(key_file, cert_file):
-    """Update TLS secrets in the running cluster and restart ingress to pick them up"""
-    rprint("[deep_sky_blue1]Updating TLS secrets in cluster...[/]")
-    for ns in ["default", "ingress-nginx"]:
+def _apply_tls_secrets(key_file, cert_file):
+    """Create or replace the local-tls secret the Gateway's HTTPS listener serves.
+
+    The Gateway can only reference a secret in its own namespace (without a
+    ReferenceGrant). The copy in `default` is kept for pods that mount it.
+    """
+    for ns in ["default", GATEWAY_NAMESPACE]:
         cmd = (
             f"kubectl create secret tls local-tls --key {key_file} --cert {cert_file} "
             f"-n {ns} --dry-run=client -o yaml | kubectl apply -f -"
         )
         utils.run_and_wait(cmd, capture_output=True)
-    utils.run_and_wait(
-        "kubectl rollout restart deployment ingress-nginx-controller -n ingress-nginx",
-        capture_output=True,
-    )
+
+
+def _update_tls_secrets(key_file, cert_file):
+    """Update TLS secrets in the running cluster.
+
+    No restart needed: Envoy Gateway watches the secret and pushes the new
+    certificate to Envoy live, where ingress-nginx needed a rollout restart.
+    """
+    rprint("[deep_sky_blue1]Updating TLS secrets in cluster...[/]")
+    _apply_tls_secrets(key_file, cert_file)
     rprint(" :white_heavy_check_mark:[green] TLS secrets updated")
 
 
 def discover_ingress_hosts():
-    """Read the hostnames every deployed Ingress actually declares.
+    """Read the hostnames every deployed HTTPRoute actually declares.
 
     The cluster is the source of truth for SSL coverage: pods define their own
-    hostnames in their Helm charts (a single pod can expose several, e.g. both
+    hostnames in their manifests (a single pod can expose several, e.g. both
     'app.local' and a customer 'portal.app.local'), which auto cannot guess from
-    the repo name alone. We collect spec.rules[].host and spec.tls[].hosts[]
-    across all namespaces and return the de-duplicated, sorted list.
+    the repo name alone. We collect spec.hostnames[] across all namespaces and
+    return the de-duplicated, sorted list. Leftover Ingress objects are left out
+    on purpose: nothing serves them, so listing their hosts would only point the
+    user at URLs that fail (warn_unrouted_ingresses names them instead).
     """
     cmd = (
-        "kubectl get ingress --all-namespaces -o jsonpath="
-        '\'{range .items[*]}{range .spec.rules[*]}{.host}{"\\n"}{end}'
-        '{range .spec.tls[*].hosts[*]}{@}{"\\n"}{end}{end}\''
+        "kubectl get httproutes.gateway.networking.k8s.io --all-namespaces "
+        "-o jsonpath="
+        "'{range .items[*]}{range .spec.hostnames[*]}{@}{\"\\n\"}{end}{end}'"
     )
     output = utils.run_and_return(cmd)
     hosts = {line.strip() for line in output.split() if line.strip()}
     return sorted(hosts)
+
+
+def warn_unrouted_ingresses():
+    """Name any Ingress objects still deployed, since nothing serves them now.
+
+    Pod repos written for ingress-nginx ship `kind: Ingress`; Envoy Gateway
+    ignores those, so the pod starts fine and its URL simply never answers.
+    Saying which objects need converting beats leaving the user to work out why.
+    """
+    cmd = (
+        "kubectl get ingress --all-namespaces -o jsonpath="
+        "'{range .items[*]}{.metadata.namespace}/{.metadata.name}{\"\\n\"}{end}'"
+    )
+    output = utils.run_and_return(cmd)
+    names = sorted({line.strip() for line in output.split() if line.strip()})
+    if not names:
+        return
+    rprint(
+        "  -- [yellow]These Ingress objects are not served. auto now routes through "
+        "Envoy Gateway, so convert them to HTTPRoutes (see the README)[/]:"
+    )
+    for name in names:
+        rprint(f"       {name}")
 
 
 def warn_missing_host_entries(hosts):
@@ -149,68 +319,140 @@ def refresh_https_for_ingresses():
     warn_missing_host_entries(hosts)
 
 
-def install_nginx_ingress(use_https, key_file, cert_file):
-    """Install and configure Nginx Ingress Controller"""
-    if shutil.which("helm") is None:
-        rprint(
-            "  -- [yellow]helm not found; skipping Nginx Ingress install. "
-            "Ingress will not be available until helm is installed.[/]"
-        )
-        return
-    rprint("     = Installing Nginx Ingress Controller...")
-    utils.run_and_wait(
-        "helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx",
+# The release publishes the whole install -- Gateway API and Envoy Gateway CRDs,
+# the controller and its certgen job -- as one manifest: the same objects the
+# Helm chart renders, so helm is no longer needed for ingress.
+ENVOY_GATEWAY_MANIFEST_URL = (
+    "https://github.com/envoyproxy/gateway/releases/download/"
+    f"{ENVOY_GATEWAY_VERSION}/install.yaml"
+)
+
+# Custom resources auto creates right after the install. Their CRDs have to be
+# served before the Gateway, its policies or any pod's HTTPRoute can be applied.
+_GATEWAY_CRDS = [
+    "gatewayclasses.gateway.networking.k8s.io",
+    "gateways.gateway.networking.k8s.io",
+    "httproutes.gateway.networking.k8s.io",
+    "envoyproxies.gateway.envoyproxy.io",
+    "clienttrafficpolicies.gateway.envoyproxy.io",
+    "backendtrafficpolicies.gateway.envoyproxy.io",
+]
+
+
+def _envoy_gateway_manifest():
+    """Path to the release's install.yaml, downloaded once per version and cached"""
+    cache_dir = os.path.expanduser("~") + "/.auto/cache"
+    path = f"{cache_dir}/envoy-gateway-{ENVOY_GATEWAY_VERSION}.yaml"
+    if os.path.isfile(path) and os.path.getsize(path) > 0:
+        return path
+    os.makedirs(cache_dir, exist_ok=True)
+    # Download beside it and rename, so a cut-off download is never mistaken
+    # for the cached manifest next time
+    partial = path + ".part"
+    if not utils.run_and_wait(
+        f"curl -fsSL -o {partial} {ENVOY_GATEWAY_MANIFEST_URL}", capture_output=True
+    ) or not os.path.isfile(partial):
+        return None
+    os.replace(partial, path)
+    return path
+
+
+def install_envoy_gateway(use_https, key_file, cert_file):
+    """Install Envoy Gateway and the shared Gateway, without waiting for it to serve.
+
+    The controller takes about a minute to start however it is installed
+    (measured on a fresh cluster: helm 86 s, kubectl 78 s to a serving
+    Gateway). Nothing auto does next needs it running -- system pods and app
+    pods only need the CRDs to apply their HTTPRoutes -- so this returns once
+    the objects are in, and finish_ingress() confirms it is serving after the
+    pods have loaded. That overlap is what takes the minute off `auto start`.
+    """
+    manifest = _envoy_gateway_manifest()
+    if not manifest:
+        rprint("     [red]Could not download the Envoy Gateway manifest[/red]")
+        return False
+    rprint("     = Installing Envoy Gateway...")
+
+    # Server-side apply: the CRDs are too large for client-side apply, whose
+    # last-applied annotation is capped at 256 KiB
+    if not utils.run_and_wait(
+        f"kubectl apply --server-side --force-conflicts -f {manifest}",
+        capture_output=True,
+    ):
+        rprint("     [red]Error installing Envoy Gateway[/red]")
+        return False
+    crds = " ".join(f"crd/{crd}" for crd in _GATEWAY_CRDS)
+    if not utils.run_and_wait(
+        f"kubectl wait --for=condition=Established --timeout=60s {crds}",
+        capture_output=True,
+    ):
+        rprint("     [red]Envoy Gateway's CRDs did not become available[/red]")
+        return False
+
+    # New cluster created, if HTTPS, inject the secret the HTTPS listener serves
+    if use_https and key_file and cert_file:
+        rprint("     = Configuring Cluster HTTPS (Envoy Gateway)")
+        _apply_tls_secrets(key_file, cert_file)
+
+    # A quoted heredoc keeps the shell from expanding anything in the manifest
+    apply_cmd = f"kubectl apply -f - <<'EOF'\n{gateway_manifest(use_https)}EOF"
+    if not utils.run_and_wait(apply_cmd, capture_output=True):
+        rprint("     [red]Error creating the Envoy Gateway listeners[/red]")
+        return False
+    return True
+
+
+def wait_for_gateway(timeout="300s"):
+    """Wait until the Gateway is serving, then clear the finished certgen pod"""
+    # Programmed means the Envoy proxy is running and the load balancer has
+    # given it an address -- i.e. pods' hostnames will actually answer
+    ready = utils.run_and_wait(
+        f"kubectl wait --for=condition=Programmed gateway/{GATEWAY_NAME} "
+        f"-n {GATEWAY_NAMESPACE} --timeout={timeout}",
         capture_output=True,
     )
-    utils.run_and_wait("helm repo update", capture_output=True)
-
-    # Build Helm command
-    helm_cmd = (
-        "helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx "
-        "--namespace ingress-nginx --create-namespace "
-        "--set controller.service.type=LoadBalancer "
-        "--set controller.watchIngressWithoutClass=true "
-        "--set controller.ingressClassResource.default=true "
-        "--set controller.admissionWebhooks.enabled=false "
+    if not ready:
+        rprint(
+            "  -- [yellow]Envoy Gateway is not serving yet; pod URLs may not answer "
+            f"until it is (kubectl get pods -n {GATEWAY_NAMESPACE})[/]"
+        )
+    # Let's remove the completed setup job containers (the certgen job)
+    utils.run_and_wait(
+        f"kubectl delete pod -n {GATEWAY_NAMESPACE} "
+        "--field-selector=status.phase==Succeeded",
+        capture_output=True,
     )
+    return ready
 
-    # New cluster created, if HTTPS, inject secrets and config Nginx
-    if use_https and key_file and cert_file:
-        rprint("     = Configuring Cluster HTTPS (Nginx)")
 
-        # Create the namespace first (needed for secrets)
-        utils.run_and_wait(
-            "kubectl create namespace ingress-nginx", capture_output=True
-        )
+def finish_ingress(use_https):
+    """Last ingress step of a full start, once the pods have loaded.
 
-        # Create secrets in default and ingress-nginx namespaces
-        for ns in ["default", "ingress-nginx"]:
-            cmd = (
-                f"kubectl create secret tls local-tls --key {key_file} --cert {cert_file} "
-                f"-n {ns} --dry-run=client -o yaml | kubectl apply -f -"
-            )
-            utils.run_and_wait(cmd, capture_output=True)
+    install_envoy_gateway() returned without waiting for Envoy, and loading the
+    pods covered most of its start-up. Confirm it is serving now, so the URLs
+    printed next answer, then cover every route's hostname with the cert.
+    """
+    wait_for_gateway()
+    if use_https:
+        refresh_https_for_ingresses()
 
-        # Add default cert arg
-        extra_args = "controller.extraArgs.default-ssl-certificate"
-        helm_cmd += f" --set {extra_args}=ingress-nginx/local-tls"
 
-    # Run the Helm install silently
-    if not utils.run_and_wait(helm_cmd, capture_output=True):
-        rprint("     [red]Error installing Nginx Ingress Controller[/red]")
-    else:
-        # Explicitly Patch the Deployment to FORCE the argument if Helm missed it
-        if use_https:
-            patch_cmd = (
-                "kubectl patch deployment ingress-nginx-controller -n ingress-nginx "
-                '--type=json -p=\'[{"op": "add", "path": '
-                '"/spec/template/spec/containers/0/args/-", '
-                '"value": "--default-ssl-certificate=ingress-nginx/local-tls"}]\''
-            )
-            utils.run_and_wait(patch_cmd, capture_output=True, suppress_error=True)
+def require_envoy_gateway():
+    """Stop on a cluster created before auto moved to Envoy Gateway.
 
-        # Force restart Nginx pods to ensure they pick up the new certificate
-        utils.run_and_wait(
-            "kubectl rollout restart deployment ingress-nginx-controller -n ingress-nginx",
-            capture_output=True,
-        )
+    Those clusters still run ingress-nginx on Kubernetes 1.31. No supported
+    Envoy Gateway release runs on 1.31, and k3d cannot upgrade a cluster in
+    place, so a new cluster is the only way forward. Say that plainly instead of
+    carrying on with a cluster where no converted pod's hostname will answer.
+    """
+    gateway_check = f"kubectl get gateway {GATEWAY_NAME} -n {GATEWAY_NAMESPACE}"
+    if utils.run_and_wait(gateway_check, capture_output=True, suppress_error=True):
+        return
+
+    utils.declare_error(
+        "This cluster predates Envoy Gateway and has to be recreated:\n"
+        "     auto stop --delete-cluster\n"
+        "     auto start\n"
+        "   That resets the local databases; re-seed with `auto seed <pod>`.\n"
+        "   Not ready yet? `auto update 0.8.3` puts the previous auto back."
+    )

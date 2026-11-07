@@ -54,6 +54,7 @@ def _print_access_hints(pods, use_https):
     # only and never mentioned the system pods at all.
     if not use_https:
         https.warn_missing_host_entries(hosts)
+    https.warn_unrouted_ingresses()
 
 
 def finish_pod_start():
@@ -73,6 +74,8 @@ def finish_pod_start():
         # The pod's ingress now exists; re-issue the cert so any hostnames it
         # adds (e.g. a second 'portal.<pod>.local') are covered too.
         https.refresh_https_for_ingresses()
+
+    https.warn_unrouted_ingresses()
 
     # Cache any external images this pod pulled (sidecars, init containers,
     # third-party images) into the local registry and local.yaml, matching what
@@ -162,6 +165,7 @@ def bootstrap_cluster(pod, dry_run, offline):
                     exit_auto=True,
                 )
                 return
+            https.require_envoy_gateway()
             _prepare_single_pod(pod, offline)
             # Bring up any system pods this pod needs and create its databases
             # and buckets BEFORE the pod starts. This mirrors the full-start
@@ -254,13 +258,13 @@ def bootstrap_cluster(pod, dry_run, offline):
             advance=20,
         )
 
-        # STEP 7.5: Now that ingresses exist, re-issue the cert to cover every
-        # hostname they actually declare (handles pods that expose more than one).
+        # STEP 7.5: Envoy finished starting while the pods loaded; confirm it serves,
+        # then re-issue the cert to cover every hostname the routes declare.
         _run_bootstrap_step(
-            "Securing ingress hosts (HTTPS)...",
-            "HTTPS Ingress Hosts Secured",
-            not dry_run and use_https,
-            https.refresh_https_for_ingresses,
+            "Waiting for Envoy Gateway and securing ingress hosts...",
+            "Ingress Ready",
+            not dry_run,
+            lambda: https.finish_ingress(use_https),
         )
 
         # STEP 8: Auto-detect external images and cache them
@@ -358,6 +362,9 @@ def start_cluster(progress, task, key_file="", cert_file=""):
         # Verify we can actually talk to it
         _verify_and_heal_connection()
 
+        # Clusters made by older versions of auto still run ingress-nginx
+        https.require_envoy_gateway()
+
         return False
 
     # 2. CREATE NEW CLUSTER
@@ -373,14 +380,15 @@ def start_cluster(progress, task, key_file="", cert_file=""):
     # Ports for databases are dynamically opened when needed by pods
     bash_command = (
         f"k3d cluster create "
+        f"--image {https.K3S_IMAGE} "
         f"--volume {code_dir}:/mnt/code "
         f"--registry-use k3d-registry.local:12345 "
         f"--registry-config ~/.auto/k3s/registries.yaml "
-        f"{load_bal_config} "
+        f"{load_bal_config} {services.cluster_port_args()} "
         f'--k3s-arg "--disable=traefik@server:0" '
         f"{extra_args} "
         # f"--network k3d-vpn-net "
-        f"--agents 1"
+        f"--agents {CONFIG.get('agents', 1)}"
     )
 
     # Attempt creation.
@@ -399,20 +407,9 @@ def start_cluster(progress, task, key_file="", cert_file=""):
     print("     = Cluster Started.  Waiting for Pods to finish starting...")
     progress.update(task, advance=6)
 
-    # Install and Configure Nginx
-    https.install_nginx_ingress(use_https, key_file, cert_file)
-
-    # Wait for the Ingress Controller to be ready
-    if utils.wait_for_pod_status("ingress-nginx-controller", "Running"):
-        progress.update(task, advance=5)
-
-    # Let's remove the completed nginx job containers
-    if utils.wait_for_pod_status("ingress-nginx-admission-create", "Complete"):
-        progress.update(task, advance=5)
-    bash_command = """kubectl delete pod -n ingress-nginx \
-                      --field-selector=status.phase==Succeeded"""
-    if utils.run_and_wait(bash_command):
-        print("     = Pods finished starting.  Removed completed setup pods.")
+    # Install Envoy Gateway; it finishes starting while the pods load (STEP 7.5)
+    if https.install_envoy_gateway(use_https, key_file, cert_file):
+        progress.update(task, advance=10)
 
     return True
 
@@ -680,6 +677,9 @@ def restart_pod(pod) -> None:
 
     # How many times are we going to try this?
     max_retries = 15
+
+    # Check before stopping: an old ingress-nginx cluster can't apply its HTTPRoute
+    https.require_envoy_gateway()
 
     stop_pod(pod)
     while utils.verify_pod_is_installed(pod) and max_retries >= 1:

@@ -202,10 +202,10 @@ def _cache_single_image(full_image, clean_image):
 def cache_running_images():
     """Scan running pods for images and auto-add them to local registry and local.yaml silently."""
     rprint(
-        "  -- Scanning default, kube-system, and ingress-nginx for external images..."
+        "  -- Scanning default, kube-system, and envoy-gateway-system for external images..."
     )
 
-    namespaces = ["default", "kube-system", "ingress-nginx"]
+    namespaces = ["default", "kube-system", "envoy-gateway-system"]
     found_images = _scan_namespaces_for_images(namespaces)
     local_pod_names = _get_local_pod_names()
     images_to_process = _filter_external_images(found_images, local_pod_names)

@@ -1,20 +1,17 @@
-apiVersion: networking.k8s.io/v1
-kind: Ingress
+# Gateway API route (served by Envoy Gateway). Kept under the old ingress.yaml
+# name because every local.yaml's system-pod commands apply this exact path.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
 metadata:
   name: matomo
   namespace: default
-  annotations:
-    kubernetes.io/ingress.class: nginx
-    nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
+  parentRefs:
+  - name: auto-gateway
+    namespace: envoy-gateway-system
+  hostnames:
+  - matomo.example.com
   rules:
-    - host: matomo.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: matomo
-                port:
-                  number: 80
+  - backendRefs:
+    - name: matomo
+      port: 80

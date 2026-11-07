@@ -5,7 +5,8 @@
 import sys
 from unittest.mock import MagicMock, mock_open, patch
 
-from autocli import core, registry
+import pytest
+from autocli import core, https, registry
 from autocli.config import CONFIG
 
 
@@ -17,12 +18,14 @@ def test_start_cluster_existing(mock_verify, mock_run, mock_dns):
     progress = MagicMock()
     task = MagicMock()
 
-    mock_run.side_effect = [True, True, False]
+    # cluster list, kubeconfig merge, "is it stopped?", then the Gateway check
+    mock_run.side_effect = [True, True, False, True]
     mock_verify.return_value = True
 
     result = core.start_cluster(progress, task)
     assert result is False
     mock_dns.assert_called_once()
+    assert "kubectl get gateway auto-gateway" in mock_run.call_args_list[-1].args[0]
 
 
 @patch("autocli.utils.nodes_without_dns", return_value=[])
@@ -74,6 +77,8 @@ def test_heal_dns_warns_without_failing_if_restart_does_not_help(
     assert "still can't resolve" in str(mock_print.call_args_list[-1])
 
 
+@patch("autocli.services.cluster_port_args", new=lambda: '-p "3306:30036@loadbalancer"')
+@patch("autocli.https._envoy_gateway_manifest", new=lambda: "/cache/eg.yaml")
 @patch("autocli.utils.wait_for_pod_status")
 @patch("autocli.utils.run_and_wait")
 @patch("autocli.utils.verify_cluster_connection")
@@ -100,6 +105,14 @@ def test_start_cluster_new(mock_verify, mock_run, mock_wait):
     with patch.dict(CONFIG, {"code": "/tmp", "https": False}):
         result = core.start_cluster(progress, task)
         assert result is True
+
+    # New clusters get the pinned k3s, not k3d's default (too old for Envoy Gateway)
+    create_cmd = next(
+        c.args[0] for c in mock_run.call_args_list if "k3d cluster create" in c.args[0]
+    )
+    assert f"--image {https.K3S_IMAGE}" in create_cmd
+    # Database ports are mapped up front, not added later with `k3d node edit`
+    assert '-p "3306:30036@loadbalancer"' in create_cmd
 
 
 @patch("pathlib.Path.is_file")
@@ -246,6 +259,8 @@ def test_output_logs_cluster_down_missing_pod(
 # --- bootstrap_cluster: single-pod path ----------------------------------
 
 
+@patch("autocli.https.require_envoy_gateway", new=lambda: None)
+@patch("autocli.https.warn_unrouted_ingresses", new=lambda: None)
 @patch("autocli.registry.cache_running_images")
 @patch("autocli.core.start_pod")
 @patch("autocli.services.create_databases_for_pod")
@@ -277,6 +292,8 @@ def test_bootstrap_single_pod_cluster_running(  # pylint: disable=too-many-argum
     mock_cache.assert_called_once()
 
 
+@patch("autocli.https.require_envoy_gateway", new=lambda: None)
+@patch("autocli.https.warn_unrouted_ingresses", new=lambda: None)
 @patch("autocli.registry.cache_running_images")
 @patch("autocli.core.start_pod")
 @patch("autocli.services.create_databases_for_pod")
@@ -392,6 +409,7 @@ def test_migrate_uses_ephemeral_pod(mock_run):
     assert {"name": "SMALLS_ENV", "value": "PROD"} in kwargs["extra_env"]
 
 
+@patch("autocli.https.warn_unrouted_ingresses", new=lambda: None)
 @patch("autocli.https.warn_missing_host_entries")
 @patch("autocli.https.discover_ingress_hosts", return_value=["myapp.local"])
 def test_print_access_hints_missing_host_shows_advisory_not_exit(
@@ -419,6 +437,7 @@ def test_rollback_stays_on_kubectl_exec(mock_exec):
     mock_exec.assert_called_once_with("api", "./smalls.py rollback 0003")
 
 
+@patch("autocli.https.warn_unrouted_ingresses", new=lambda: None)
 @patch("autocli.https.warn_missing_host_entries")
 @patch("autocli.https.discover_ingress_hosts")
 def test_access_hints_list_every_ingress_host(mock_discover, mock_warn):
@@ -440,6 +459,7 @@ def test_access_hints_list_every_ingress_host(mock_discover, mock_warn):
     mock_warn.assert_called_once_with(["mailpit.local", "minio.local", "portal.local"])
 
 
+@patch("autocli.https.warn_unrouted_ingresses", new=lambda: None)
 @patch("autocli.https.warn_missing_host_entries")
 @patch("autocli.https.discover_ingress_hosts")
 def test_access_hints_https_does_not_double_warn(mock_discover, mock_warn):
@@ -458,6 +478,7 @@ def test_access_hints_https_does_not_double_warn(mock_discover, mock_warn):
     mock_warn.assert_not_called()
 
 
+@patch("autocli.https.warn_unrouted_ingresses", new=lambda: None)
 @patch("autocli.https.warn_missing_host_entries")
 @patch("autocli.https.discover_ingress_hosts")
 def test_access_hints_fall_back_to_pod_names(mock_discover, mock_warn):
@@ -475,6 +496,8 @@ def test_access_hints_fall_back_to_pod_names(mock_discover, mock_warn):
     assert urls == ["[italic]  http://portal.local:8088/"]
 
 
+@patch("autocli.https.require_envoy_gateway", new=lambda: None)
+@patch("autocli.https.warn_unrouted_ingresses", new=lambda: None)
 @patch("autocli.registry.cache_running_images")
 @patch("autocli.https.refresh_https_for_ingresses")
 @patch("autocli.core.start_pod")
@@ -497,6 +520,32 @@ def test_restart_pod_refreshes_certs_and_caches_images(
     mock_cache.assert_called_once()
 
 
+@patch("autocli.core.stop_pod")
+@patch("autocli.https.require_envoy_gateway", side_effect=SystemExit(1))
+def test_restart_pod_checks_gateway_before_stopping(_mock_require, mock_stop):
+    """On an old ingress-nginx cluster, restart stops before taking the pod down.
+
+    The restarted pod's HTTPRoute would not even apply there, so stopping it
+    first would leave the user with no pod at all.
+    """
+    with pytest.raises(SystemExit):
+        core.restart_pod("portal")
+    mock_stop.assert_not_called()
+
+
+@patch("autocli.registry.cache_running_images")
+@patch("autocli.https.warn_unrouted_ingresses")
+@patch("autocli.https.refresh_https_for_ingresses")
+def test_finish_pod_start_warns_about_unconverted_ingresses(
+    _mock_refresh, mock_unrouted, _mock_cache
+):
+    """A pod still shipping `kind: Ingress` is named after it starts."""
+    with patch.dict(CONFIG, {"https": True}):
+        core.finish_pod_start()
+    mock_unrouted.assert_called_once()
+
+
+@patch("autocli.https.warn_unrouted_ingresses", new=lambda: None)
 @patch("autocli.registry.cache_running_images")
 @patch("autocli.https.refresh_https_for_ingresses")
 def test_finish_pod_start_skips_cert_refresh_without_https(mock_refresh, mock_cache):
