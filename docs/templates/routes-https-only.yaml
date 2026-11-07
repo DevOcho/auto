@@ -1,0 +1,43 @@
+# Template for a pod repo's .auto/routes.yaml when the pod must only be used
+# over HTTPS -- the replacement for ingress-nginx's `force-ssl-redirect: "true"`.
+# Copy it, then replace the names marked below (both routes).
+#
+# Two routes: the pod is served on the Gateway's https listener only, and a
+# second route on the http listener answers every request with a redirect to
+# the same URL on https.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: my-pod            # replace
+  namespace: default
+spec:
+  parentRefs:
+  - name: auto
+    namespace: auto-gateway
+    sectionName: https    # this route answers on https only
+  hostnames:
+  - my-pod.local          # replace
+  rules:
+  - backendRefs:
+    - name: my-pod        # replace: the pod's Service
+      port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: my-pod-https-redirect   # replace the "my-pod" part
+  namespace: default
+spec:
+  parentRefs:
+  - name: auto
+    namespace: auto-gateway
+    sectionName: http
+  hostnames:
+  - my-pod.local          # replace: the same hosts as above
+  rules:
+  - filters:
+    - type: RequestRedirect
+      requestRedirect:
+        scheme: https
+        # 308, as ingress-nginx sends: unlike 301, it keeps a POST a POST
+        statusCode: 308
