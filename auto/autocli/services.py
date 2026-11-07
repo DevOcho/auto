@@ -58,18 +58,39 @@ def _expose_system_pod_port(pod_name, mapping):
     return True
 
 
+# Database ports reachable from the host: host port -> the NodePort behind k3d's
+# load balancer.
+PORT_MAPPINGS = {
+    "mysql": {"host": 3306, "lb": 30036, "desc": "MySQL"},
+    "postgres": {"host": 5432, "lb": 30035, "desc": "Postgres"},
+    "mssql": {"host": 1433, "lb": 30034, "desc": "SQL Server"},
+    "redis": {"host": 6379, "lb": 30037, "desc": "Redis"},
+}
+
+
+def cluster_port_args():
+    """k3d `-p` flags that map this start's database ports when the cluster is created.
+
+    Adding a port to a running cluster (`k3d node edit --port-add`) recreates
+    k3d's load balancer, 20-43 s per port measured; mapped at creation they
+    cost nothing. A host port already taken on this machine is left out, and
+    install_system_pods then skips that pod exactly as before.
+    """
+    required = utils.get_required_system_pods(CONFIG)
+    flags = []
+    for name, mapping in PORT_MAPPINGS.items():
+        host, lb_port = mapping["host"], mapping["lb"]
+        if name in required and not utils.is_port_in_use(host):
+            flags.append(f'-p "{host}:{lb_port}@loadbalancer"')
+    return " ".join(flags)
+
+
 def install_system_pods():
     """Install all of the system pods in the cluster"""
 
     # We need to know which ones to start (both configured explicitly or requested implicitly)
     required_pods = utils.get_required_system_pods(CONFIG)
-
-    port_mappings = {
-        "mysql": {"host": 3306, "lb": 30036, "desc": "MySQL"},
-        "postgres": {"host": 5432, "lb": 30035, "desc": "Postgres"},
-        "mssql": {"host": 1433, "lb": 30034, "desc": "SQL Server"},
-        "redis": {"host": 6379, "lb": 30037, "desc": "Redis"},
-    }
+    port_mappings = PORT_MAPPINGS
 
     # Let's start the ones that we find that are "active" or requested
     for sys_pod in CONFIG.get("system-pods", []):
@@ -88,21 +109,25 @@ def install_system_pods():
         rprint("  -- Starting: " + pod_name)
         for command in sys_pod["pod"]["commands"]:
             _run_command_with_retry(command)
-
-        # MinIO has some extra setup stuff needed to use it
-        if pod_name == "minio":
-            setup_minio()
+        # MinIO's client setup waits for its pod, so it happens where buckets
+        # are made (_process_minio_buckets) instead of holding up every start
 
 
 def _process_mysql_databases(system_pod):
     """Helper to process MySQL database creation"""
     for database in system_pod.get("databases", []):
-        create_mysql_database(database["name"])
-        rprint(f"      *  Created MySQL database:[bright_cyan]{database['name']}")
+        if create_mysql_database(database["name"]):
+            rprint(f"      *  Created MySQL database:[bright_cyan]{database['name']}")
 
 
 def _process_minio_buckets(system_pod):
     """Helper to process MinIO bucket creation"""
+    if not system_pod.get("buckets"):
+        return
+    # The `myminio` alias the bucket commands use lives inside the pod, so set
+    # it up now -- once minio is running -- rather than while system pods load
+    utils.wait_for_pod_status("minio", "Running")
+    setup_minio()
     for bucket in system_pod.get("buckets", []):
         create_minio_bucket(bucket["name"])
         rprint(f"      *  Created MinIO bucket:[bright_cyan]{bucket['name']}")
@@ -146,16 +171,24 @@ def _verify_db_system_ready(db_name, friendly_name, socket_check_func):
     # Let's confirm the database is running
     for system_pod in CONFIG.get("system-pods", []):
         if system_pod["pod"]["name"] == db_name:
-            # Let's wait for the pod to start
-            if utils.wait_for_pod_status(db_name, "Running"):
-                rprint(f"       [green]{friendly_name} running")
+            # Let's wait for the pod to start. Up to 3 minutes (360 half-second
+            # cycles): on a fresh or busy cluster the pod can take over a minute
+            # to reach Running, and carrying on before it does only turns into
+            # "Could not create database" a little later.
+            if not utils.wait_for_pod_status(db_name, "Running", max_wait_time=360):
+                rprint(
+                    f"       [red]{friendly_name} did not start, so its databases were "
+                    "not created (check `kubectl get pods`, then rerun auto start)[/red]"
+                )
+                return False
+            rprint(f"       [green]{friendly_name} running")
 
-                # Check for actual connectivity via socket before proceeding
-                if not socket_check_func():
-                    rprint(
-                        f"       [red]{friendly_name} failed to respond on socket after waiting."
-                    )
-                    return False
+            # Check for actual connectivity via socket before proceeding
+            if not socket_check_func():
+                rprint(
+                    f"       [red]{friendly_name} failed to respond on socket after waiting."
+                )
+                return False
     return True
 
 
@@ -282,15 +315,22 @@ def init_pod_db(pod):
 # can call them freely.
 
 
-def wait_for_mysql_socket(retries=30) -> bool:
-    """Wait for MySQL socket to be available inside the pod"""
+def wait_for_mysql_socket(retries=120) -> bool:
+    """Wait until MySQL answers over TCP inside the pod.
+
+    The local socket is not enough: on first boot the image's entrypoint runs a
+    temporary server with networking off, which answers on the socket and then
+    restarts. A socket check passes against it, and CREATE DATABASE fails
+    mid-restart. Only the real server listens on TCP, so 127.0.0.1 answering
+    means MySQL is really up.
+    """
     pod_name = utils.get_full_pod_name("mysql").strip("\n")
     if not pod_name:
         return False
 
     for _ in range(retries):
         # We use a real query to test connectivity, not just admin ping
-        cmd = f'kubectl exec {pod_name} -- mysql -uroot -ppassword -e "SELECT 1"'
+        cmd = f'kubectl exec {pod_name} -- mysql -h127.0.0.1 -uroot -ppassword -e "SELECT 1"'
         try:
             subprocess.run(cmd, capture_output=True, shell=True, check=True)
             return True
@@ -361,20 +401,20 @@ def create_mysql_database(database, retries=0):
             # Run the command silently.
             # We suppress output to hide "ERROR 2002" messages during startup.
             utils.run_silent(cmd)
+            return True
         except CalledProcessError:
             if retries < 10:  # Allow up to 30s for slower startups
                 time.sleep(3)
-                create_mysql_database(database, retries=retries + 1)
-            else:
-                rprint(f"  [red]FAILED: Could not create database[/] {database}")
-
-    else:
-        # If pod_name not found, wait and retry
-        if retries < 10:
-            time.sleep(3)
-            create_mysql_database(database, retries=retries + 1)
-        else:
+                return create_mysql_database(database, retries=retries + 1)
             rprint(f"  [red]FAILED: Could not create database[/] {database}")
+            return False
+
+    # If pod_name not found, wait and retry
+    if retries < 10:
+        time.sleep(3)
+        return create_mysql_database(database, retries=retries + 1)
+    rprint(f"  [red]FAILED: Could not create database[/] {database}")
+    return False
 
 
 def create_minio_bucket(bucket):
@@ -393,26 +433,28 @@ def create_minio_bucket(bucket):
         utils.run_silent(cmd, merge_stderr=True)
 
 
-def setup_minio(retries=5):
-    """Setup the credentials and configure and deploy nginx"""
+def setup_minio(retries=30):
+    """Point the in-pod `mc` client at MinIO: the `myminio` alias buckets use.
 
-    container_cmds = [
-        "mc alias -q set myminio http://minio.default.svc.cluster.local:9000 minio minio123"
-    ]
-    pod_name = utils.get_full_pod_name("minio").strip("\n")
-
-    if pod_name:
-        # Let's run the commands in the container to setup the access creds
-        for container_cmd in container_cmds:
-            full_cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
-
-            # Run the command silently
-            utils.run_silent(full_cmd, merge_stderr=True)
-
-    else:
-        if retries > 1:
-            time.sleep(3)
-            setup_minio(retries - 1)
+    Retried until it works: the pod can be Running a few seconds before the
+    MinIO server answers, and `mc alias set` checks the server.
+    """
+    alias_cmd = "mc alias -q set myminio http://minio.default.svc.cluster.local:9000 minio minio123"
+    for _ in range(retries):
+        pod_name = utils.get_full_pod_name("minio").strip("\n")
+        if pod_name:
+            try:
+                utils.run_silent(
+                    f"kubectl exec {pod_name} -- {alias_cmd}", merge_stderr=True
+                )
+                return True
+            except CalledProcessError:
+                pass
+        time.sleep(2)
+    rprint(
+        "  [yellow]MinIO did not answer, so its buckets may be missing (rerun auto start)[/]"
+    )
+    return False
 
 
 def _connect_to_db() -> None:
