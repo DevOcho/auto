@@ -330,8 +330,8 @@ reads Gateway API `HTTPRoute`s. It does **not** read `kind: Ingress` objects
 starts fine but its URL never answers. `auto start` names any leftover Ingress
 objects it finds.
 
-Attach your route to the Gateway `auto` creates, `auto-gateway` in the
-`envoy-gateway-system` namespace:
+Attach your route to the Gateway auto creates, named `auto` in the
+`auto-gateway` namespace:
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -341,8 +341,8 @@ metadata:
   namespace: default
 spec:
   parentRefs:
-  - name: auto-gateway
-    namespace: envoy-gateway-system
+  - name: auto
+    namespace: auto-gateway
   hostnames:
   - portal.local
   - customer.portal.local   # list every host; each one goes on the certificate

@@ -1,0 +1,120 @@
+# auto's Envoy Gateway setup, applied after the release's install.yaml (which
+# brings the CRDs and the controller into envoy-gateway-system).
+#
+# Written as a shared base: the production ingress project can reuse these
+# objects and change only what its overlay needs. Values marked "overlay" are
+# the ones expected to differ.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: auto-gateway
+---
+# How the Envoy proxy pods run. Referenced from the GatewayClass, so it applies
+# to every Gateway of the class -- there is one per cluster.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: auto-proxy
+  namespace: auto-gateway
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        name: auto-envoy
+        # Has to be Cluster: Envoy Gateway defaults to Local, and k3d's load
+        # balancer sends host traffic to every node, so a node without the
+        # Envoy pod would drop its share of connections.
+        externalTrafficPolicy: Cluster
+      envoyDeployment:
+        name: auto-envoy
+        replicas: 1  # overlay: production runs 2
+        container:
+          resources:
+            requests:
+              cpu: 100m
+              # Down from Envoy's 512Mi default so it fits beside a laptop's
+              # worth of pods (ingress-nginx asked 90Mi; Envoy idles near 70Mi).
+              memory: 128Mi
+  telemetry:
+    # One JSON object per request on stdout, for kubectl logs locally and the
+    # log collector in production.
+    accessLog:
+      settings:
+      - format:
+          type: JSON
+          json:
+            start_time: "%START_TIME%"
+            method: "%REQ(:METHOD)%"
+            authority: "%REQ(:AUTHORITY)%"
+            path: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"
+            protocol: "%PROTOCOL%"
+            response_code: "%RESPONSE_CODE%"
+            response_flags: "%RESPONSE_FLAGS%"
+            bytes_received: "%BYTES_RECEIVED%"
+            bytes_sent: "%BYTES_SENT%"
+            duration_ms: "%DURATION%"
+            upstream_host: "%UPSTREAM_HOST%"
+            x_forwarded_for: "%REQ(X-FORWARDED-FOR)%"
+            user_agent: "%REQ(USER-AGENT)%"
+            request_id: "%REQ(X-REQUEST-ID)%"
+        sinks:
+        - type: File
+          file:
+            path: /dev/stdout
+    # Prometheus metrics at /stats/prometheus on the proxy's admin port; on by
+    # default, stated here so nobody switches it off by accident.
+    metrics:
+      prometheus:
+        disable: false
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: auto
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: auto-proxy
+    namespace: auto-gateway
+---
+# Client-side timeouts for every route on the Gateway.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: auto-client
+  namespace: auto-gateway
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: auto
+  timeout:
+    http:
+      # How long a request may sit with no bytes moving before Envoy resets
+      # it: the equivalent of nginx's proxy-read-timeout (time between two
+      # reads). Envoy's default is 5 minutes; pods already wait up to an hour
+      # on a silent backend (siterev-health's synchronous AI calls), so allow
+      # that. Overlay: production should tighten this deliberately.
+      streamIdleTimeout: 3600s
+---
+# Backend-side settings for every route on the Gateway.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: auto-backend
+  namespace: auto-gateway
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: auto
+  timeout:
+    http:
+      # No overall cap on a request. Envoy's default cuts every request at
+      # 15 s (nginx allowed 60 s between reads), far too short for the AI
+      # calls several pods make. A route that wants a cap sets
+      # timeouts.request on its own HTTPRoute.
+      requestTimeout: 0s

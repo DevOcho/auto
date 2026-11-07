@@ -7,8 +7,8 @@ metadata:
   namespace: default
 spec:
   parentRefs:
-  - name: auto-gateway
-    namespace: envoy-gateway-system
+  - name: auto
+    namespace: auto-gateway
   hostnames:
   - matomo.example.com
   rules:

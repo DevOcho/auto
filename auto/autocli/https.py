@@ -16,6 +16,7 @@ import os
 import subprocess
 from subprocess import CalledProcessError
 
+import yaml
 from autocli import checks, utils
 from autocli.utils import run_silent
 from rich import print as rprint
@@ -30,127 +31,29 @@ ENVOY_GATEWAY_VERSION = "v1.9.3"
 # default 1.31, which is already out of support. Check the compatibility
 # matrix (gateway.envoyproxy.io/news/releases/matrix) when bumping either one.
 K3S_IMAGE = "rancher/k3s:v1.35.9-k3s1"
-GATEWAY_NAMESPACE = "envoy-gateway-system"
-GATEWAY_NAME = "auto-gateway"
 
-# Envoy's defaults are tuned for production edges, not a laptop, and two of
-# them break pods that worked behind nginx:
-#   * every request is cut at 15s (nginx allowed 60s) -- far too short for the
-#     synchronous AI calls several pods make. The route timeout is disabled
-#     here; a pod that wants a cap sets `timeouts.request` on its HTTPRoute.
-#   * a stream with no bytes moving for 5 minutes is reset. Pods already wait
-#     up to an hour on a silent backend (siterev-health), so allow that.
-# Request bodies need no setting: Envoy streams them to the pod instead of
-# enforcing nginx's 1 MiB proxy-body-size, so the app's own limit is the one
-# that applies.
-#
-# The EnvoyProxy shapes the proxy deployment itself. externalTrafficPolicy has
-# to be Cluster: Envoy Gateway defaults to Local, and k3d's load balancer sends
-# host traffic to every node, so a node without the Envoy pod would drop its
-# share of connections. The memory request comes down from Envoy's 512Mi
-# default so it fits beside a laptop's worth of pods (ingress-nginx asked 90Mi).
-_GATEWAY_MANIFEST = """\
-apiVersion: gateway.networking.k8s.io/v1
-kind: GatewayClass
-metadata:
-  name: auto-envoy
-spec:
-  controllerName: gateway.envoyproxy.io/gatewayclass-controller
----
-apiVersion: gateway.envoyproxy.io/v1alpha1
-kind: EnvoyProxy
-metadata:
-  name: {name}-proxy
-  namespace: {namespace}
-spec:
-  provider:
-    type: Kubernetes
-    kubernetes:
-      envoyService:
-        name: {name}-envoy
-        externalTrafficPolicy: Cluster
-      envoyDeployment:
-        name: {name}-envoy
-        container:
-          resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
----
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: {name}
-  namespace: {namespace}
-spec:
-  gatewayClassName: auto-envoy
-  infrastructure:
-    parametersRef:
-      group: gateway.envoyproxy.io
-      kind: EnvoyProxy
-      name: {name}-proxy
-  listeners:
-  - name: http
-    protocol: HTTP
-    port: 80
-    allowedRoutes:
-      namespaces:
-        from: All
-{https_listener}---
-apiVersion: gateway.envoyproxy.io/v1alpha1
-kind: ClientTrafficPolicy
-metadata:
-  name: {name}-timeouts
-  namespace: {namespace}
-spec:
-  targetRefs:
-  - group: gateway.networking.k8s.io
-    kind: Gateway
-    name: {name}
-  timeout:
-    http:
-      streamIdleTimeout: 3600s
----
-apiVersion: gateway.envoyproxy.io/v1alpha1
-kind: BackendTrafficPolicy
-metadata:
-  name: {name}-timeouts
-  namespace: {namespace}
-spec:
-  targetRefs:
-  - group: gateway.networking.k8s.io
-    kind: Gateway
-    name: {name}
-  timeout:
-    http:
-      requestTimeout: 0s
-"""
+# The one Gateway every pod's HTTPRoute attaches to, in a namespace of its own.
+# The controller and the Envoy proxy pods run in CONTROLLER_NAMESPACE, which the
+# release's install.yaml creates.
+GATEWAY_NAME = "auto"
+GATEWAY_NAMESPACE = "auto-gateway"
+CONTROLLER_NAMESPACE = "envoy-gateway-system"
 
-# One HTTPS listener with no hostname terminates TLS for every host with the
-# single mkcert certificate -- the same job nginx's --default-ssl-certificate
-# did, so pods never need a `tls:` block of their own.
-_HTTPS_LISTENER = """\
-  - name: https
-    protocol: HTTPS
-    port: 443
-    tls:
-      mode: Terminate
-      certificateRefs:
-      - kind: Secret
-        name: local-tls
-    allowedRoutes:
-      namespaces:
-        from: All
-"""
+# The GatewayClass, Gateway, proxy settings and timeout policies are plain
+# manifests (auto/k3s/envoy-gateway/, installed to ~/.auto/k3s) so the production
+# ingress project can reuse them; why each setting is what it is lives in the
+# comments of base.yaml.
+GATEWAY_MANIFEST_DIR = os.path.expanduser("~") + "/.auto/k3s/envoy-gateway"
+
+# The release manifest asks 256Mi for the controller, which uses about 40Mi; the
+# cached copy asks for this instead.
+CONTROLLER_MEMORY_REQUEST = "128Mi"
 
 
-def gateway_manifest(use_https):
-    """Render the GatewayClass, Gateway and timeout policies auto installs"""
-    return _GATEWAY_MANIFEST.format(
-        name=GATEWAY_NAME,
-        namespace=GATEWAY_NAMESPACE,
-        https_listener=_HTTPS_LISTENER if use_https else "",
-    )
+def gateway_manifests(use_https):
+    """The manifests applied after install.yaml: the shared base, then the Gateway"""
+    gateway = "gateway-https.yaml" if use_https else "gateway-http.yaml"
+    return f"{GATEWAY_MANIFEST_DIR}/base.yaml", f"{GATEWAY_MANIFEST_DIR}/{gateway}"
 
 
 def create_local_certs(cert_path, additional_domains=None):
@@ -339,10 +242,39 @@ _GATEWAY_CRDS = [
 ]
 
 
+def _lower_controller_request(path):
+    """Rewrite the controller Deployment's memory request in a downloaded install.yaml.
+
+    Only that one document is parsed and rewritten; the 4 MB of CRDs around it
+    stay byte for byte. A release that changes shape is left as it is.
+    """
+    with open(path, encoding="utf-8") as manifest:
+        docs = manifest.read().split("\n---\n")
+    for index, text in enumerate(docs):
+        if "kind: Deployment" not in text or "name: envoy-gateway\n" not in text:
+            continue
+        doc = yaml.safe_load(text)
+        if not isinstance(doc, dict) or doc.get("kind") != "Deployment":
+            continue
+        if doc.get("metadata", {}).get("name") != "envoy-gateway":
+            continue
+        for container in doc["spec"]["template"]["spec"]["containers"]:
+            requests = container.get("resources", {}).get("requests", {})
+            if "memory" in requests:
+                requests["memory"] = CONTROLLER_MEMORY_REQUEST
+        docs[index] = yaml.safe_dump(doc, sort_keys=False).rstrip("\n")
+    with open(path, "w", encoding="utf-8") as manifest:
+        manifest.write("\n---\n".join(docs))
+
+
 def _envoy_gateway_manifest():
-    """Path to the release's install.yaml, downloaded once per version and cached"""
+    """Path to the release's install.yaml, downloaded once per version and cached.
+
+    The cached copy carries auto's one change to it, the controller's memory
+    request; the "-auto" in its name keeps it apart from an untouched download.
+    """
     cache_dir = os.path.expanduser("~") + "/.auto/cache"
-    path = f"{cache_dir}/envoy-gateway-{ENVOY_GATEWAY_VERSION}.yaml"
+    path = f"{cache_dir}/envoy-gateway-{ENVOY_GATEWAY_VERSION}-auto.yaml"
     if os.path.isfile(path) and os.path.getsize(path) > 0:
         return path
     os.makedirs(cache_dir, exist_ok=True)
@@ -353,6 +285,7 @@ def _envoy_gateway_manifest():
         f"curl -fsSL -o {partial} {ENVOY_GATEWAY_MANIFEST_URL}", capture_output=True
     ) or not os.path.isfile(partial):
         return None
+    _lower_controller_request(partial)
     os.replace(partial, path)
     return path
 
@@ -389,14 +322,18 @@ def install_envoy_gateway(use_https, key_file, cert_file):
         rprint("     [red]Envoy Gateway's CRDs did not become available[/red]")
         return False
 
+    # The shared base first: it creates the Gateway's namespace the secret goes in
+    base, gateway = gateway_manifests(use_https)
+    if not utils.run_and_wait(f"kubectl apply -f {base}", capture_output=True):
+        rprint("     [red]Error applying the Envoy Gateway base manifest[/red]")
+        return False
+
     # New cluster created, if HTTPS, inject the secret the HTTPS listener serves
     if use_https and key_file and cert_file:
         rprint("     = Configuring Cluster HTTPS (Envoy Gateway)")
         _apply_tls_secrets(key_file, cert_file)
 
-    # A quoted heredoc keeps the shell from expanding anything in the manifest
-    apply_cmd = f"kubectl apply -f - <<'EOF'\n{gateway_manifest(use_https)}EOF"
-    if not utils.run_and_wait(apply_cmd, capture_output=True):
+    if not utils.run_and_wait(f"kubectl apply -f {gateway}", capture_output=True):
         rprint("     [red]Error creating the Envoy Gateway listeners[/red]")
         return False
     return True
@@ -414,11 +351,11 @@ def wait_for_gateway(timeout="300s"):
     if not ready:
         rprint(
             "  -- [yellow]Envoy Gateway is not serving yet; pod URLs may not answer "
-            f"until it is (kubectl get pods -n {GATEWAY_NAMESPACE})[/]"
+            f"until it is (kubectl get pods -n {CONTROLLER_NAMESPACE})[/]"
         )
     # Let's remove the completed setup job containers (the certgen job)
     utils.run_and_wait(
-        f"kubectl delete pod -n {GATEWAY_NAMESPACE} "
+        f"kubectl delete pod -n {CONTROLLER_NAMESPACE} "
         "--field-selector=status.phase==Succeeded",
         capture_output=True,
     )

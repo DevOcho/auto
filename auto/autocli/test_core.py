@@ -25,7 +25,8 @@ def test_start_cluster_existing(mock_verify, mock_run, mock_dns):
     result = core.start_cluster(progress, task)
     assert result is False
     mock_dns.assert_called_once()
-    assert "kubectl get gateway auto-gateway" in mock_run.call_args_list[-1].args[0]
+    gateway = f"kubectl get gateway {https.GATEWAY_NAME} -n {https.GATEWAY_NAMESPACE}"
+    assert gateway in mock_run.call_args_list[-1].args[0]
 
 
 @patch("autocli.utils.nodes_without_dns", return_value=[])

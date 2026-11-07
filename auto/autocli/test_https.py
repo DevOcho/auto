@@ -2,19 +2,26 @@
 
 # pylint: disable=protected-access
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
 from autocli import https
 
+# The manifests as shipped (auto/k3s/envoy-gateway), not the installed copy
+REPO_MANIFESTS = os.path.join(os.path.dirname(__file__), "..", "k3s", "envoy-gateway")
+
 
 def _docs(use_https):
-    """The rendered Gateway manifest, keyed by kind"""
-    return {
-        doc["kind"]: doc
-        for doc in yaml.safe_load_all(https.gateway_manifest(use_https))
-    }
+    """base.yaml plus the Gateway file auto would apply, keyed by kind"""
+    gateway = "gateway-https.yaml" if use_https else "gateway-http.yaml"
+    docs = {}
+    for name in ("base.yaml", gateway):
+        with open(os.path.join(REPO_MANIFESTS, name), encoding="utf-8") as manifest:
+            for doc in yaml.safe_load_all(manifest):
+                docs[doc["kind"]] = doc
+    return docs
 
 
 @patch("autocli.utils.run_and_return")
@@ -151,11 +158,43 @@ def test_gateway_manifest_lifts_envoy_production_defaults():
     )
     for kind in ("BackendTrafficPolicy", "ClientTrafficPolicy"):
         assert docs[kind]["spec"]["targetRefs"][0]["name"] == https.GATEWAY_NAME
+        assert docs[kind]["metadata"]["namespace"] == https.GATEWAY_NAMESPACE
 
     kube = docs["EnvoyProxy"]["spec"]["provider"]["kubernetes"]
     assert kube["envoyService"]["externalTrafficPolicy"] == "Cluster"
-    infra = docs["Gateway"]["spec"]["infrastructure"]["parametersRef"]
-    assert infra["name"] == docs["EnvoyProxy"]["metadata"]["name"]
+    assert kube["envoyDeployment"]["replicas"] == 1
+    # The proxy settings hang off the class, so every Gateway of it gets them
+    params = docs["GatewayClass"]["spec"]["parametersRef"]
+    assert params["name"] == docs["EnvoyProxy"]["metadata"]["name"]
+    assert params["namespace"] == docs["EnvoyProxy"]["metadata"]["namespace"]
+    assert (
+        docs["Gateway"]["spec"]["gatewayClassName"]
+        == docs["GatewayClass"]["metadata"]["name"]
+    )
+    assert docs["Gateway"]["metadata"]["name"] == https.GATEWAY_NAME
+
+
+def test_gateway_manifest_logs_json_and_exposes_metrics():
+    """JSON access logs to stdout and Prometheus metrics, the same locally as in production."""
+    telemetry = _docs(True)["EnvoyProxy"]["spec"]["telemetry"]
+    log = telemetry["accessLog"]["settings"][0]
+    assert log["format"]["type"] == "JSON"
+    assert {"method", "authority", "response_code", "duration_ms"} <= set(
+        log["format"]["json"]
+    )
+    assert log["sinks"] == [{"type": "File", "file": {"path": "/dev/stdout"}}]
+    assert telemetry["metrics"]["prometheus"]["disable"] is False
+
+
+def test_gateway_manifests_paths_follow_https_setting():
+    """The base always, then the Gateway with or without its HTTPS listener."""
+    assert https.gateway_manifests(True)[0].endswith("/envoy-gateway/base.yaml")
+    assert https.gateway_manifests(True)[1].endswith(
+        "/envoy-gateway/gateway-https.yaml"
+    )
+    assert https.gateway_manifests(False)[1].endswith(
+        "/envoy-gateway/gateway-http.yaml"
+    )
 
 
 @patch("autocli.utils.run_and_wait", return_value=1)
@@ -175,16 +214,17 @@ def test_install_envoy_gateway_applies_in_order_without_waiting(
         "kubectl apply --server-side --force-conflicts -f /cache/eg.yaml"
     )
     crds = next(i for i, c in enumerate(cmds) if "condition=Established" in c)
+    base = next(i for i, c in enumerate(cmds) if c.endswith("/envoy-gateway/base.yaml"))
     secret = next(
         i for i, c in enumerate(cmds) if f"-n {https.GATEWAY_NAMESPACE} --dry-run" in c
     )
     gateway = next(
-        i for i, c in enumerate(cmds) if c.startswith("kubectl apply -f - <<'EOF'")
+        i for i, c in enumerate(cmds) if c.endswith("/envoy-gateway/gateway-https.yaml")
     )
 
-    assert apply < crds < secret < gateway
+    # The base creates the namespace the secret goes in; the Gateway uses the secret
+    assert apply < crds < base < secret < gateway
     assert "crd/httproutes.gateway.networking.k8s.io" in cmds[crds]
-    assert "name: https" in cmds[gateway]
     assert not any("Programmed" in c or c.startswith("helm") for c in cmds)
 
 
@@ -212,7 +252,7 @@ def test_envoy_gateway_manifest_downloads_once_per_version(tmp_path):
         second = https._envoy_gateway_manifest()
 
     assert first == second
-    assert first.endswith(f"envoy-gateway-{https.ENVOY_GATEWAY_VERSION}.yaml")
+    assert first.endswith(f"envoy-gateway-{https.ENVOY_GATEWAY_VERSION}-auto.yaml")
     assert mock_run.call_count == 1
     assert https.ENVOY_GATEWAY_MANIFEST_URL in mock_run.call_args.args[0]
     assert (
@@ -310,3 +350,52 @@ def test_require_envoy_gateway_stops_old_cluster_with_the_way_out(
     message = mock_error.call_args.args[0]
     assert "auto stop --delete-cluster" in message
     assert "auto update 0.8.3" in message
+
+
+INSTALL_YAML = """\
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: httproutes.gateway.networking.k8s.io
+spec:
+  description: "kind: Deployment, name: envoy-gateway\\n inside a CRD stays untouched"
+---
+# Source: gateway-helm/templates/envoy-gateway-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: envoy-gateway
+  namespace: envoy-gateway-system
+spec:
+  template:
+    spec:
+      containers:
+      - name: envoy-gateway
+        resources:
+          limits:
+            memory: 1024Mi
+          requests:
+            cpu: 100m
+            memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: envoy-gateway
+"""
+
+
+def test_lower_controller_request_rewrites_only_the_controller(tmp_path):
+    """The controller asks 128Mi instead of 256Mi; every other document is untouched."""
+    path = tmp_path / "install.yaml"
+    path.write_text(INSTALL_YAML, encoding="utf-8")
+
+    https._lower_controller_request(str(path))
+
+    out = path.read_text(encoding="utf-8").split("\n---\n")
+    before = INSTALL_YAML.split("\n---\n")
+    assert out[0] == before[0] and out[2] == before[2]
+    deployment = yaml.safe_load(out[1])
+    resources = deployment["spec"]["template"]["spec"]["containers"][0]["resources"]
+    assert resources["requests"]["memory"] == https.CONTROLLER_MEMORY_REQUEST
+    assert resources["limits"]["memory"] == "1024Mi"
