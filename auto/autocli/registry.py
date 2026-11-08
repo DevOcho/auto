@@ -20,10 +20,21 @@ def start_registry():
     if not utils.run_and_wait(bash_command, check_result="k3d-registry.local"):
         # No registry found so we need to make one
         rprint(" -- Creating new registry")
-        bash_command = """k3d registry create registry.local --port 12345"""
+        bash_command = (
+            f"k3d registry create registry.local --port {utils.bind_address()}:12345"
+        )
         utils.run_and_wait(bash_command)
         rprint("    [steel_blue1]Created Registry")
         time.sleep(3)
+    else:
+        # The nodes reach it inside Docker's network, so recreating it also
+        # means recreating the cluster that was connected to the old one.
+        utils.warn_if_bound_elsewhere(
+            "k3d-registry.local",
+            "The image registry",
+            "auto stop --delete-cluster, k3d registry delete k3d-registry.local, "
+            "then auto start",
+        )
 
 
 def _get_registry_catalog():

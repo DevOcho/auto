@@ -77,6 +77,13 @@ code: ${HOME}/source/devocho
 # Set to `false` if you don't want this.  If it's false we will use port 8088 for local pod access.
 https: true
 
+# Which address the cluster's ports listen on: the sites, the databases, the
+# image registry and the Kubernetes API. 127.0.0.1 keeps them on this machine.
+# A team sharing one dev setup can set 0.0.0.0 to open them to the network --
+# only on a network you trust, since the databases use fixed passwords.
+# Takes effect when the cluster is created.
+bind-address: 127.0.0.1
+
 # Each repo listed here will be run as a pod in k3s
 pods:
   - repo: https://github.com/DevOcho/portal.git

@@ -330,17 +330,13 @@ def start_cluster(progress, task, key_file="", cert_file=""):
 
     # HTTPS Setup
     use_https = CONFIG.get("https", False)
-    load_bal_config = '--api-port 6550 -p "8088:80@loadbalancer"'
-
-    if use_https:
-        load_bal_config = (
-            '--api-port 6550 -p "80:80@loadbalancer" -p "443:443@loadbalancer"'
-        )
+    load_bal_config = services.load_balancer_args()
 
     # 1. CHECK EXISTING CLUSTER
     bash_command = """k3d cluster list"""
     if utils.run_and_wait(bash_command, check_result="k3s-default"):
         rprint("  -- Found existing cluster")
+        services.warn_if_cluster_bound_elsewhere()
 
         # Ensure context is current
         utils.run_and_wait(

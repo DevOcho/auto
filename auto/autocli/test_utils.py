@@ -273,3 +273,37 @@ def test_declare_error_exits_non_zero():
 def test_declare_error_can_continue():
     """exit_auto=False only reports; callers decide what happens next"""
     assert utils.declare_error("just saying", exit_auto=False) is None
+
+
+def test_bind_address_defaults_to_this_machine():
+    """Without bind-address, nothing auto publishes is reachable from the network."""
+    with patch.dict(utils.CONFIG, {}):
+        utils.CONFIG.pop("bind-address", None)
+        assert utils.bind_address() == "127.0.0.1"
+
+
+def test_bind_address_must_be_an_ipv4_address():
+    """A typo stops auto with a message instead of reaching k3d."""
+    with patch.dict(utils.CONFIG, {"bind-address": "lan"}), pytest.raises(SystemExit):
+        utils.bind_address()
+
+
+@pytest.mark.parametrize(
+    "bind, published, warns",
+    [
+        ("127.0.0.1", "80/tcp -> 0.0.0.0:80\n80/tcp -> [::]:80", True),
+        ("127.0.0.1", "80/tcp -> 127.0.0.1:80", False),
+        ("0.0.0.0", "80/tcp -> 0.0.0.0:80\n80/tcp -> [::]:80", False),
+        ("0.0.0.0", "80/tcp -> 127.0.0.1:80", True),
+        ("127.0.0.1", "", False),
+    ],
+)
+def test_container_made_with_another_address_is_reported(bind, published, warns):
+    """A registry or cluster made before bind-address was set keeps its old ports."""
+    with patch.dict(utils.CONFIG, {"bind-address": bind}), patch(
+        "autocli.utils.run_and_return", return_value=published
+    ), patch("autocli.utils.rprint") as mock_print:
+        utils.warn_if_bound_elsewhere(
+            "k3d-registry.local", "The image registry", "recreate it"
+        )
+    assert mock_print.called is warns

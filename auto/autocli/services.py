@@ -54,7 +54,8 @@ def _expose_system_pod_port(pod_name, mapping):
     # Not in use locally or via k3d, let's inject and bind it dynamically
     rprint(f"  -- Exposing Port {host_port} for {desc}")
     utils.run_and_wait(
-        f"k3d node edit k3d-k3s-default-serverlb --port-add {host_port}:{lb_port}"
+        "k3d node edit k3d-k3s-default-serverlb "
+        f"--port-add {utils.bind_address()}:{host_port}:{lb_port}"
     )
     return True
 
@@ -91,6 +92,30 @@ PORT_MAPPINGS = {
 }
 
 
+def load_balancer_args():
+    """k3d flags for the Kubernetes API and the sites, published on bind-address.
+
+    bind-address is localhost unless local.yaml opens it to the network. Sites
+    are on 80 and 443 with HTTPS, or on 8088 without it.
+    """
+    addr = utils.bind_address()
+    sites = (
+        f'-p "{addr}:80:80@loadbalancer" -p "{addr}:443:443@loadbalancer"'
+        if CONFIG.get("https", False)
+        else f'-p "{addr}:8088:80@loadbalancer"'
+    )
+    return f"--api-port {addr}:6550 {sites}"
+
+
+def warn_if_cluster_bound_elsewhere():
+    """An existing cluster keeps the ports it was made with; say so if they differ."""
+    utils.warn_if_bound_elsewhere(
+        "k3d-k3s-default-serverlb",
+        "The cluster",
+        "auto stop --delete-cluster, then auto start",
+    )
+
+
 def cluster_port_args():
     """k3d `-p` flags that map this start's database ports when the cluster is created.
 
@@ -100,11 +125,12 @@ def cluster_port_args():
     install_system_pods then skips that pod exactly as before.
     """
     required = utils.get_required_system_pods(CONFIG)
+    addr = utils.bind_address()
     flags = []
     for name, mapping in PORT_MAPPINGS.items():
         host, lb_port = mapping["host"], mapping["lb"]
         if name in required and not utils.is_port_in_use(host):
-            flags.append(f'-p "{host}:{lb_port}@loadbalancer"')
+            flags.append(f'-p "{addr}:{host}:{lb_port}@loadbalancer"')
     return " ".join(flags)
 
 

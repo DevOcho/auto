@@ -1,6 +1,7 @@
 """Utils for the auto commands"""
 
 import configparser
+import ipaddress
 import os
 import re
 import shlex
@@ -489,6 +490,49 @@ def get_required_system_pods(config):
                 pass
 
     return required_pods
+
+
+# Where the cluster's ports and the registry listen on this machine. Localhost
+# by default: the databases have fixed local passwords, and the registry and
+# the Kubernetes API take anyone who can reach them.
+DEFAULT_BIND_ADDRESS = "127.0.0.1"
+
+
+def bind_address() -> str:
+    """The host address the cluster's ports and the registry are published on.
+
+    `bind-address` in local.yaml, 127.0.0.1 unless set. A team sharing one dev
+    setup on a network it trusts sets 0.0.0.0 (or one interface's address).
+    """
+    value = str(CONFIG.get("bind-address", DEFAULT_BIND_ADDRESS)).strip()
+    try:
+        ipaddress.IPv4Address(value)
+    except ValueError:
+        declare_error(
+            f"bind-address in ~/.auto/config/local.yaml is '{value}'.\n"
+            "   It has to be an IPv4 address: 127.0.0.1 (this machine only, the default)\n"
+            "   or 0.0.0.0 (every network interface)."
+        )
+    return value
+
+
+def warn_if_bound_elsewhere(container: str, what: str, fix: str) -> None:
+    """Say so when a container publishes ports on another address than bind-address.
+
+    Ports are fixed when the container is made, so a registry or cluster made
+    by an older auto, or before bind-address changed, keeps its old address
+    until it is recreated.
+    """
+    wanted = bind_address()
+    allowed = {wanted, "[::]"} if wanted == "0.0.0.0" else {wanted}
+    published = run_and_return(f"docker port {container}")
+    hosts = {word.rsplit(":", 1)[0] for word in published.split() if ":" in word}
+    if hosts and not hosts <= allowed:
+        rprint(
+            f"  -- [yellow]{what} listens on {', '.join(sorted(hosts))}, not {wanted} "
+            f"(bind-address).[/yellow]\n"
+            f"  [yellow]   It was made before that was set. To recreate it: {fix}[/yellow]"
+        )
 
 
 def is_port_in_use(port: int) -> bool:

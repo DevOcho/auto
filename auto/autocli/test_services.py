@@ -196,7 +196,32 @@ def test_cluster_port_args_maps_required_free_ports(_mock_required, _mock_in_use
     A port taken locally is left out so `k3d cluster create` does not fail;
     install_system_pods then skips that pod exactly as before.
     """
-    assert services.cluster_port_args() == '-p "3306:30036@loadbalancer"'
+    with patch.dict(CONFIG, {"bind-address": "127.0.0.1"}):
+        assert services.cluster_port_args() == '-p "127.0.0.1:3306:30036@loadbalancer"'
+
+
+@patch("autocli.utils.is_port_in_use", return_value=False)
+@patch("autocli.utils.get_required_system_pods", return_value={"mysql"})
+def test_shared_setup_publishes_database_ports_on_every_interface(
+    _mock_required, _mock_in_use
+):
+    """bind-address: 0.0.0.0 is how a team shares one dev setup on its network."""
+    with patch.dict(CONFIG, {"bind-address": "0.0.0.0"}):
+        assert services.cluster_port_args() == '-p "0.0.0.0:3306:30036@loadbalancer"'
+
+
+@patch("autocli.utils.run_and_wait", return_value=True)
+@patch("autocli.utils.is_port_in_use", return_value=False)
+@patch("autocli.utils.is_port_exposed_on_k3d", return_value=False)
+def test_port_added_to_a_running_cluster_uses_the_bind_address(
+    _mock_exposed, _mock_in_use, mock_run
+):
+    """A database started later is published on bind-address too."""
+    with patch.dict(CONFIG, {"bind-address": "127.0.0.1"}):
+        assert services._expose_system_pod_port(
+            "mysql", services.PORT_MAPPINGS["mysql"]
+        )
+    assert "--port-add 127.0.0.1:3306:30036" in mock_run.call_args.args[0]
 
 
 @patch("autocli.services.setup_minio")
@@ -342,3 +367,16 @@ def test_retired_system_pod_is_not_started(_mock_required, mock_cmd):
     with patch.dict(CONFIG, {"system-pods": [matomo]}):
         services.install_system_pods()
     mock_cmd.assert_not_called()
+
+
+def test_sites_and_api_are_published_on_the_bind_address():
+    """With HTTPS, 80 and 443; without, 8088; the API on 6550; all on bind-address."""
+    with patch.dict(CONFIG, {"bind-address": "127.0.0.1", "https": True}):
+        assert services.load_balancer_args() == (
+            '--api-port 127.0.0.1:6550 -p "127.0.0.1:80:80@loadbalancer" '
+            '-p "127.0.0.1:443:443@loadbalancer"'
+        )
+    with patch.dict(CONFIG, {"bind-address": "0.0.0.0", "https": False}):
+        assert services.load_balancer_args() == (
+            '--api-port 0.0.0.0:6550 -p "0.0.0.0:8088:80@loadbalancer"'
+        )

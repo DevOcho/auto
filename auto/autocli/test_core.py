@@ -103,7 +103,9 @@ def test_start_cluster_new(mock_verify, mock_run, mock_wait):
 
     mock_run.side_effect = side_effect
 
-    with patch.dict(CONFIG, {"code": "/tmp", "https": False}):
+    with patch.dict(
+        CONFIG, {"code": "/tmp", "https": False, "bind-address": "127.0.0.1"}
+    ):
         result = core.start_cluster(progress, task)
         assert result is True
 
@@ -114,6 +116,9 @@ def test_start_cluster_new(mock_verify, mock_run, mock_wait):
     assert f"--image {https.K3S_IMAGE}" in create_cmd
     # Database ports are mapped up front, not added later with `k3d node edit`
     assert '-p "3306:30036@loadbalancer"' in create_cmd
+    # The API and the sites listen on this machine only by default
+    assert "--api-port 127.0.0.1:6550" in create_cmd
+    assert '-p "127.0.0.1:8088:80@loadbalancer"' in create_cmd
 
 
 @patch("pathlib.Path.is_file")
@@ -172,11 +177,12 @@ def test_start_registry(mock_run):
     """Test registry startup"""
     mock_run.return_value = False
 
-    with patch("time.sleep"):
+    with patch("time.sleep"), patch.dict(CONFIG, {"bind-address": "127.0.0.1"}):
         registry.start_registry()
 
     assert mock_run.call_count >= 2
     assert "registry create" in mock_run.call_args[0][0]
+    assert "--port 127.0.0.1:12345" in mock_run.call_args[0][0]
 
 
 @patch("subprocess.run")
