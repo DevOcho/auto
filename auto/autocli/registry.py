@@ -78,10 +78,24 @@ def _load_single_image(image_obj):
     if not utils.run_and_wait(bash_cmd, check_result=clean_image, suppress_error=True):
         progress.pull_image(full_image)
 
+    # A failed pull is not the end: a copy Docker already holds still tags and
+    # pushes, which keeps an image working after its upstream repo disappears
+    # (minio/minio left Docker Hub). The tag is what says whether we have one.
     tag_cmd = f"docker tag {full_image} k3d-registry.local:12345/{clean_image}"
-    utils.run_and_wait(tag_cmd, capture_output=True, suppress_error=True)
+    if not utils.run_and_wait(tag_cmd, capture_output=True, suppress_error=True):
+        rprint(
+            f"  -- [red]Not loaded: {clean_image}[/] could not be pulled and isn't on this "
+            "machine. Pods that use it won't start."
+        )
+        return
 
-    progress.push_image(f"k3d-registry.local:12345/{clean_image}", suppress_error=True)
+    if not progress.push_image(
+        f"k3d-registry.local:12345/{clean_image}", suppress_error=True
+    ):
+        rprint(
+            f"  -- [red]Not loaded: {clean_image}[/] could not be pushed to the local registry."
+        )
+        return
     rprint(f"  -- Loaded: [bright_cyan]{clean_image}[/]")
 
 

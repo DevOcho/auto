@@ -148,3 +148,31 @@ def test_running_images_cache_includes_the_pause_image(monkeypatch):
         "rancher/mirrored-pause:3.10.2", "rancher/mirrored-pause:3.10.2"
     )
     add.assert_called_once_with(["rancher/mirrored-pause:3.10.2"])
+
+
+@pytest.mark.parametrize(
+    "tag_ok, push_ok, expected",
+    [(1, 1, "Loaded"), (0, 1, "isn't on this machine"), (1, 0, "could not be pushed")],
+)
+def test_external_image_is_reported_loaded_only_when_it_was(
+    tag_ok, push_ok, expected, capsys
+):
+    """A pull that failed with no local copy used to print "Loaded" anyway"""
+    image = {"image": "minio/minio:RELEASE.2025-09-07T16-13-09Z"}
+
+    def run_and_wait(cmd, **_kwargs):
+        if cmd.startswith("docker tag"):
+            return tag_ok
+        return 0  # `docker images` doesn't list it, so it is pulled
+
+    with patch.object(
+        registry.utils, "run_and_wait", side_effect=run_and_wait
+    ), patch.object(registry.progress, "pull_image", return_value=0), patch.object(
+        registry.progress, "push_image", return_value=push_ok
+    ) as push:
+        registry._load_single_image(image)
+
+    out = capsys.readouterr().out
+    assert expected in out
+    assert ("Loaded" in out) == (expected == "Loaded")
+    assert push.called == bool(tag_ok)
