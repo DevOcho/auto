@@ -84,6 +84,21 @@ def test_create_databases_for_pod_passes_correct_needs(mock_get_config):
             assert mock_verify.call_args[0][0] == {"floci-aws", "postgres"}
 
 
+@patch("autocli.services._process_pod_databases")
+@patch("autocli.utils.get_pod_config", return_value={})
+@patch("autocli.utils.get_required_system_pods", return_value={"mysql", "floci-aws"})
+def test_create_databases_waits_only_for_databases_that_were_asked_for(
+    _mock_required, _mock_config, mock_process
+):
+    """A start without Postgres must not wait for it, then skip every bucket"""
+    with patch(
+        "autocli.services._verify_required_dbs_ready", return_value=True
+    ) as mock_verify, patch.dict(CONFIG, {"pods": [{"repo": "x/portal.git"}]}):
+        services.create_databases()
+    assert mock_verify.call_args.args[0] == {"mysql", "floci-aws"}
+    mock_process.assert_called_once()
+
+
 def test_verify_required_dbs_ready_empty_needs():
     """Empty needs returns True without spinning up any check."""
     with patch("autocli.services._verify_db_system_ready") as mock_check:

@@ -326,8 +326,11 @@ def create_databases():
     """Create the databases"""
     rprint("  -- Creating Databases and Buckets")
 
-    # Check MySQL and Postgres readiness in parallel so both pods warm up simultaneously
-    if not _verify_required_dbs_ready({"mysql", "postgres"}):
+    # Check MySQL and Postgres readiness in parallel so both pods warm up
+    # simultaneously -- but only the ones this start runs. Waiting for one that
+    # nothing asked for held every start for minutes and then skipped all the
+    # databases and buckets, because that pod never comes up.
+    if not _verify_required_dbs_ready(utils.get_required_system_pods(CONFIG)):
         return
 
     # Create the databases requested in each of the pods
