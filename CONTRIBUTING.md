@@ -3,6 +3,8 @@
 Thanks for helping. Bug reports, documentation fixes, new system pods and code
 are all welcome.
 
+Everyone taking part follows the short [code of conduct](CODE_OF_CONDUCT.md).
+
 ## Reporting a bug or asking for a feature
 
 [Open an issue](https://github.com/DevOcho/auto/issues/new/choose). For a bug,

@@ -14,6 +14,9 @@ bug reports, documentation fixes, new system pods and code.
   for the layout, the development setup, the tests and how pull requests are
   reviewed.
 
+Everyone taking part follows the short
+[code of conduct](https://github.com/DevOcho/auto/blob/main/CODE_OF_CONDUCT.md).
+
 ## Preview the site locally
 
 ```bash
