@@ -1,10 +1,12 @@
-"""Tests for auto.autocli.registry.tag_pod_docker_image.
+"""Tests for auto.autocli.registry: building pod images and caching external ones.
 
-The failure that prompted these: a `docker build` died partway, but the
+The build tests came from this failure: a `docker build` died partway, but the
 function ignored the result, tagged and pushed the stale image Docker still
 held under the same tag, and the pod started on old code while `auto start`
 exited 0. Each step now has to succeed before the next one runs.
 """
+
+# pylint: disable=protected-access
 
 from unittest.mock import patch
 
@@ -88,3 +90,61 @@ def test_missing_pod_is_not_built(tmp_path, monkeypatch):
     with patch.object(registry.progress, "build_image") as build:
         assert registry.tag_pod_docker_image("no-such-pod") is False
     build.assert_not_called()
+
+
+# The nodes' docker.io mirror (auto/k3s/registries.yaml) asks auto's registry for
+# a Docker Hub image by its path on Docker Hub, so the cache has to store it there.
+
+
+def test_docker_hub_images_are_cached_under_their_mirror_path():
+    """docker.io/ is dropped; local pods are skipped; other names are kept."""
+    found = {
+        "docker.io/envoyproxy/envoy:distroless-v1.39.5@sha256:9d84",
+        "envoyproxy/gateway:v1.9.3",
+        "k3d-registry.local:12345/mysql:8.0",
+        "k3d-registry.local:12345/kirkland:0.1.0",
+        "rancher/mirrored-coredns-coredns:1.14.7",
+    }
+    assert registry._filter_external_images(found, ["kirkland"]) == {
+        "envoyproxy/envoy:distroless-v1.39.5@sha256:9d84",
+        "envoyproxy/gateway:v1.9.3",
+        "mysql:8.0",
+        "rancher/mirrored-coredns-coredns:1.14.7",
+    }
+
+
+def test_sandbox_image_is_read_from_the_nodes():
+    """The pause image is in no pod spec; the nodes list it with a tag and a digest."""
+    node_images = (
+        "docker.io/rancher/mirrored-pause@sha256:74c4 docker.io/rancher/mirrored-pause:3.10.2 "
+        "docker.io/rancher/mirrored-coredns-coredns:1.14.7"
+    )
+    with patch(
+        "autocli.registry.utils.run_and_return", return_value=node_images
+    ) as run:
+        assert registry._scan_nodes_for_sandbox_images() == {
+            "docker.io/rancher/mirrored-pause:3.10.2"
+        }
+    assert "kubectl get nodes" in run.call_args.args[0]
+
+
+def test_running_images_cache_includes_the_pause_image(monkeypatch):
+    """A new k3s version's pause image ends up in the registry for the next cluster."""
+    monkeypatch.setitem(registry.CONFIG, "registry", [])
+    with patch(
+        "autocli.registry._scan_namespaces_for_images", return_value=set()
+    ), patch(
+        "autocli.registry._scan_nodes_for_sandbox_images",
+        return_value={"docker.io/rancher/mirrored-pause:3.10.2"},
+    ), patch(
+        "autocli.registry._get_registry_catalog", return_value=[]
+    ), patch(
+        "autocli.registry._cache_single_image"
+    ) as cache, patch(
+        "autocli.registry.add_images_to_local_config"
+    ) as add:
+        registry.cache_running_images()
+    cache.assert_called_once_with(
+        "rancher/mirrored-pause:3.10.2", "rancher/mirrored-pause:3.10.2"
+    )
+    add.assert_called_once_with(["rancher/mirrored-pause:3.10.2"])

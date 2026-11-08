@@ -30,6 +30,13 @@ spec:
         name: auto-envoy
         replicas: 1  # overlay: production runs 2
         container:
+          # Envoy Gateway v1.9.3's default proxy image, named by tag. The
+          # default pins a digest, and auto's registry cannot serve that
+          # digest (pushing an image there changes it), so every new cluster
+          # pulled the proxy from Docker Hub. Keep it in step with
+          # ENVOY_GATEWAY_VERSION in autocli/https.py. Overlay: production can
+          # pin the digest.
+          image: docker.io/envoyproxy/envoy:distroless-v1.39.5
           resources:
             requests:
               cpu: 100m

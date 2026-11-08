@@ -188,6 +188,12 @@ registry:
 This list is auto-populated by `auto images` and is also updated automatically
 after each successful `auto start`, so you rarely need to edit it by hand.
 
+The cluster's nodes also look up the Docker Hub images the cluster pulls by
+itself (k3s's own pods and Envoy Gateway) in this registry first, through a
+`docker.io` mirror in `~/.auto/k3s/registries.yaml`. An image that isn't
+cached there is pulled from Docker Hub as usual, and `auto start` caches it
+for the next cluster.
+
 #### System Pods
 
 `auto` ships ready-made manifests for the services your pods depend on, so you

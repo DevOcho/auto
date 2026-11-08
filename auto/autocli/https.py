@@ -24,7 +24,8 @@ from autocli.utils import run_silent
 from rich import print as rprint
 
 # Pinned so every developer's cluster runs the same controller. Bump on purpose,
-# after trying the new release against a real `auto start`.
+# after trying the new release against a real `auto start`, and bump the Envoy
+# proxy image in auto/k3s/envoy-gateway/base.yaml with it.
 ENVOY_GATEWAY_VERSION = "v1.9.3"
 
 # The k3s image core.start_cluster creates clusters with. It lives here because

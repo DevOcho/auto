@@ -2,3 +2,15 @@ mirrors:
   "localhost:12345":
     endpoint:
       - http://k3d-registry.local:12345
+  # Images the cluster pulls by itself from Docker Hub -- k3s's own pods
+  # (pause, coredns, local-path-provisioner, metrics-server, klipper-lb) and
+  # Envoy Gateway -- are tried in auto's registry first, where `auto start`
+  # caches them; containerd falls back to Docker Hub for anything not there.
+  # Without this every new cluster pulled them from Docker Hub, and when those
+  # pulls timed out a fresh start waited minutes for DNS.
+  #
+  # Port 5000 is the registry's own port inside the k3d network; 12345 is only
+  # mapped on the host and refuses connections from the nodes.
+  docker.io:
+    endpoint:
+      - http://k3d-registry.local:5000

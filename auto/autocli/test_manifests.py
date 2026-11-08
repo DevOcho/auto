@@ -37,3 +37,27 @@ def test_service_volumes_have_their_own_directory_and_node():
             "k3d-k3s-default-server-0"
         ], path
     assert len(seen) >= 5
+
+
+def test_docker_hub_mirror_points_at_the_registry_container_port():
+    """The nodes reach auto's registry on 5000; the host's 12345 refuses them."""
+    with open(os.path.join(K3S_DIR, "registries.yaml"), encoding="utf-8") as config:
+        mirrors = yaml.safe_load(config)["mirrors"]
+    assert mirrors["docker.io"]["endpoint"] == ["http://k3d-registry.local:5000"]
+
+
+def test_envoy_proxy_image_is_named_by_tag():
+    """A digest-pinned image can never be served by the docker.io mirror."""
+    with open(
+        os.path.join(K3S_DIR, "envoy-gateway", "base.yaml"), encoding="utf-8"
+    ) as manifest:
+        proxy = next(
+            doc
+            for doc in yaml.safe_load_all(manifest)
+            if doc and doc["kind"] == "EnvoyProxy"
+        )
+    image = proxy["spec"]["provider"]["kubernetes"]["envoyDeployment"]["container"][
+        "image"
+    ]
+    assert image.startswith("docker.io/envoyproxy/envoy:")
+    assert "@" not in image

@@ -153,11 +153,29 @@ def _get_local_pod_names():
     return local_pod_names
 
 
+def _scan_nodes_for_sandbox_images():
+    """Return the pause image(s) the nodes run every pod's sandbox with.
+
+    It is in no pod spec, so the namespace scan never sees it, but every pod
+    waits on it; the nodes list it among their images. Its version follows the
+    k3s version, so it is read from the cluster rather than pinned.
+    """
+    cmd = "kubectl get nodes -o jsonpath='{.items[*].status.images[*].names[*]}'"
+    output = utils.run_and_return(cmd)
+    return {name for name in output.split() if "/mirrored-pause:" in name}
+
+
 def _filter_external_images(found_images, local_pod_names):
-    """Filter out local images from the running cluster images."""
+    """Filter out local images from the running cluster images.
+
+    An explicit docker.io/ is dropped so a Docker Hub image is cached under the
+    path the nodes' docker.io mirror asks for (envoyproxy/envoy, not
+    docker.io/envoyproxy/envoy); see auto/k3s/registries.yaml.
+    """
     images_to_process = set()
     for img in found_images:
         clean_image = img.replace("k3d-registry.local:12345/", "")
+        clean_image = clean_image.removeprefix("docker.io/")
 
         is_local = False
         for pod_name in local_pod_names:
@@ -207,6 +225,7 @@ def cache_running_images():
 
     namespaces = ["default", "kube-system", "envoy-gateway-system"]
     found_images = _scan_namespaces_for_images(namespaces)
+    found_images |= _scan_nodes_for_sandbox_images()
     local_pod_names = _get_local_pod_names()
     images_to_process = _filter_external_images(found_images, local_pod_names)
 
