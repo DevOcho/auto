@@ -47,6 +47,13 @@ def _get_registry_catalog():
         return []
 
 
+# Images auto no longer uses that an old local.yaml still lists under
+# `registry:`. minio/minio can't even be pulled any more (MinIO stopped
+# publishing it; floci-aws serves S3 instead), so trying would only print an
+# error on every start.
+RETIRED_IMAGES = {"minio/minio"}
+
+
 def _filter_images_to_load(registry_load_list, loaded_repos):
     """Filter out images that are already in the local registry."""
     filtered_list = []
@@ -57,6 +64,13 @@ def _filter_images_to_load(registry_load_list, loaded_repos):
         full_image = image_obj["image"]
         clean_image = full_image.split("@")[0]
         repo_name = clean_image.split(":")[0] if ":" in clean_image else clean_image
+
+        if repo_name in RETIRED_IMAGES:
+            rprint(
+                f"  -- [yellow]Skipping {repo_name}[/]: auto no longer uses it. "
+                "Remove it from registry: in ~/.auto/config/local.yaml"
+            )
+            continue
 
         needs_load = True
         for image in loaded_repos:

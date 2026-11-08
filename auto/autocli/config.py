@@ -113,17 +113,6 @@ system-pods:
       databases:
         - name: portal
   - pod:
-      name: minio
-      active: false
-      commands:
-        - "kubectl apply -f ~/.auto/k3s/minio/pv.yaml"
-        - "kubectl apply -f ~/.auto/k3s/minio/pvc.yaml"
-        - "kubectl apply -f ~/.auto/k3s/minio/deployment.yaml"
-        - "kubectl apply -f ~/.auto/k3s/minio/service.yaml"
-        - "kubectl apply -f ~/.auto/k3s/minio/ingress.yaml"
-      buckets:
-        - name: portal
-  - pod:
       name: redis
       active: false
       commands:
@@ -140,7 +129,7 @@ system-pods:
         - "kubectl apply -f ~/.auto/k3s/mailpit/deployment.yaml"
         - "kubectl apply -f ~/.auto/k3s/mailpit/service.yaml"
         - "kubectl apply -f ~/.auto/k3s/mailpit/ingress.yaml"
-  # Local AWS emulator (runs alongside MinIO).  Pods reach it at
+  # S3 (in place of MinIO) and the rest of AWS, emulated.  Pods reach it at
   # `floci-aws:4566`; the dashboard is at http://floci-ui.local/
   - pod:
       name: floci-aws

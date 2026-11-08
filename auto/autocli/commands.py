@@ -194,13 +194,6 @@ def postgres(self):  # pylint: disable=unused-argument
 
 @auto.command()
 @click.pass_context
-def minio(self):  # pylint: disable=unused-argument
-    """Open Connection to MinIO Server"""
-    services.connect_to_minio()
-
-
-@auto.command()
-@click.pass_context
 def mailpit(self):  # pylint: disable=unused-argument
     """Open the Mailpit inbox (email sent by your pods)"""
     services.connect_to_mailpit()

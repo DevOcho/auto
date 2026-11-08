@@ -5,6 +5,7 @@
 import subprocess
 from unittest.mock import MagicMock, patch
 
+import pytest
 from autocli import services
 from autocli.config import CONFIG
 
@@ -38,10 +39,10 @@ def test_create_databases_for_pod_no_system_pods(mock_get_config):
 
 @patch("autocli.utils.get_pod_config")
 def test_create_databases_for_pod_creates_buckets(mock_get_config):
-    """A pod that needs minio buckets triggers _process_pod_databases."""
+    """A pod that needs buckets triggers _process_pod_databases."""
     pod_config = {
         "system-pods": [
-            {"name": "minio", "buckets": [{"name": "uploads"}, {"name": "thumbs"}]},
+            {"name": "floci-aws", "buckets": [{"name": "uploads"}, {"name": "thumbs"}]},
         ],
     }
     mock_get_config.return_value = pod_config
@@ -70,7 +71,7 @@ def test_create_databases_for_pod_passes_correct_needs(mock_get_config):
     """`needs` set passed to readiness check matches the pod's system-pods."""
     mock_get_config.return_value = {
         "system-pods": [
-            {"name": "minio", "buckets": [{"name": "uploads"}]},
+            {"name": "floci-aws", "buckets": [{"name": "uploads"}]},
             {"name": "postgres", "databases": [{"name": "app"}]},
         ],
     }
@@ -80,7 +81,7 @@ def test_create_databases_for_pod_passes_correct_needs(mock_get_config):
     ) as mock_verify:
         with patch("autocli.services._process_pod_databases"):
             services.create_databases_for_pod("api")
-            assert mock_verify.call_args[0][0] == {"minio", "postgres"}
+            assert mock_verify.call_args[0][0] == {"floci-aws", "postgres"}
 
 
 def test_verify_required_dbs_ready_empty_needs():
@@ -90,10 +91,10 @@ def test_verify_required_dbs_ready_empty_needs():
         mock_check.assert_not_called()
 
 
-def test_verify_required_dbs_ready_minio_only():
-    """A `needs` set containing only minio shouldn't trigger DB readiness checks."""
+def test_verify_required_dbs_ready_s3_only():
+    """A `needs` set containing only floci-aws shouldn't trigger DB readiness checks."""
     with patch("autocli.services._verify_db_system_ready") as mock_check:
-        assert services._verify_required_dbs_ready({"minio"}) is True
+        assert services._verify_required_dbs_ready({"floci-aws"}) is True
         mock_check.assert_not_called()
 
 
@@ -102,20 +103,22 @@ def test_verify_required_dbs_ready_only_targets_db_pods():
     with patch(
         "autocli.services._verify_db_system_ready", return_value=True
     ) as mock_check:
-        assert services._verify_required_dbs_ready({"mysql", "minio"}) is True
+        assert services._verify_required_dbs_ready({"mysql", "floci-aws"}) is True
         # Only mysql is a DB target
         assert mock_check.call_count == 1
         assert mock_check.call_args[0][0] == "mysql"
 
 
-@patch("autocli.services.setup_minio", new=lambda: None)
-@patch("autocli.utils.wait_for_pod_status", new=lambda *_a, **_k: True)
-@patch("autocli.services.create_minio_bucket")
-def test_process_pod_databases_minio_buckets(mock_create_bucket):
-    """_process_pod_databases iterates buckets for minio pods."""
+@pytest.mark.parametrize("name", ["floci-aws", "minio"])
+@patch("autocli.services.wait_for_floci", return_value=True)
+@patch("autocli.services.create_s3_bucket", return_value=True)
+def test_buckets_are_made_in_floci_under_either_name(
+    mock_create_bucket, _mock_wait, name
+):
+    """A pod that still says minio gets its buckets in floci-aws too."""
     pod_config = {
         "system-pods": [
-            {"name": "minio", "buckets": [{"name": "uploads"}, {"name": "thumbs"}]},
+            {"name": name, "buckets": [{"name": "uploads"}, {"name": "thumbs"}]},
         ],
     }
     with patch.dict(CONFIG, {"skipped-system-pods": []}):
@@ -125,15 +128,15 @@ def test_process_pod_databases_minio_buckets(mock_create_bucket):
     assert bucket_names == ["uploads", "thumbs"]
 
 
-@patch("autocli.services.create_minio_bucket")
+@patch("autocli.services.create_s3_bucket")
 def test_process_pod_databases_skips_skipped_pods(mock_create_bucket):
     """Pods in skipped-system-pods are not processed."""
     pod_config = {
         "system-pods": [
-            {"name": "minio", "buckets": [{"name": "uploads"}]},
+            {"name": "floci-aws", "buckets": [{"name": "uploads"}]},
         ],
     }
-    with patch.dict(CONFIG, {"skipped-system-pods": ["minio"]}):
+    with patch.dict(CONFIG, {"skipped-system-pods": ["floci-aws"]}):
         services._process_pod_databases(pod_config)
 
     mock_create_bucket.assert_not_called()
@@ -188,7 +191,8 @@ def test_connect_to_mailpit_forwards_the_ui_port(mock_run, mock_pod_name):
 
 @patch("autocli.utils.is_port_in_use", side_effect=lambda port: port == 6379)
 @patch(
-    "autocli.utils.get_required_system_pods", return_value={"mysql", "redis", "minio"}
+    "autocli.utils.get_required_system_pods",
+    return_value={"mysql", "redis", "floci-aws"},
 )
 def test_cluster_port_args_maps_required_free_ports(_mock_required, _mock_in_use):
     """Only ports this start needs, and only ones free on the host, are mapped.
@@ -224,44 +228,106 @@ def test_port_added_to_a_running_cluster_uses_the_bind_address(
     assert "--port-add 127.0.0.1:3306:30036" in mock_run.call_args.args[0]
 
 
-@patch("autocli.services.setup_minio")
+MINIO_ENTRY = {"pod": {"name": "minio", "commands": ["kubectl apply -f minio.yaml"]}}
+FLOCI_ENTRY = {
+    "pod": {"name": "floci-aws", "commands": ["kubectl apply -f floci.yaml"]}
+}
+ALIAS = f"kubectl apply -f {services.MINIO_ALIAS_MANIFEST}"
+
+
+@patch("autocli.services.wait_for_floci")
 @patch("autocli.services._run_command_with_retry")
 @patch("autocli.utils.get_required_system_pods", return_value={"minio"})
-def test_install_system_pods_does_not_wait_for_minio(
-    _mock_required, mock_cmd, mock_setup
+def test_a_pod_asking_for_minio_gets_floci_with_minio_addresses(
+    _mock_required, mock_cmd, mock_wait
 ):
-    """Loading system pods no longer blocks on minio's client setup."""
-    minio = {"pod": {"name": "minio", "commands": ["kubectl apply -f minio.yaml"]}}
-    with patch.dict(CONFIG, {"system-pods": [minio]}):
+    """MinIO's image is gone, so its stale manifests are never applied.
+
+    floci-aws starts in its place, with MinIO's Service name and hostname on
+    top, and loading the system pods doesn't wait for it.
+    """
+    with patch.dict(CONFIG, {"system-pods": [MINIO_ENTRY, FLOCI_ENTRY]}):
         services.install_system_pods()
-    mock_cmd.assert_called_once_with("kubectl apply -f minio.yaml")
-    mock_setup.assert_not_called()
+    commands = [c.args[0] for c in mock_cmd.call_args_list]
+    assert commands == ["kubectl apply -f floci.yaml", ALIAS]
+    mock_wait.assert_not_called()
 
 
-@patch("autocli.services.create_minio_bucket")
-@patch("autocli.services.setup_minio")
-@patch("autocli.utils.wait_for_pod_status", return_value=True)
-def test_minio_alias_is_set_up_before_buckets(mock_wait, mock_setup, mock_bucket):
-    """Buckets need the in-pod `myminio` alias, so it is set once minio runs."""
+@patch("autocli.services._run_command_with_retry")
+@patch("autocli.utils.get_required_system_pods", return_value={"floci-aws"})
+def test_floci_alone_does_not_bring_the_minio_names(_mock_required, mock_cmd):
+    """minio.local and minio:9000 only appear for pods that still use them"""
+    with patch.dict(CONFIG, {"system-pods": [MINIO_ENTRY, FLOCI_ENTRY]}):
+        services.install_system_pods()
+    assert [c.args[0] for c in mock_cmd.call_args_list] == [
+        "kubectl apply -f floci.yaml"
+    ]
+
+
+@patch("autocli.services._run_command_with_retry")
+@patch("autocli.utils.get_required_system_pods", return_value={"minio"})
+def test_floci_starts_even_when_local_yaml_predates_it(_mock_required, mock_cmd):
+    """A local.yaml from before floci shipped has no entry; S3 still starts."""
+    with patch.dict(CONFIG, {"system-pods": [MINIO_ENTRY]}):
+        services.install_system_pods()
+    commands = [c.args[0] for c in mock_cmd.call_args_list]
+    assert commands == services.FLOCI_COMMANDS + [ALIAS]
+    assert any("floci/deployment.yaml" in cmd for cmd in commands)
+
+
+@patch("autocli.services.create_s3_bucket", return_value=True)
+@patch("autocli.services.wait_for_floci", return_value=True)
+def test_buckets_wait_for_floci_to_answer(mock_wait, mock_bucket):
+    """Buckets are made once floci answers, not while system pods load."""
     manager = MagicMock()
     manager.attach_mock(mock_wait, "wait")
-    manager.attach_mock(mock_setup, "setup")
     manager.attach_mock(mock_bucket, "bucket")
 
-    services._process_minio_buckets(
-        {"name": "minio", "buckets": [{"name": "a"}, {"name": "b"}]}
+    services._process_s3_buckets(
+        {"name": "floci-aws", "buckets": [{"name": "a"}, {"name": "b"}]}
     )
 
-    assert [c[0] for c in manager.mock_calls] == ["wait", "setup", "bucket", "bucket"]
+    assert [c[0] for c in manager.mock_calls] == ["wait", "bucket", "bucket"]
 
 
-@patch("autocli.services.setup_minio")
-@patch("autocli.utils.wait_for_pod_status")
-def test_minio_without_buckets_waits_for_nothing(mock_wait, mock_setup):
-    """A pod that uses minio but asks for no buckets costs no wait at all."""
-    services._process_minio_buckets({"name": "minio"})
+@patch("autocli.services.create_s3_bucket")
+@patch("autocli.services.wait_for_floci")
+def test_s3_without_buckets_waits_for_nothing(mock_wait, mock_bucket):
+    """A pod that uses floci-aws but asks for no buckets costs no wait at all."""
+    services._process_s3_buckets({"name": "floci-aws"})
     mock_wait.assert_not_called()
-    mock_setup.assert_not_called()
+    mock_bucket.assert_not_called()
+
+
+@patch("autocli.services.rprint")
+@patch("autocli.services.create_s3_bucket", return_value=False)
+@patch("autocli.services.wait_for_floci", return_value=True)
+def test_failed_bucket_is_not_reported_created(_mock_wait, _mock_create, mock_rprint):
+    """A bucket that could not be made is not announced as created."""
+    services._process_s3_buckets(
+        {"name": "floci-aws", "buckets": [{"name": "uploads"}]}
+    )
+    printed = " ".join(str(c.args[0]) for c in mock_rprint.call_args_list)
+    assert "Created" not in printed
+    assert "Could not create bucket" in printed
+
+
+@patch("autocli.utils.run_silent")
+def test_bucket_is_created_through_the_api_server_proxy(mock_silent):
+    """S3 CreateBucket is a body-less PUT, which kubectl sends with replace --raw."""
+    assert services.create_s3_bucket("uploads") is True
+    cmd = mock_silent.call_args.args[0]
+    assert cmd.startswith("kubectl replace --raw ")
+    assert f"{services.FLOCI_PROXY}/uploads" in cmd
+    assert cmd.endswith(" -f /dev/null")
+
+
+@patch(
+    "autocli.utils.run_silent", side_effect=subprocess.CalledProcessError(1, "kubectl")
+)
+def test_bucket_creation_failure_is_reported(_mock_silent):
+    """The caller says which bucket is missing instead of claiming it was made"""
+    assert services.create_s3_bucket("uploads") is False
 
 
 @patch("time.sleep")
@@ -290,27 +356,27 @@ def test_failed_mysql_database_is_not_reported_created(_mock_create, mock_rprint
 @patch("time.sleep")
 @patch(
     "autocli.utils.run_silent",
-    side_effect=[subprocess.CalledProcessError(1, "mc"), None],
+    side_effect=[subprocess.CalledProcessError(1, "kubectl"), None],
 )
-@patch("autocli.utils.get_full_pod_name", return_value="minio-pod\n")
-def test_setup_minio_retries_until_the_server_answers(
-    _mock_pod, mock_silent, _mock_sleep
-):
-    """A Running pod whose server is not answering yet is retried, not fatal."""
-    assert services.setup_minio() is True
+@patch("autocli.utils.wait_for_pod_status", return_value=True)
+def test_wait_for_floci_retries_until_it_answers(_mock_wait, mock_silent, _mock_sleep):
+    """A Running pod that is not answering yet is retried, not fatal."""
+    assert services.wait_for_floci() is True
     assert mock_silent.call_count == 2
-    assert " -it " not in mock_silent.call_args.args[0]
+    assert f"{services.FLOCI_PROXY}/_floci/health" in mock_silent.call_args.args[0]
 
 
 @patch("autocli.services.rprint")
 @patch("time.sleep")
-@patch("autocli.utils.run_silent", side_effect=subprocess.CalledProcessError(1, "mc"))
-@patch("autocli.utils.get_full_pod_name", return_value="minio-pod\n")
-def test_setup_minio_gives_up_with_a_warning(
-    _mock_pod, _mock_silent, _mock_sleep, mock_rprint
+@patch(
+    "autocli.utils.run_silent", side_effect=subprocess.CalledProcessError(1, "kubectl")
+)
+@patch("autocli.utils.wait_for_pod_status", return_value=True)
+def test_wait_for_floci_gives_up_with_a_warning(
+    _mock_wait, _mock_silent, _mock_sleep, mock_rprint
 ):
-    """MinIO never answering warns instead of crashing `auto start`."""
-    assert services.setup_minio(retries=3) is False
+    """floci never answering warns instead of crashing `auto start`."""
+    assert services.wait_for_floci(retries=3) is False
     assert any("[yellow]" in str(c.args[0]) for c in mock_rprint.call_args_list)
 
 

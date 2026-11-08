@@ -75,6 +75,34 @@ RETIRED_MANIFESTS = {
 # started from those stale copies.
 RETIRED_SYSTEM_PODS = {"matomo"}
 
+# floci-aws is auto's S3. It replaced MinIO, which stopped publishing its image.
+# A pod that still asks for `minio` gets floci-aws, plus MinIO's old Service name
+# and hostname (minio-alias.yaml), so code written against MinIO keeps working
+# unchanged. The `minio` entry an old local.yaml still has is never started: its
+# manifests left in ~/.auto/k3s/minio name an image that can't be pulled.
+S3_POD = "floci-aws"
+REPLACED_SYSTEM_PODS = {"minio": S3_POD}
+MINIO_ALIAS_MANIFEST = "~/.auto/k3s/floci/minio-alias.yaml"
+
+# floci-aws's commands, for a local.yaml written before it shipped, so a pod
+# asking for S3 still gets it.
+FLOCI_COMMANDS = [
+    f"kubectl apply -f ~/.auto/k3s/floci/{name}.yaml"
+    for name in (
+        "serviceaccount",
+        "role",
+        "rolebinding",
+        "deployment",
+        "service",
+        "ingress",
+    )
+]
+
+# The Kubernetes API server's proxy to floci-aws's port. kubectl, which auto
+# already drives, can send S3 requests through it, so buckets need neither a
+# port-forward nor a client in the pod (floci's image has no curl or AWS CLI).
+FLOCI_PROXY = "/api/v1/namespaces/default/services/http:floci-aws:4566/proxy"
+
 
 def _is_retired(command):
     """True for a `kubectl apply -f` of a manifest auto no longer ships"""
@@ -140,13 +168,22 @@ def install_system_pods():
     # We need to know which ones to start (both configured explicitly or requested implicitly)
     required_pods = utils.get_required_system_pods(CONFIG)
     port_mappings = PORT_MAPPINGS
+    started = set()
+
+    wants_minio = "minio" in required_pods
+    if wants_minio:
+        required_pods.add(S3_POD)
+        rprint(
+            f"  -- [yellow]minio is served by {S3_POD} now[/]: MinIO no longer publishes its image. "
+            f"minio:9000 keeps working; ask for {S3_POD} instead of minio when you can."
+        )
 
     # Let's start the ones that we find that are "active" or requested
     for sys_pod in CONFIG.get("system-pods", []):
         pod_name = sys_pod["pod"]["name"]
 
         # Proceed only if this pod was identified as required
-        if pod_name not in required_pods:
+        if pod_name not in required_pods or pod_name in REPLACED_SYSTEM_PODS:
             continue
 
         if pod_name in RETIRED_SYSTEM_PODS:
@@ -162,12 +199,26 @@ def install_system_pods():
                 # If the port exposure failed (due to local collision), we skip installing
                 continue
 
-        rprint("  -- Starting: " + pod_name)
-        for command in sys_pod["pod"]["commands"]:
-            if not _is_retired(command):
-                _run_command_with_retry(command)
-        # MinIO's client setup waits for its pod, so it happens where buckets
-        # are made (_process_minio_buckets) instead of holding up every start
+        _start_system_pod(pod_name, sys_pod["pod"]["commands"])
+        started.add(pod_name)
+
+    # A local.yaml written before floci-aws shipped has no entry for it
+    if S3_POD in required_pods and S3_POD not in started:
+        _start_system_pod(S3_POD, FLOCI_COMMANDS)
+
+    if wants_minio:
+        _run_command_with_retry(f"kubectl apply -f {MINIO_ALIAS_MANIFEST}")
+
+    # Buckets wait for floci-aws where they are made (_process_s3_buckets), so
+    # loading the system pods never blocks on it.
+
+
+def _start_system_pod(pod_name, commands):
+    """Apply a system pod's manifests"""
+    rprint("  -- Starting: " + pod_name)
+    for command in commands:
+        if not _is_retired(command):
+            _run_command_with_retry(command)
 
 
 def _process_mysql_databases(system_pod):
@@ -177,17 +228,16 @@ def _process_mysql_databases(system_pod):
             rprint(f"      *  Created MySQL database:[bright_cyan]{database['name']}")
 
 
-def _process_minio_buckets(system_pod):
-    """Helper to process MinIO bucket creation"""
-    if not system_pod.get("buckets"):
+def _process_s3_buckets(system_pod):
+    """Create the buckets a pod asks for, under floci-aws or its old name minio"""
+    buckets = [bucket["name"] for bucket in system_pod.get("buckets", [])]
+    if not buckets or not wait_for_floci():
         return
-    # The `myminio` alias the bucket commands use lives inside the pod, so set
-    # it up now -- once minio is running -- rather than while system pods load
-    utils.wait_for_pod_status("minio", "Running")
-    setup_minio()
-    for bucket in system_pod.get("buckets", []):
-        create_minio_bucket(bucket["name"])
-        rprint(f"      *  Created MinIO bucket:[bright_cyan]{bucket['name']}")
+    for bucket in buckets:
+        if create_s3_bucket(bucket):
+            rprint(f"      *  Created bucket:[bright_cyan]{bucket}")
+        else:
+            rprint(f"      [red]Could not create bucket[/] {bucket}")
 
 
 def _process_postgres_databases(system_pod):
@@ -212,8 +262,8 @@ def _process_pod_databases(pod_config):
             _process_mysql_databases(system_pod)
         elif system_pod.get("name") == "postgres":
             _process_postgres_databases(system_pod)
-        elif system_pod.get("name") == "minio":
-            _process_minio_buckets(system_pod)
+        elif system_pod.get("name") in ("minio", S3_POD):
+            _process_s3_buckets(system_pod)
 
 
 def _verify_db_system_ready(db_name, friendly_name, socket_check_func):
@@ -295,7 +345,7 @@ def create_databases_for_pod(pod_name):
     """Create databases and buckets declared by a single pod's .auto/config.yaml.
 
     Used by the single-pod `auto start <pod>` path so that newly added
-    databases or MinIO buckets are picked up without a full cluster bootstrap.
+    databases or buckets are picked up without a full cluster bootstrap.
     All underlying create_* helpers are idempotent, so existing resources
     are left untouched.
     """
@@ -321,15 +371,6 @@ def connect_to_mysql() -> None:
 def connect_to_postgres() -> None:
     """Connect to the PostgreSQL cluster inside the k3s cluster"""
     _connect_to_db_postgres()
-
-
-def connect_to_minio() -> None:
-    """Open a port=forward and print a nice message to inform user"""
-    rprint("Open a browser and visit: http://127.0.0.1:9090/")
-    rprint("Press ctrl+c to exit\n")
-    rprint("Username: minio")
-    rprint("Password: minio123\n")
-    _connect_to_minio()
 
 
 def connect_to_mailpit() -> None:
@@ -367,7 +408,8 @@ def init_pod_db(pod):
 
 
 # --- Low-level database / object-store operations -------------------------
-# These exec directly against the system pods (MySQL, Postgres, MinIO). They
+# These exec directly against the system pods (MySQL, Postgres) or talk to
+# floci-aws through the API server. They
 # are idempotent and retry on startup races so the orchestration helpers above
 # can call them freely.
 
@@ -474,44 +516,36 @@ def create_mysql_database(database, retries=0):
     return False
 
 
-def create_minio_bucket(bucket):
-    """Create a bucket in MinIO"""
-
-    pod_name = utils.get_full_pod_name("minio").strip("\n")
-
-    if pod_name:
-        # Batch all three mc commands into a single exec call to avoid subprocess overhead per bucket
-        combined = (
-            f"mc mb --quiet myminio/{bucket} ; "  # disable file list
-            f"mc anonymous --quiet set none myminio/{bucket} && "  # enable full path access
-            f"mc anonymous --quiet set download myminio/{bucket}/*"
-        )
-        cmd = f"kubectl exec {pod_name} -- sh -c {shlex.quote(combined)}"
-        utils.run_silent(cmd, merge_stderr=True)
-
-
-def setup_minio(retries=30):
-    """Point the in-pod `mc` client at MinIO: the `myminio` alias buckets use.
-
-    Retried until it works: the pod can be Running a few seconds before the
-    MinIO server answers, and `mc alias set` checks the server.
-    """
-    alias_cmd = "mc alias -q set myminio http://minio.default.svc.cluster.local:9000 minio minio123"
+def wait_for_floci(retries=30):
+    """Wait until floci-aws answers. It can be Running a few seconds before it does."""
+    # A first start may still be pulling its image, so allow the pod 3 minutes
+    utils.wait_for_pod_status(S3_POD, "Running", max_wait_time=360)
     for _ in range(retries):
-        pod_name = utils.get_full_pod_name("minio").strip("\n")
-        if pod_name:
-            try:
-                utils.run_silent(
-                    f"kubectl exec {pod_name} -- {alias_cmd}", merge_stderr=True
-                )
-                return True
-            except CalledProcessError:
-                pass
-        time.sleep(2)
+        try:
+            utils.run_silent(f"kubectl get --raw {FLOCI_PROXY}/_floci/health")
+            return True
+        except CalledProcessError:
+            time.sleep(2)
     rprint(
-        "  [yellow]MinIO did not answer, so its buckets may be missing (rerun auto start)[/]"
+        f"  [yellow]{S3_POD} did not answer, so its buckets may be missing (rerun auto start)[/]"
     )
     return False
+
+
+def create_s3_bucket(bucket):
+    """Create a bucket in floci-aws: an S3 CreateBucket (PUT /<bucket>, no body).
+
+    Creating a bucket that exists succeeds and keeps its objects. floci serves
+    objects to anonymous GETs, as MinIO's buckets did with their download policy.
+    """
+    try:
+        utils.run_silent(
+            f"kubectl replace --raw {shlex.quote(FLOCI_PROXY + '/' + bucket)} -f /dev/null",
+            merge_stderr=True,
+        )
+        return True
+    except CalledProcessError:
+        return False
 
 
 def _connect_to_db() -> None:
@@ -558,23 +592,6 @@ def _connect_to_mailpit() -> None:
 
     # 8025 is Mailpit's web UI; 1025 (SMTP) stays in-cluster where pods use it
     cmd = f"kubectl port-forward {pod_name} 8025:8025"
-
-    # Make this command safe to run
-    cmd = shlex.quote(cmd)
-    args = shlex.split(cmd)
-
-    # Run the command and return the output
-    subprocess.run(args, shell=True, check=True)
-
-
-def _connect_to_minio() -> None:
-    """This opens the port-forward to MinIO to allow dev access"""
-
-    # Determine which pod to exec against and build the command
-    pod_name = utils.get_full_pod_name("minio").strip("\n")
-
-    # The command we are going to run
-    cmd = f"kubectl port-forward {pod_name} 9090:9090"
 
     # Make this command safe to run
     cmd = shlex.quote(cmd)

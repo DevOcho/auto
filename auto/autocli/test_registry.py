@@ -176,3 +176,13 @@ def test_external_image_is_reported_loaded_only_when_it_was(
     assert expected in out
     assert ("Loaded" in out) == (expected == "Loaded")
     assert push.called == bool(tag_ok)
+
+
+def test_retired_image_is_skipped_with_a_note(capsys):
+    """An old local.yaml's minio/minio entry can't be pulled; say so once, quietly"""
+    images = [
+        {"image": "minio/minio:RELEASE.2025-09-07T16-13-09Z"},
+        {"image": "floci/floci:2.1.0"},
+    ]
+    assert registry._filter_images_to_load(images, loaded_repos=[]) == [images[1]]
+    assert "Skipping minio/minio" in capsys.readouterr().out

@@ -26,7 +26,7 @@ bind-address: 127.0.0.1
 registry:
   - image: mysql:8.0
   - image: postgres:18.1-trixie
-  - image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+  - image: floci/floci:2.1.0
   - image: axllent/mailpit:v1.20
 
 # System Pods (all default to `false`)
@@ -41,17 +41,6 @@ system-pods:
         - kubectl apply -f ~/.auto/k3s/mysql/pvc.yaml
         - kubectl apply -f ~/.auto/k3s/mysql/deployment.yaml
         - kubectl apply -f ~/.auto/k3s/mysql/service.yaml
-
-  # Minio config
-  - pod:
-      name: minio
-      active: false # set this to true if you want it to start
-      commands:
-        - kubectl apply -f ~/.auto/k3s/minio/pv.yaml
-        - kubectl apply -f ~/.auto/k3s/minio/pvc.yaml
-        - kubectl apply -f ~/.auto/k3s/minio/deployment.yaml
-        - kubectl apply -f ~/.auto/k3s/minio/service.yaml
-        - kubectl apply -f ~/.auto/k3s/minio/ingress.yaml
 
   # Postgres config
   - pod:
@@ -74,9 +63,11 @@ system-pods:
         - kubectl apply -f ~/.auto/k3s/mailpit/service.yaml
         - kubectl apply -f ~/.auto/k3s/mailpit/ingress.yaml
 
-  # Floci config (AWS emulator; runs alongside MinIO, not in place of it).
-  # The API is at http://floci-aws.local/ and pods reach it at floci-aws:4566.
-  # Storage is in-memory, so anything in it is lost when the pod restarts.
+  # Floci config: S3 (in place of MinIO) and the rest of AWS, emulated.
+  # The API is at http://floci-aws.local/ and pods reach it at floci-aws:4566,
+  # with any access key. S3 buckets and objects are kept on disk; every other
+  # service is in memory, so it is lost when the pod restarts. A pod that
+  # still asks for `minio` gets this, and minio:9000 keeps working.
   - pod:
       name: floci-aws
       active: false  # set this to true if you want it to start

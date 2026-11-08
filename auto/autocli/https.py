@@ -235,7 +235,7 @@ def warn_missing_host_entries(hosts):
     than letting the browser fail with an opaque resolution error.
 
     Public because core calls it for the plain-HTTP path too -- system pods
-    like mailpit and minio serve on a hostname whether or not HTTPS is on.
+    like mailpit and floci-aws serve on a hostname whether or not HTTPS is on.
     """
     current = utils.run_and_return("cat /etc/hosts")
     missing = [host for host in hosts if host not in current]

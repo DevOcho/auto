@@ -1,3 +1,51 @@
+# floci-aws is auto's S3 (it replaced MinIO in 0.9) as well as its AWS
+# emulator. S3 buckets and objects are kept on disk in the volume below; every
+# other service stays in memory.
+#
+# The volume and its claim live in this file, not in pv.yaml/pvc.yaml like the
+# other system pods: an existing local.yaml lists floci's commands as they were
+# before it kept anything on disk, and installing a release never rewrites
+# local.yaml, so a separate file would never be applied.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: floci-aws-data
+  labels:
+    type: local
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: "/mnt/data-floci-aws"
+  # Pinned to the server node, like every system pod's volume: a hostPath lives
+  # on one node's disk, so a pod rescheduled to another node would find an
+  # empty directory.
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - k3d-k3s-default-server-0
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: floci-aws-data
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: manual
+  volumeName: floci-aws-data
+  resources:
+    requests:
+      storage: 10Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -5,6 +53,10 @@ metadata:
   labels:
     app: floci-aws
 spec:
+  # Two floci pods must never write the same data directory, which a rolling
+  # update would briefly allow.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: floci-aws
@@ -32,6 +84,10 @@ spec:
               value: "us-east-1"
             - name: FLOCI_STORAGE_MODE
               value: "memory"
+            # S3 writes every change to /app/data as it happens, so buckets
+            # and objects survive a restart the way MinIO's did.
+            - name: FLOCI_STORAGE_SERVICES_S3_MODE
+              value: "persistent"
             # Runs each Lambda invocation as a real Kubernetes pod via the
             # ServiceAccount/Role above, instead of a docker.sock sibling
             # container — no docker.sock mount, no hostNetwork, no
@@ -44,6 +100,11 @@ spec:
               value: "kubernetes"
             - name: FLOCI_SERVICES_LAMBDA_KUBERNETES_NAMESPACE
               value: "default"
+          # The image's entrypoint hands /app/data to its unprivileged user
+          # before starting, so the host directory needs no permissions set.
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
           readinessProbe:
             httpGet:
               path: /_floci/health
@@ -57,3 +118,7 @@ spec:
             initialDelaySeconds: 15
             periodSeconds: 15
             failureThreshold: 3
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: floci-aws-data
