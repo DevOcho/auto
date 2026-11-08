@@ -15,6 +15,11 @@ are called *system pods*. Each one is off until something asks for it.
 | `floci-aws` | Floci AWS emulator (region `us-east-1`), in memory | `http://floci-aws:4566` | `http://floci-aws.local/` | |
 | `floci-ui` | Web dashboard for Floci | | `http://floci-ui.local/` | |
 
+!!! warning "MinIO's image is no longer published"
+    `minio/minio` has been removed from Docker Hub and quay.io, so `minio`
+    only starts on a machine that already has its image in Docker. See the
+    [0.9.0 release notes](../releases/0.9.0.md#known-issue-minios-image).
+
 Manifests for SQL Server (`mssql`, port 1433) and ProxySQL also ship in
 `~/.auto/k3s/`, but they aren't in the default `local.yaml`. To use one,
 add an entry for it as described [below](#add-your-own).
