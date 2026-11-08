@@ -2,6 +2,22 @@
 
 Planned work that isn't scheduled for a release yet. Low priority unless marked.
 
+## Replace MinIO's image (high priority, before the launch posts)
+
+MinIO stopped publishing container images: `minio/minio` is gone from Docker
+Hub and quay.io, so the `minio` system pod only starts where Docker already
+holds `minio/minio:RELEASE.2025-09-07T16-13-09Z`. Whatever replaces it has to
+serve the S3 API at `minio:9000`, run on amd64 and arm64, and either include
+`mc` or come with a new way to create buckets (`_process_minio_buckets` runs
+`mc` inside the pod). Candidates:
+
+- `chainguard/minio`: maintained, multi-arch, but only `latest` is free, and
+  it runs as a non-root user, so the host directory's permissions change.
+- An S3-compatible server that still publishes images, such as RustFS,
+  SeaweedFS or Garage, behind the same `minio` Service name.
+- Build MinIO from its source tag in CI and publish it under DevOcho's
+  registry (AGPL: link the source).
+
 ## `auto backup` and `auto restore`
 
 Save a developer's local state before a cluster is recreated, and put it back
