@@ -20,7 +20,6 @@ registry:
   - image: mysql:8.0
   - image: postgres:18.1-trixie
   - image: minio/minio:RELEASE.2025-09-07T16-13-09Z
-  - image: matomo:5.3.1-fpm-alpine
   - image: axllent/mailpit:v1.20
 
 # System Pods (all default to `false`)
@@ -57,19 +56,6 @@ system-pods:
         - kubectl apply -f ~/.auto/k3s/postgres/pvc.yaml
         - kubectl apply -f ~/.auto/k3s/postgres/deployment.yaml
         - kubectl apply -f ~/.auto/k3s/postgres/service.yaml
-
-  # Matomo config
-  - pod:
-      name: matomo
-      active: false # set this to true if you want it to start
-      commands:
-        - kubectl apply -f ~/.auto/k3s/matomo/pv.yaml
-        - kubectl apply -f ~/.auto/k3s/matomo/pvc.yaml
-        - kubectl apply -f ~/.auto/k3s/matomo/db-secret.yaml
-        - kubectl apply -f ~/.auto/k3s/matomo/nginx-config.yaml
-        - kubectl apply -f ~/.auto/k3s/matomo/deployment.yaml
-        - kubectl apply -f ~/.auto/k3s/matomo/service.yaml
-        - kubectl apply -f ~/.auto/k3s/matomo/ingress.yaml
 
   # Mailpit config (local SMTP catch-all + web inbox at http://mailpit.local/)
   # Pods send mail to host `mailpit` on port 1025 and read it in the browser.

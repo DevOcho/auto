@@ -69,6 +69,12 @@ RETIRED_MANIFESTS = {
 }
 
 
+# System pods auto no longer ships. An old local.yaml can still list one, and
+# its manifests stay behind in ~/.auto/k3s, so it is skipped instead of being
+# started from those stale copies.
+RETIRED_SYSTEM_PODS = {"matomo"}
+
+
 def _is_retired(command):
     """True for a `kubectl apply -f` of a manifest auto no longer ships"""
     words = command.split()
@@ -115,6 +121,13 @@ def install_system_pods():
 
         # Proceed only if this pod was identified as required
         if pod_name not in required_pods:
+            continue
+
+        if pod_name in RETIRED_SYSTEM_PODS:
+            rprint(
+                f"  -- [yellow]Skipping {pod_name}[/]: auto no longer ships it. "
+                f"Remove it from ~/.auto/config/local.yaml"
+            )
             continue
 
         # Check port mappings and expose dynamically if necessary

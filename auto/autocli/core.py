@@ -30,8 +30,8 @@ def _print_access_hints(pods, use_https):
     # The cluster is the source of truth for hostnames -- not just
     # '<podname>.local'. A pod's chart can expose several (e.g. 'app.local' and
     # 'portal.app.local'), and system pods bring their own ingress too, so
-    # mailpit.local / minio.local / matomo.local belong in this list as much as
-    # the application pods do.
+    # mailpit.local and minio.local belong in this list as much as the
+    # application pods do.
     hosts = https.discover_ingress_hosts()
 
     if not hosts:

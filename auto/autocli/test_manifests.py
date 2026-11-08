@@ -36,7 +36,7 @@ def test_service_volumes_have_their_own_directory_and_node():
         assert terms[0]["matchExpressions"][0]["values"] == [
             "k3d-k3s-default-server-0"
         ], path
-    assert len(seen) >= 5
+    assert len(seen) >= 4  # mysql, postgres, redis, minio
 
 
 def test_docker_hub_mirror_points_at_the_registry_container_port():

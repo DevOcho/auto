@@ -326,3 +326,19 @@ def test_retired_database_routes_are_skipped(_mock_required, mock_cmd):
     assert [c.args[0] for c in mock_cmd.call_args_list] == [
         "kubectl apply -f ~/.auto/k3s/mysql/deployment.yaml"
     ]
+
+
+@patch("autocli.services._run_command_with_retry")
+@patch("autocli.utils.get_required_system_pods", return_value={"matomo"})
+def test_retired_system_pod_is_not_started(_mock_required, mock_cmd):
+    """An old local.yaml with matomo active must not apply its stale manifests."""
+    matomo = {
+        "pod": {
+            "name": "matomo",
+            "active": True,
+            "commands": ["kubectl apply -f ~/.auto/k3s/matomo/deployment.yaml"],
+        }
+    }
+    with patch.dict(CONFIG, {"system-pods": [matomo]}):
+        services.install_system_pods()
+    mock_cmd.assert_not_called()

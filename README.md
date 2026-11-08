@@ -16,7 +16,7 @@ Features:
  - Kubernetes local development environment
  - Envoy Gateway ingress (Gateway API `HTTPRoute`s)
  - HTTPS support for local development
- - Quick access to databases installed in the cluster (i.e. mysql, postgres, minio, redis, mssql, proxysql, matomo, etc.)
+ - Quick access to databases installed in the cluster (i.e. mysql, postgres, minio, redis, mssql, proxysql, etc.)
  - Local email capture with mailpit (read what your pods send in a browser)
  - Shell autocompletion for commands and pod names
 
@@ -205,7 +205,6 @@ don't have to package them yourself:
 | `postgres` | Postgres database | `postgres:5432` (and `localhost:5432`) |
 | `redis`    | Redis cache/broker | `redis:6379` (and `localhost:6379`) |
 | `minio`    | S3-compatible object storage | `minio:9000`, console via `auto minio` |
-| `matomo`   | Analytics | `http://matomo.local/` |
 | `mailpit`  | SMTP catch-all + web inbox | `mailpit:1025` (SMTP), `http://mailpit.local/` (inbox) |
 | `floci-aws` | Floci AWS emulator | `http://floci-aws.local/` |
 | `floci-ui` | Floci UI | `http://floci-ui.local/` |
