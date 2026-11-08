@@ -48,9 +48,9 @@ The [install page](getting-started/install.md) lists what auto needs and the
 
     ---
 
-    MySQL, Postgres, Redis, MinIO and a Mailpit inbox ship with auto. A
-    service names what it needs and auto starts it and creates its databases
-    and buckets.
+    MySQL, Postgres, Redis, S3 (through Floci) and a Mailpit inbox ship
+    with auto. A service names what it needs and auto starts it and creates
+    its databases and buckets.
 
 -   **HTTPS on every host**
 

@@ -148,7 +148,7 @@ system-pods:
   - name: mysql
     databases:
       - name: your_service
-  - name: minio
+  - name: floci-aws
     buckets:
       - name: your-service-uploads
   - name: mailpit

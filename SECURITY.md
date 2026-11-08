@@ -13,9 +13,9 @@ We'll reply within a week, and keep you posted while it's fixed.
 auto sets up a development environment on your own machine. These are by
 design and not vulnerabilities:
 
-- The system pods' credentials (`root` / `password` for the databases,
-  `minio` / `minio123` for MinIO) are fixed and the same everywhere, so every
-  developer's config works on every cluster.
+- The system pods' credentials (`root` / `password` for the databases) are
+  fixed and the same everywhere, so every developer's config works on every
+  cluster. Floci's emulated AWS accepts any access key.
 - The local registry accepts pushes and pulls without authentication.
 
 The cluster's ports (80 and 443, the database ports, the registry on 12345

@@ -51,7 +51,7 @@ flowchart LR
    every node at `/mnt/code`. Envoy Gateway is installed with one shared
    Gateway, `auto`, that every service's routes attach to.
 5. **System pods.** The databases and services your pods ask for (MySQL,
-   Postgres, Redis, MinIO, Mailpit and others) start, then auto creates the
+   Postgres, Redis, Floci, Mailpit and others) start, then auto creates the
    databases and buckets each pod named.
 6. **Your pods.** Each one is deployed with its own command, `helm install`
    or `kubectl apply`, then its `.auto/routes.yaml` is applied.

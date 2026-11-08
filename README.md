@@ -26,8 +26,9 @@ services' git repositories in one file, and `auto start`:
 
 - creates a [k3s](https://k3s.io) cluster in Docker, with a local image registry,
 - clones each repo and builds its image,
-- starts the MySQL, Postgres, Redis, MinIO and Mailpit instances your services
-  ask for, and creates their databases and buckets,
+- starts the MySQL, Postgres, Redis and Mailpit instances your services ask
+  for, plus S3 and other AWS services through [Floci](https://floci.io), and
+  creates their databases and buckets,
 - deploys each service with its own Helm chart or Kubernetes YAML,
 - serves each one over trusted HTTPS on a `.local` hostname, through
   [Envoy Gateway](https://gateway.envoyproxy.io/).

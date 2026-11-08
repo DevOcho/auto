@@ -120,11 +120,6 @@ Open a MySQL shell on the `mysql` system pod.
 
 Open a `psql` shell on the `postgres` system pod.
 
-### `auto minio`
-
-Forward MinIO's console to <http://127.0.0.1:9090/> and print the login.
-ctrl+c closes it.
-
 ### `auto mailpit`
 
 Forward the Mailpit inbox to <http://127.0.0.1:8025/>, for when

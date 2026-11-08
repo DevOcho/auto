@@ -18,7 +18,7 @@ system-pods:
   - name: mysql
     databases:
       - name: shop
-  - name: minio
+  - name: floci-aws
     buckets:
       - name: shop-uploads
   - name: mailpit
@@ -64,9 +64,9 @@ folder at `/mnt/code`.
 
 | Key | |
 | --- | --- |
-| `name` | A system pod from `local.yaml`: `mysql`, `postgres`, `redis`, `minio`, `mailpit`, `floci-aws`, `floci-ui`, or one you added. |
+| `name` | A system pod from `local.yaml`: `mysql`, `postgres`, `redis`, `mailpit`, `floci-aws`, `floci-ui`, or one you added. `minio` still works and gets `floci-aws`. |
 | `databases` | For `mysql` and `postgres`: databases to create, each `- name: <db>`. |
-| `buckets` | For `minio`: buckets to create, each `- name: <bucket>`. |
+| `buckets` | For `floci-aws`: S3 buckets to create, each `- name: <bucket>`. |
 
 Starting the pod starts these first, and its databases and buckets exist
 before the pod does.
