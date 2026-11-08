@@ -39,11 +39,13 @@ again is a normal, fast thing to do.
 ## Try it in five minutes
 
 You need Docker, [k3d](https://k3d.io), kubectl and git, plus
-[mkcert](https://github.com/FiloSottile/mkcert) for HTTPS. auto runs on
-Linux, macOS (Apple Silicon) and Windows through WSL2.
+[mkcert](https://github.com/FiloSottile/mkcert) and certutil for HTTPS
+(certutil is in `libnss3-tools` on Debian and Ubuntu). auto runs on Linux,
+macOS (Apple Silicon) and Windows through WSL2.
 
 ```bash
 curl -fsSL https://www.devocho.com/auto.sh | bash
+export PATH="$PATH:$HOME/.auto"   # new terminals get this from your shell's rc file
 echo "127.0.0.1 k3d-registry.local portal.local" | sudo tee -a /etc/hosts
 auto start
 ```

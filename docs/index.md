@@ -19,8 +19,12 @@ the rest:
 
 ```bash
 curl -fsSL https://www.devocho.com/auto.sh | bash
+export PATH="$PATH:$HOME/.auto"   # new terminals get this from your shell's rc file
 auto start
 ```
+
+The [install page](getting-started/install.md) lists what auto needs and the
+`/etc/hosts` lines to add first.
 
 <div class="grid cards" markdown>
 
