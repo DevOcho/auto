@@ -51,6 +51,30 @@ At DevOcho this takes a new developer from a fresh laptop to a running
 platform in under ten minutes, even on the largest projects. The 2025 average
 was two minutes.
 
+## A shared dev setup
+
+Some teams run one auto environment that several people use, on a machine
+in the office or a VM. By default its ports listen only on that machine, so
+open them in its `local.yaml`, on a network you trust:
+
+```yaml title="~/.auto/config/local.yaml (on the shared machine)"
+bind-address: 0.0.0.0
+```
+
+Then recreate its cluster and registry (see
+[`bind-address`](../reference/local-yaml.md#bind-address)). On each machine
+that uses it:
+
+- Point the hostnames at the shared machine in `/etc/hosts`, for example
+  `192.168.1.20 shop.local`.
+- To trust its HTTPS certificate, install the shared machine's mkcert
+  authority: copy `rootCA.pem` from `mkcert -CAROOT` there, and run
+  `CAROOT=<folder with that file> mkcert -install`.
+
+Anyone who can reach the shared machine can reach its databases with their
+fixed passwords, and its registry and Kubernetes API, so keep it off networks
+you don't control.
+
 ## Keeping it current
 
 - When a service is added, add it to the project's `local.yaml`. Everyone

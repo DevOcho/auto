@@ -48,6 +48,18 @@ images are kept; re-seed databases with `auto seed <pod>`.
     echo fs.inotify.max_user_instances=512 | sudo tee /etc/sysctl.d/99-auto.conf
     ```
 
+**"The image registry listens on 0.0.0.0, [::], not 127.0.0.1 (bind-address)"**
+: The registry, or the cluster, was made by an older auto, which published
+  its ports to your whole network. Recreate both so they listen only on your
+  machine. The registry starts empty, so the next start downloads every
+  image once:
+
+    ```bash
+    auto stop --delete-cluster
+    k3d registry delete k3d-registry.local
+    auto start
+    ```
+
 ## A URL doesn't work
 
 **The browser can't find the host**

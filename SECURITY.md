@@ -18,10 +18,14 @@ design and not vulnerabilities:
   developer's config works on every cluster.
 - The local registry accepts pushes and pulls without authentication.
 
-Docker publishes the cluster's ports (80 and 443, the database ports, the
-registry on 12345 and the Kubernetes API on 6550) on all of your machine's
-network interfaces, not only to `localhost`, and on Linux these bypass ufw.
-On a network you don't trust, stop the cluster with `auto stop`.
+The cluster's ports (80 and 443, the database ports, the registry on 12345
+and the Kubernetes API on 6550) listen on `127.0.0.1` only. Setting
+`bind-address: 0.0.0.0` in `local.yaml` opens them to your network, for a
+shared dev setup; then anyone who can reach the machine can reach them, and
+on Linux Docker's published ports bypass ufw. auto releases before 0.9.0
+published them on every interface; recreate the cluster and registry made by
+one, as the [0.9.0 release notes](https://devocho.github.io/auto/releases/0.9.0/)
+describe.
 
 Problems we do want to hear about include: anything that exposes a cluster or
 its data beyond your machine, the installer or `auto update` installing

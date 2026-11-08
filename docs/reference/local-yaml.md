@@ -7,6 +7,7 @@ through a [project repo](../guides/teams.md).
 ```yaml
 code: ${HOME}/source/devocho
 https: true
+bind-address: 127.0.0.1
 agents: 1
 pods:
   - repo: https://github.com/DevOcho/portal.git
@@ -37,6 +38,33 @@ cluster is created.
 trusted certificate. Needs mkcert. See [HTTPS](../guides/https.md).
 
 `false`: plain HTTP on port 8088. Takes effect for a new cluster.
+
+## `bind-address`
+
+The address the cluster's ports listen on: the sites (80 and 443, or 8088),
+the database ports, the image registry (12345) and the Kubernetes API (6550).
+
+`127.0.0.1` (the default): this machine only.
+
+`0.0.0.0`: every network interface, so other machines can reach them. Some
+teams run one shared dev setup this way. Use it only on a network you trust:
+the databases have [fixed passwords](../guides/system-pods.md#what-ships),
+and the registry and API take anyone who can reach them. See
+[a shared dev setup](../guides/teams.md#a-shared-dev-setup).
+
+A specific interface's IPv4 address works too.
+
+Ports are fixed when the cluster and the registry are created. After changing
+this, recreate both:
+
+```bash
+auto stop --delete-cluster
+k3d registry delete k3d-registry.local
+auto start
+```
+
+`auto start` warns when an existing cluster or registry listens somewhere
+else.
 
 ## `pods`
 
