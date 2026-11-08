@@ -10,9 +10,6 @@ flake8
 gitpython
 isort
 mccabe
-mkdocs
-mkdocs-material
-mkdocstrings-python
 myst-parser
 pre-commit
 pyfiglet

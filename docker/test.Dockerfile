@@ -25,7 +25,7 @@ WORKDIR /app
 COPY requirements.txt build_requirements.txt ./
 
 # Install only the dependencies actually needed by the test suite.
-# Heavy build/lint/doc tools from requirements.txt (pyinstaller, mkdocs, pre-commit,
+# Heavy build/lint/doc tools from requirements.txt (pyinstaller, zensical, pre-commit,
 # black, codespell, flake8, pylint, pyupgrade, etc.) are skipped to keep the image
 # small and avoid arch-specific binary issues inside Docker.
 #
