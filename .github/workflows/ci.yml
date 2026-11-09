@@ -34,12 +34,10 @@ jobs:
       - name: Show Python version
         run: |
           docker run --rm auto-test:${{ strategy.job-index }} \
-            python3 --version
+            uv run --frozen python --version
 
       - name: Run pytest
-        run: |
-          docker run --rm auto-test:${{ strategy.job-index }} \
-            python3 -m pytest --tb=short -v
+        run: docker run --rm auto-test:${{ strategy.job-index }}
 
   # The same tests on ARM, where the linux-arm64 release is built
   test-linux-arm:
@@ -65,9 +63,7 @@ jobs:
             .
 
       - name: Run pytest
-        run: |
-          docker run --rm auto-test:${{ strategy.job-index }} \
-            python3 -m pytest --tb=short -v
+        run: docker run --rm auto-test:${{ strategy.job-index }}
 
   test-macos:
     name: Test (macOS)
@@ -77,27 +73,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Python
-        run: brew install python
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.13.7"
 
-      - name: Show Python version
-        run: python3 --version
-
-      - name: Install test dependencies
-        run: |
-          pip3 install --break-system-packages \
-            click \
-            rich \
-            pyfiglet \
-            dulwich \
-            gitpython \
-            "charset_normalizer<=3.4.4" \
-            toml \
-            PyYAML \
-            requests \
-            pytest \
-            pytest-cov \
-            coverage
+      # The locked dependencies, on Python 3.12 from .python-version
+      - name: Install dependencies
+        run: uv sync --frozen && uv run --frozen python --version
 
       # config.py builds CONFIG at import time: with no local.yaml it writes a
       # default and then asks whether to create the code directory, which has
@@ -111,4 +94,4 @@ jobs:
       - name: Run pytest
         env:
           PYTHONPATH: ${{ github.workspace }}/auto
-        run: python3 -m pytest --tb=short -v
+        run: uv run --frozen pytest --tb=short -v

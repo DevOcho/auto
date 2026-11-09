@@ -12,13 +12,14 @@ import tty
 from pathlib import Path
 
 import yaml
-from autocli import checks, https, registry, runner, services, utils
-from autocli.config import CONFIG
 from rich import print as rprint
 from rich.console import Console, Group
 from rich.live import Live
 from rich.progress import Progress
 from rich.text import Text
+
+from autocli import checks, https, registry, runner, services, utils
+from autocli.config import CONFIG
 
 
 def _print_access_hints(pods, use_https):
@@ -404,7 +405,6 @@ def start_cluster(progress, task, key_file="", cert_file=""):
     print("     = Cluster Started.  Waiting for Pods to finish starting...")
     progress.update(task, advance=6)
 
-    # Databases first (MySQL's first boot is the longest wait); see EARLY_SYSTEM_PODS
     services.install_system_pods(only=services.EARLY_SYSTEM_PODS)
     # Install Envoy Gateway; it finishes starting while the pods load (STEP 7.5)
     if https.install_envoy_gateway(use_https, key_file, cert_file):

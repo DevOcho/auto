@@ -11,8 +11,8 @@ on:
     paths:
       - '.github/workflows/auto-app.yml'
       - 'auto/**'
-      - 'build_requirements.txt'
-      - 'requirements.txt'
+      - 'pyproject.toml'
+      - 'uv.lock'
 
 permissions:
   contents: write
@@ -42,34 +42,29 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    # The runner's own Python 3.12 builds the binary, as before uv: it is built
+    # for this runner's Ubuntu, which sets the binary's glibc requirement.
     - name: Set up Python 3.12
       uses: actions/setup-python@v5
       with:
         python-version: "3.12"
-        cache: 'pip'
 
-    - name: Create and activate virtual environment
-      run: |
-        python -m venv venv
-        source venv/bin/activate
-        python -m pip install --upgrade pip
+    - name: Install uv
+      uses: astral-sh/setup-uv@v10.3.3
+      with:
+        version: "0.13.7"
 
     - name: Install dependencies
-      run: |
-        source venv/bin/activate
-        pip install flake8 pytest pyinstaller
-        if [ -f build_requirements.txt ]; then pip install -r build_requirements.txt; fi
+      env:
+        UV_PYTHON_PREFERENCE: only-system
+      run: uv sync --frozen --group build
 
-    - name: Lint with flake8
-      run: |
-        source venv/bin/activate
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=./venv/*
-        flake8 . --count --exit-zero --max-complexity=12 --max-line-length=127 --statistics --exclude=./venv/*
+    - name: Lint with ruff
+      run: uv run --frozen ruff check
 
     - name: Build with pyinstaller
       run: |
-        source venv/bin/activate
-        pyinstaller --collect-all pyfiglet \
+        uv run --frozen pyinstaller --collect-all pyfiglet \
                     --collect-submodules rich \
                     --collect-all autocli \
                     --hidden-import "rich._unicode_data.unicode17-0-0" \

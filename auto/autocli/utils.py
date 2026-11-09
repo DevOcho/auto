@@ -13,10 +13,11 @@ from subprocess import CalledProcessError
 from time import sleep
 
 import yaml
-from autocli.config import CONFIG
 from rich import print as rprint
 from rich.table import Table
 from rich.text import Text
+
+from autocli.config import CONFIG
 
 
 def ensure_host_known(git_url):
@@ -200,8 +201,8 @@ def run_and_stream(cmd: str, on_line=None, cwd=None, suppress_error=False) -> in
             bufsize=1,
             errors="replace",
         ) as proc:
-            for line in proc.stdout:
-                line = line.rstrip("\n")
+            for raw_line in proc.stdout:
+                line = raw_line.rstrip("\n")
                 tail.append(line)
                 if on_line:
                     on_line(line)
@@ -517,8 +518,8 @@ def manifest_images(commands):
             words = shlex.split(command)
         except ValueError:
             continue
-        for flag, path in zip(words, words[1:]):
-            path = os.path.expanduser(path)
+        for flag, word in zip(words, words[1:]):
+            path = os.path.expanduser(word)
             if flag != "-f" or not os.path.isfile(path):
                 continue
             try:

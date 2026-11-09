@@ -24,12 +24,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
-          python-version: "3.x"
-      - run: pip install -r docs-requirements.txt
-      - run: zensical build --strict --clean
-      - run: python3 .github/scripts/check_site_links.py site
+          version: "0.13.7"
+      - run: uv sync --frozen --only-group docs
+      - run: uv run --frozen zensical build --strict --clean
+      - run: uv run --frozen python .github/scripts/check_site_links.py site
       - uses: actions/upload-pages-artifact@v5
         if: github.event_name != 'pull_request'
         with:

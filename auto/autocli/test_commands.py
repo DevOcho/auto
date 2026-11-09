@@ -4,8 +4,9 @@ import json
 import os
 from unittest.mock import patch
 
-from autocli import commands
 from click.testing import CliRunner
+
+from autocli import commands
 
 
 def _release_json(tag):

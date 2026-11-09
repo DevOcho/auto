@@ -5,6 +5,7 @@ import subprocess
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
+
 from autocli import config, utils
 
 
@@ -16,7 +17,7 @@ from autocli import config, utils
 @patch("os.path.isfile")
 @patch("builtins.open", new_callable=mock_open, read_data="code: /tmp/code")
 @patch("yaml.safe_load")
-def test_load_config(  # pylint: disable=unused-argument
+def test_load_config(
     mock_yaml, _mock_file, mock_isfile, mock_exists, mock_makedirs, mock_confirm, *_
 ):
     """Test loading configuration safely routes from config.py"""
@@ -303,9 +304,11 @@ def test_bind_address_must_be_an_ipv4_address():
 )
 def test_container_made_with_another_address_is_reported(bind, published, warns):
     """A registry or cluster made before bind-address was set keeps its old ports."""
-    with patch.dict(utils.CONFIG, {"bind-address": bind}), patch(
-        "autocli.utils.run_and_return", return_value=published
-    ), patch("autocli.utils.rprint") as mock_print:
+    with (
+        patch.dict(utils.CONFIG, {"bind-address": bind}),
+        patch("autocli.utils.run_and_return", return_value=published),
+        patch("autocli.utils.rprint") as mock_print,
+    ):
         utils.warn_if_bound_elsewhere(
             "k3d-registry.local", "The image registry", "recreate it"
         )
@@ -399,9 +402,11 @@ def test_wait_for_api_waits_until_apply_would_work(ready_after, expected):
         calls.append(cmd)
         return MagicMock(returncode=0 if len(calls) > ready_after else 1)
 
-    with patch("autocli.utils.subprocess.run", side_effect=probe), patch(
-        "autocli.utils.sleep"
-    ) as nap, patch("autocli.utils.rprint") as say:
+    with (
+        patch("autocli.utils.subprocess.run", side_effect=probe),
+        patch("autocli.utils.sleep") as nap,
+        patch("autocli.utils.rprint") as say,
+    ):
         assert utils.wait_for_api(max_wait_time=10) is expected
     assert all("/openapi/v3" in cmd for cmd in calls)
     assert nap.call_count == min(ready_after, 10)

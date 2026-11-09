@@ -28,9 +28,9 @@ def test_service_volumes_have_their_own_directory_and_node():
         host_path = doc["spec"].get("hostPath", {}).get("path")
         if not host_path or host_path == "/mnt/code":
             continue  # the shared code mount is meant to be shared
-        assert (
-            host_path not in seen
-        ), f"{path} reuses {host_path} from {seen.get(host_path)}"
+        assert host_path not in seen, (
+            f"{path} reuses {host_path} from {seen.get(host_path)}"
+        )
         seen[host_path] = path
         terms = doc["spec"]["nodeAffinity"]["required"]["nodeSelectorTerms"]
         assert terms[0]["matchExpressions"][0]["values"] == [

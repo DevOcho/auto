@@ -7,9 +7,10 @@ import subprocess
 import time
 from subprocess import CalledProcessError
 
+from rich import print as rprint
+
 from autocli import registry, runner, utils
 from autocli.config import CONFIG
-from rich import print as rprint
 
 
 def _run_command_with_retry(command):
@@ -23,7 +24,7 @@ def _run_command_with_retry(command):
             if success:
                 break
             time.sleep(2)
-        except Exception:  # pylint: disable=broad-except
+        except Exception:  # noqa: BLE001
             pass
     else:
         # If we exhausted retries, try one last time WITH errors to show user
@@ -527,13 +528,12 @@ def create_postgres_database(database, retries=0):
             else:
                 rprint(f"  [red]FAILED: Could not create database[/] {database}")
 
+    # If pod_name not found, wait and retry
+    elif retries < 10:
+        time.sleep(3)
+        create_postgres_database(database, retries=retries + 1)
     else:
-        # If pod_name not found, wait and retry
-        if retries < 10:
-            time.sleep(3)
-            create_postgres_database(database, retries=retries + 1)
-        else:
-            rprint(f"  [red]FAILED: Could not create database[/] {database}")
+        rprint(f"  [red]FAILED: Could not create database[/] {database}")
 
 
 def create_mysql_database(database, retries=0):

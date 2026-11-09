@@ -1,3 +1,0 @@
-# Builds the documentation site (zensical.toml). Pinned so a Zensical release
-# cannot change the site without a commit; the docs workflow installs this file.
-zensical == 0.1.0

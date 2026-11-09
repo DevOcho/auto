@@ -20,7 +20,6 @@ import time
 from datetime import datetime
 from statistics import median
 
-from autocli import utils
 from rich import get_console
 from rich.progress import (
     BarColumn,
@@ -32,6 +31,8 @@ from rich.progress import (
 )
 from rich.table import Column
 from rich.text import Text
+
+from autocli import utils
 
 # Where we remember how long each build step took last time
 HISTORY_PATH = os.path.expanduser("~/.auto/cache/build_times.json")

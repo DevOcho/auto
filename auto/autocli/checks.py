@@ -11,8 +11,9 @@ import os
 import shutil
 import socket
 
-from autocli.utils import declare_error, run_and_wait
 from rich import print as rprint
+
+from autocli.utils import declare_error, run_and_wait
 
 
 def check_docker():

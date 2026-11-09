@@ -1,0 +1,75 @@
+# auto ships as a PyInstaller binary (.github/workflows/auto-app.yml), not as a
+# Python package, so this file only holds its dependencies and tool settings.
+# Its version must match VERSION in auto/autocli/commands.py (a test checks).
+[project]
+name = "auto"
+version = "0.9.3"
+description = "Local Kubernetes development environments for teams of microservices"
+requires-python = ">=3.10"
+dependencies = [
+    # Newer versions break the PyInstaller build's hidden import
+    "charset-normalizer<=3.4.4",
+    "click>=8.0.0",
+    "dulwich",
+    "gitpython",
+    "pyfiglet",
+    "pyyaml",
+    "requests",
+    "rich",
+    "toml",
+]
+
+[dependency-groups]
+# Tests and the pre-commit hooks: `uv sync` installs these by default
+dev = [
+    "coverage",
+    "pre-commit",
+    "pytest",
+    "pytest-cov",
+    "ruff==0.17.4",
+]
+# The release binary
+build = ["pyinstaller"]
+# The documentation site (zensical.toml). Pinned so a Zensical release can't
+# change the site without a commit.
+docs = ["zensical==0.1.0; python_version >= '3.11'"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+# bin, lib and include: some checkouts double as a plain venv
+norecursedirs = [".git", ".venv", "bin", "include", "lib"]
+
+[tool.ruff]
+# The formatter keeps black's default width, which the code is laid out for;
+# the linter allows lines up to 110.
+line-length = 88
+target-version = "py310"
+extend-exclude = ["bin", "include", "lib"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "C90",  # what flake8 checked
+    "I",                   # isort
+    "UP",                  # pyupgrade
+    "PL",                  # pylint's checks that ruff has
+    "D100", "D101", "D102", "D103",  # pylint's missing-docstring
+    "ARG",                 # pylint's unused-argument
+    "BLE",                 # pylint's broad-except
+    "SLF",                 # pylint's protected-access
+]
+ignore = [
+    "PLR2004",  # magic-value-comparison: an optional pylint extension, never on here
+]
+
+[tool.ruff.lint.pycodestyle]
+max-line-length = 110
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ruff.lint.per-file-ignores]
+# Tests take mocks they don't use, reach into private helpers, and stack many
+# patches, as pylint was told to allow there.
+"auto/autocli/test_*.py" = ["ARG", "SLF001", "PLR0913", "PLR0917"]

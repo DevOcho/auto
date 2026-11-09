@@ -10,10 +10,11 @@ import re
 import subprocess
 
 import click
-from autocli import core, registry, services, update_check, utils
-from autocli.config import CONFIG
 from rich import print as rprint
 from rich.progress import Progress
+
+from autocli import core, registry, services, update_check, utils
+from autocli.config import CONFIG
 
 VERSION = "0.9.3"
 
@@ -25,7 +26,7 @@ CONTEXT_SETTINGS = {
 }
 
 
-def get_pod_names(ctx, param, incomplete):  # pylint: disable=unused-argument
+def get_pod_names(ctx, param, incomplete):  # noqa: ARG001
     """Generate list of pods for shell autocompletion"""
     config_path = os.path.expanduser("~/.auto/config/local.yaml")
     if not os.path.isfile(config_path):
@@ -39,11 +40,11 @@ def get_pod_names(ctx, param, incomplete):  # pylint: disable=unused-argument
                 if p_name.startswith(incomplete):
                     pods.append(p_name)
         return sorted(pods)
-    except Exception:  # pylint: disable=broad-except
+    except Exception:  # noqa: BLE001
         return []
 
 
-def get_namespaces(ctx, param, incomplete):  # pylint: disable=unused-argument
+def get_namespaces(ctx, param, incomplete):  # noqa: ARG001
     """Generate list of namespaces for shell autocompletion"""
     try:
         output = utils.run_and_return(
@@ -54,7 +55,7 @@ def get_namespaces(ctx, param, incomplete):  # pylint: disable=unused-argument
 
         namespaces = output.split()
         return [ns for ns in namespaces if ns.startswith(incomplete)]
-    except Exception:  # pylint: disable=broad-except
+    except Exception:  # noqa: BLE001
         return []
 
 
@@ -73,7 +74,7 @@ def auto(ctx):
 
 @auto.command(name="images")
 @click.pass_context
-def images(self):  # pylint: disable=unused-argument
+def images(self):  # noqa: ARG001
     """List unique container images running in the cluster (formatted for local.yaml)."""
     registry.list_cluster_images()
 
@@ -130,7 +131,7 @@ def autocomplete(shell, do_install):
     default=False,
     help="Skip git pulls and registry downloads, for working without a network.",
 )
-def start(self, pod, dry_run, offline):  # pylint: disable=unused-argument
+def start(self, pod, dry_run, offline):  # noqa: ARG001
     """Start a new k3s/k3d cluster or an individual pod"""
     core.bootstrap_cluster(pod, dry_run, offline)
 
@@ -150,7 +151,7 @@ def start(self, pod, dry_run, offline):  # pylint: disable=unused-argument
     default=False,
     help="Delete the cluster and its databases instead of stopping it.",
 )
-def stop(self, pod, dry_run, delete_cluster):  # pylint: disable=unused-argument
+def stop(self, pod, dry_run, delete_cluster):  # noqa: ARG001
     """Stop the cluster (or delete it)"""
     if pod:
         rprint(f"[steel_blue]Stopping the [/]{pod}[steel_blue] pod")
@@ -171,7 +172,7 @@ def stop(self, pod, dry_run, delete_cluster):  # pylint: disable=unused-argument
 @auto.command()
 @click.pass_context
 @click.argument("pod", required=True, shell_complete=get_pod_names)
-def restart(self, pod):  # pylint: disable=unused-argument
+def restart(self, pod):  # noqa: ARG001
     """Restart (stop / start) a pod"""
     rprint(f"[steel_blue]Restarting [/]{pod}[steel_blue] pod")
     core.restart_pod(pod)
@@ -180,7 +181,7 @@ def restart(self, pod):  # pylint: disable=unused-argument
 @auto.command()
 @click.pass_context
 @click.argument("pod", required=True, shell_complete=get_pod_names)
-def seed(self, pod):  # pylint: disable=unused-argument
+def seed(self, pod):  # noqa: ARG001
     """Seed a pod's databases"""
     rprint(f"[steel_blue]Initializing[/] {pod}[steel_blue] pod")
     services.init_pod_db(pod)
@@ -192,7 +193,7 @@ def seed(self, pod):  # pylint: disable=unused-argument
 @auto.command()
 @click.pass_context
 @click.argument("pod", required=True, shell_complete=get_pod_names)
-def init(self, pod):  # pylint: disable=unused-argument
+def init(self, pod):  # noqa: ARG001
     """Init a pod's databases"""
     rprint(f"[steel_blue]Initializing [/]{pod}[steel_blue] pod database")
     services.init_pod_db(pod)
@@ -200,21 +201,21 @@ def init(self, pod):  # pylint: disable=unused-argument
 
 @auto.command()
 @click.pass_context
-def mysql(self):  # pylint: disable=unused-argument
+def mysql(self):  # noqa: ARG001
     """Connect to the mysql database"""
     services.connect_to_mysql()
 
 
 @auto.command()
 @click.pass_context
-def postgres(self):  # pylint: disable=unused-argument
+def postgres(self):  # noqa: ARG001
     """Connect to the postgres database"""
     services.connect_to_postgres()
 
 
 @auto.command()
 @click.pass_context
-def mailpit(self):  # pylint: disable=unused-argument
+def mailpit(self):  # noqa: ARG001
     """Open the Mailpit inbox (email sent by your pods)"""
     services.connect_to_mailpit()
 
@@ -222,7 +223,7 @@ def mailpit(self):  # pylint: disable=unused-argument
 @auto.command()
 @click.argument("pod", shell_complete=get_pod_names)
 @click.pass_context
-def logs(self, pod):  # pylint: disable=unused-argument
+def logs(self, pod):  # noqa: ARG001
     """Output logs for a pod to the terminal"""
     core.output_logs(pod)
 
@@ -237,7 +238,7 @@ def logs(self, pod):  # pylint: disable=unused-argument
     help="Refresh the pod afterwards so it runs the new image",
 )
 @click.pass_context
-def tag(self, pod, refresh):  # pylint: disable=unused-argument
+def tag(self, pod, refresh):  # noqa: ARG001
     """Build, Tag, and Load a pod container image in the local repository"""
     if registry.tag_pod_docker_image(pod) and refresh:
         core.refresh_pod(pod)
@@ -246,7 +247,7 @@ def tag(self, pod, refresh):  # pylint: disable=unused-argument
 @auto.command(name="refresh")
 @click.argument("pod", shell_complete=get_pod_names)
 @click.pass_context
-def refresh_pod(self, pod):  # pylint: disable=unused-argument
+def refresh_pod(self, pod):  # noqa: ARG001
     """Refresh a pod by deleting it so k3s recreates it (quicker than restart)"""
     core.refresh_pod(pod)
 
@@ -254,7 +255,7 @@ def refresh_pod(self, pod):  # pylint: disable=unused-argument
 @auto.command()
 @click.argument("pod", shell_complete=get_pod_names)
 @click.pass_context
-def upgrade(self, pod):  # pylint: disable=unused-argument
+def upgrade(self, pod):  # noqa: ARG001
     """Rebuild a pod's image and push it to the local registry (as `auto tag` does)"""
     registry.tag_pod_docker_image(pod)
 
@@ -262,7 +263,7 @@ def upgrade(self, pod):  # pylint: disable=unused-argument
 @auto.command()
 @click.argument("pod", shell_complete=get_pod_names)
 @click.pass_context
-def migrate(self, pod):  # pylint: disable=unused-argument
+def migrate(self, pod):  # noqa: ARG001
     """Run database migrations in a pod (using smalls)"""
     core.migrate_with_smalls(pod)
 
@@ -271,7 +272,7 @@ def migrate(self, pod):  # pylint: disable=unused-argument
 @click.argument("pod", shell_complete=get_pod_names)
 @click.argument("number")
 @click.pass_context
-def rollback(self, pod, number):  # pylint: disable=unused-argument
+def rollback(self, pod, number):  # noqa: ARG001
     """Rollback database migrations in a pod (using smalls)"""
     core.rollback_with_smalls(pod, number)
 
@@ -279,7 +280,7 @@ def rollback(self, pod, number):  # pylint: disable=unused-argument
 @auto.command()
 @click.pass_context
 @click.argument("git_repo", required=True)
-def install(self, git_repo):  # pylint: disable=unused-argument
+def install(self, git_repo):  # noqa: ARG001
     """Install "parent" configuration file from git repo"""
     core.install_config_from_repo(git_repo)
 
@@ -307,7 +308,7 @@ def install(self, git_repo):  # pylint: disable=unused-argument
     default=False,
     help="Watch the status (refresh every 3s)",
 )
-def status(self, namespace, all_namespaces, watch):  # pylint: disable=unused-argument
+def status(self, namespace, all_namespaces, watch):  # noqa: ARG001
     """Show the status of the cluster and pods"""
     core.show_status(namespace, all_namespaces, watch)
 
@@ -415,7 +416,7 @@ def _update_to_version(version, force, dry_run):
     default=False,
     help="Show what would happen without changing anything.",
 )
-def update(self, version, force, dry_run):  # pylint: disable=unused-argument
+def update(self, version, force, dry_run):  # noqa: ARG001
     """Update auto to the latest release, or roll back/forward to a specific VERSION (e.g. 0.7.1)"""
     if version is not None:
         _update_to_version(version, force, dry_run)
@@ -458,7 +459,7 @@ def update(self, version, force, dry_run):  # pylint: disable=unused-argument
                 )
                 return
             rprint(f"[steel_blue]Updating from {VERSION} to {latest_version}...[/]")
-        except Exception:  # pylint: disable=broad-except
+        except Exception:  # noqa: BLE001
             pass
     if dry_run:
         rprint(f"[grey58]Dry run:[/] would run {INSTALLER}")

@@ -19,9 +19,10 @@ import subprocess
 from subprocess import CalledProcessError
 
 import yaml
+from rich import print as rprint
+
 from autocli import checks, utils
 from autocli.utils import run_silent
-from rich import print as rprint
 
 # Pinned so every developer's cluster runs the same controller. Bump on purpose,
 # after trying the new release against a real `auto start`, and bump the Envoy

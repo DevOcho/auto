@@ -1,12 +1,11 @@
 """Tests for auto.autocli.https (local HTTPS cert + Envoy Gateway wiring)."""
 
-# pylint: disable=protected-access
-
 import os
 from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
+
 from autocli import https
 
 # The manifests as shipped (auto/k3s/envoy-gateway), not the installed copy
@@ -245,9 +244,10 @@ def test_envoy_gateway_manifest_downloads_once_per_version(tmp_path):
             out.write("kind: CustomResourceDefinition\n")
         return 1
 
-    with patch("autocli.https.os.path.expanduser", return_value=str(tmp_path)), patch(
-        "autocli.utils.run_and_wait", side_effect=fake_download
-    ) as mock_run:
+    with (
+        patch("autocli.https.os.path.expanduser", return_value=str(tmp_path)),
+        patch("autocli.utils.run_and_wait", side_effect=fake_download) as mock_run,
+    ):
         first = https._envoy_gateway_manifest()
         second = https._envoy_gateway_manifest()
 

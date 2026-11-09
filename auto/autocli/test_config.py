@@ -1,12 +1,11 @@
 """Tests for auto.autocli.config"""
 
-# pylint: disable=protected-access
-
 import os
 from unittest.mock import patch
 
 import pytest
 import yaml
+
 from autocli import config
 
 
@@ -108,12 +107,14 @@ def _config_pointing_at_a_missing_folder(tmp_path):
 def test_version_with_a_missing_code_folder_asks_nothing(tmp_path):
     """`auto --version` on a fresh machine prints the version and asks nothing"""
     _config_pointing_at_a_missing_folder(tmp_path)
-    with patch(
-        "autocli.config.os.path.expanduser",
-        side_effect=lambda p: p.replace("~", str(tmp_path)),
-    ), patch("autocli.config.sys.argv", ["auto", "--version"]), patch(
-        "autocli.config.Confirm.ask"
-    ) as ask:
+    with (
+        patch(
+            "autocli.config.os.path.expanduser",
+            side_effect=lambda p: p.replace("~", str(tmp_path)),
+        ),
+        patch("autocli.config.sys.argv", ["auto", "--version"]),
+        patch("autocli.config.Confirm.ask") as ask,
+    ):
         assert config.load_config()["code"] == str(tmp_path / "missing")
     ask.assert_not_called()
 
@@ -121,16 +122,16 @@ def test_version_with_a_missing_code_folder_asks_nothing(tmp_path):
 def test_missing_code_folder_without_a_terminal_says_what_to_do(tmp_path):
     """A script or CI has no one to answer the prompt: explain, don't traceback"""
     _config_pointing_at_a_missing_folder(tmp_path)
-    with patch(
-        "autocli.config.os.path.expanduser",
-        side_effect=lambda p: p.replace("~", str(tmp_path)),
-    ), patch("autocli.config.sys.argv", ["auto", "start"]), patch(
-        "autocli.config.sys.stdin.isatty", return_value=False
-    ), patch(
-        "autocli.config.Confirm.ask"
-    ) as ask, patch(
-        "autocli.config.rprint"
-    ) as mock_print:
+    with (
+        patch(
+            "autocli.config.os.path.expanduser",
+            side_effect=lambda p: p.replace("~", str(tmp_path)),
+        ),
+        patch("autocli.config.sys.argv", ["auto", "start"]),
+        patch("autocli.config.sys.stdin.isatty", return_value=False),
+        patch("autocli.config.Confirm.ask") as ask,
+        patch("autocli.config.rprint") as mock_print,
+    ):
         with pytest.raises(SystemExit):
             config.load_config()
     ask.assert_not_called()
@@ -144,10 +145,13 @@ def _add_images(tmp_path, text, images):
     config_dir.mkdir(parents=True, exist_ok=True)
     path = config_dir / "local.yaml"
     path.write_text(text, encoding="utf-8")
-    with patch(
-        "autocli.config.os.path.expanduser",
-        side_effect=lambda p: p.replace("~", str(tmp_path)),
-    ), patch.dict(config.CONFIG, {"registry": []}):
+    with (
+        patch(
+            "autocli.config.os.path.expanduser",
+            side_effect=lambda p: p.replace("~", str(tmp_path)),
+        ),
+        patch.dict(config.CONFIG, {"registry": []}),
+    ):
         config.add_images_to_local_config(images)
     return path.read_text(encoding="utf-8")
 
@@ -199,10 +203,13 @@ def test_removing_images_deletes_only_their_lines(tmp_path):
         {"image": "mysql:8.0"},
         {"image": "rancher/mirrored-coredns-coredns:1.14.7"},
     ]
-    with patch(
-        "autocli.config.os.path.expanduser",
-        side_effect=lambda p: p.replace("~", str(tmp_path)),
-    ), patch.dict(config.CONFIG, {"registry": registry}):
+    with (
+        patch(
+            "autocli.config.os.path.expanduser",
+            side_effect=lambda p: p.replace("~", str(tmp_path)),
+        ),
+        patch.dict(config.CONFIG, {"registry": registry}),
+    ):
         config.remove_images_from_local_config(
             ["rancher/mirrored-coredns-coredns:1.10.1"]
         )
