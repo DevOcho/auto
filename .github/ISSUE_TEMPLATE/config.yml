@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://devocho.github.io/auto/
+    about: Guides, reference and troubleshooting.
+  - name: Report a security problem
+    url: https://github.com/DevOcho/auto/security/advisories/new
+    about: Please report security problems privately, not in a public issue.

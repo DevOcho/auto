@@ -13,7 +13,7 @@ team, so this is low priority.
   `~/.auto/backups/<name or timestamp>/`, holding:
   - MySQL: `mysqldump --all-databases --single-transaction --routines --events`
   - Postgres: `pg_dumpall`
-  - MinIO: every bucket's objects (`mc mirror` from the pod)
+  - floci-aws: every S3 bucket's objects
   - Redis: optional, since it mostly holds caches and sessions
   - a small manifest: auto version, k3s version, pods and databases included,
     and when it was taken
@@ -38,8 +38,19 @@ match.
 ## Follow-ups from 0.9 (Envoy Gateway)
 
 - Once everyone is on 0.9: drop the Ingress from each pod repo's main
-  manifest, leaving only `.auto/routes.yaml` (the README promises this for a
-  later release).
+  manifest, leaving only `.auto/routes.yaml` (the 0.9.0 release notes and the
+  route template promise this for a later release).
 - The production ingress move (forward auth, session affinity, cert-manager,
   production overlays) is its own project. Its starting points are kept
   outside this repo.
+
+## Open-source launch follow-ups
+
+- Record a short demo of a first `auto start` (asciinema or VHS, rendered to
+  a GIF) and put it at the top of the README. It needs portal's
+  `.auto/routes.yaml` on its `main` branch, since the default config clones
+  portal from GitHub.
+- Give portal a landing page of its own instead of nginx's welcome page, so
+  the first thing a new user sees says it came from auto.
+- Write `docs/releases/X.Y.Z.md` for every release: the release workflow uses
+  it as the GitHub release's description.

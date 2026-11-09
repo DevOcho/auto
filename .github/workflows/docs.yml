@@ -1,0 +1,51 @@
+# Builds the documentation site (zensical.toml) and publishes it to GitHub
+# Pages. Pull requests only build it, with --strict, so a broken link or a page
+# missing from the nav fails the check before it reaches the site.
+#
+# Needs Pages turned on once, with "GitHub Actions" as the source:
+# Settings -> Pages -> Build and deployment.
+name: Docs
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - run: pip install -r docs-requirements.txt
+      - run: zensical build --strict --clean
+      - run: python3 .github/scripts/check_site_links.py site
+      - uses: actions/upload-pages-artifact@v5
+        if: github.event_name != 'pull_request'
+        with:
+          path: site
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v6
+      - uses: actions/deploy-pages@v5
+        id: deployment

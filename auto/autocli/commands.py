@@ -118,8 +118,18 @@ def autocomplete(shell, do_install):
 @auto.command()
 @click.pass_context
 @click.argument("pod", required=False, shell_complete=get_pod_names)
-@click.option("--dry-run", is_flag=True, default=False)
-@click.option("--offline", is_flag=True, default=False)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Print what would happen without changing anything.",
+)
+@click.option(
+    "--offline",
+    is_flag=True,
+    default=False,
+    help="Skip git pulls and registry downloads, for working without a network.",
+)
 def start(self, pod, dry_run, offline):  # pylint: disable=unused-argument
     """Start a new k3s/k3d cluster or an individual pod"""
     core.bootstrap_cluster(pod, dry_run, offline)
@@ -128,8 +138,18 @@ def start(self, pod, dry_run, offline):  # pylint: disable=unused-argument
 @auto.command()
 @click.pass_context
 @click.argument("pod", required=False, shell_complete=get_pod_names)
-@click.option("--dry-run", is_flag=True, default=False)
-@click.option("--delete-cluster", is_flag=True, default=False)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Print what would happen without changing anything.",
+)
+@click.option(
+    "--delete-cluster",
+    is_flag=True,
+    default=False,
+    help="Delete the cluster and its databases instead of stopping it.",
+)
 def stop(self, pod, dry_run, delete_cluster):  # pylint: disable=unused-argument
     """Stop the cluster (or delete it)"""
     if pod:
@@ -235,7 +255,7 @@ def refresh_pod(self, pod):  # pylint: disable=unused-argument
 @click.argument("pod", shell_complete=get_pod_names)
 @click.pass_context
 def upgrade(self, pod):  # pylint: disable=unused-argument
-    """Remove container registry, create it again, then repopulate it, then restart the cluster"""
+    """Rebuild a pod's image and push it to the local registry (as `auto tag` does)"""
     registry.tag_pod_docker_image(pod)
 
 
