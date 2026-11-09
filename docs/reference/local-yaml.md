@@ -89,8 +89,11 @@ registry:
 ```
 
 auto adds every third-party image it finds running after each `auto start`, so
-you rarely edit this by hand. An image that only a system pod that is off uses
-isn't downloaded until that system pod starts. The cluster's nodes also look up
+you rarely edit this by hand. Once the cluster runs a newer version of one of
+k3s's or Envoy Gateway's own images, auto drops the older versions from the
+list, so a new machine doesn't download them. An image that only a system pod
+that is off uses isn't downloaded until that system pod starts. The cluster's
+nodes also look up
 the Docker Hub images they pull for themselves (k3s's own pods and Envoy
 Gateway) in this registry first, through a `docker.io` mirror in
 `~/.auto/k3s/registries.yaml`.

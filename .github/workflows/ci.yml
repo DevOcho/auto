@@ -41,6 +41,34 @@ jobs:
           docker run --rm auto-test:${{ strategy.job-index }} \
             python3 -m pytest --tb=short -v
 
+  # The same tests on ARM, where the linux-arm64 release is built
+  test-linux-arm:
+    name: Test (${{ matrix.distro }}, arm64)
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        distro:
+          - ubuntu:24.04
+          - debian:trixie
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build test image
+        run: |
+          docker build \
+            --build-arg BASE_IMAGE=${{ matrix.distro }} \
+            -f docker/test.Dockerfile \
+            -t auto-test:${{ strategy.job-index }} \
+            .
+
+      - name: Run pytest
+        run: |
+          docker run --rm auto-test:${{ strategy.job-index }} \
+            python3 -m pytest --tb=short -v
+
   test-macos:
     name: Test (macOS)
     runs-on: macos-latest

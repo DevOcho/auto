@@ -10,6 +10,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/auto-app.yml'
+      - 'auto/**'
       - 'build_requirements.txt'
       - 'requirements.txt'
 
@@ -30,6 +31,10 @@ jobs:
           # 24.04 lacks.
           - os: ubuntu-24.04
             asset_suffix: linux-x86_64
+          # The same on ARM: Graviton and other ARM servers, ARM laptops,
+          # Raspberry Pis with a 64-bit OS, Windows on ARM through WSL2.
+          - os: ubuntu-24.04-arm
+            asset_suffix: linux-arm64
           - os: macos-latest
             asset_suffix: darwin-arm64
     runs-on: ${{ matrix.os }}
@@ -89,9 +94,9 @@ jobs:
           done
         fi
 
-    # A pull request's binary is kept for a week, to try it before a release.
+    # Kept for a week: the e2e job below starts a cluster with it, and a pull
+    # request's binary can be tried before a release.
     - name: Keep the binary for testing
-      if: github.ref_type != 'tag'
       uses: actions/upload-artifact@v4
       with:
         name: auto-test-${{ matrix.asset_suffix }}
@@ -123,8 +128,90 @@ jobs:
         path: auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}.tar.gz
         if-no-files-found: error
 
-  release:
+  # A real `auto start` with each Linux build, on its own architecture: the
+  # default config's first start on a new machine, then a resume and a
+  # recreate, with portal answering over HTTPS each time. A release waits for
+  # it. macOS runners can't run Docker, so the Mac build only gets the start
+  # check above.
+  e2e:
+    name: auto start (${{ matrix.asset_suffix }})
     needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            asset_suffix: linux-x86_64
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            asset_suffix: linux-arm64
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      AUTO_NO_UPDATE_CHECK: "1"
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/download-artifact@v4
+      with:
+        name: auto-test-${{ matrix.asset_suffix }}
+        path: dist
+
+    - name: Install k3d, kubectl, Helm and mkcert
+      run: |
+        set -euo pipefail
+        docker version --format 'Docker {{.Server.Version}} on {{.Server.Arch}}'
+        arch=${{ matrix.arch }}
+        sudo curl -fsSL -o /usr/local/bin/k3d \
+          "https://github.com/k3d-io/k3d/releases/download/v5.9.0/k3d-linux-$arch"
+        sudo curl -fsSL -o /usr/local/bin/kubectl \
+          "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/$arch/kubectl"
+        sudo chmod +x /usr/local/bin/k3d /usr/local/bin/kubectl
+        helm=helm-v3.19.0-linux-$arch.tar.gz
+        curl -fsSLO "https://get.helm.sh/$helm" && curl -fsSLO "https://get.helm.sh/$helm.sha256sum"
+        sha256sum -c "$helm.sha256sum"
+        tar xzf "$helm" && sudo install "linux-$arch/helm" /usr/local/bin/helm
+        sudo apt-get update -qq && sudo apt-get install -y -qq mkcert libnss3-tools
+        k3d version | head -1 && kubectl version --client | head -1 && helm version --short
+
+    - name: Install auto from this build
+      run: |
+        mkdir -p ~/.auto ~/source/devocho
+        install -m 755 dist/auto ~/.auto/auto
+        cp -r auto/config auto/k3s ~/.auto/
+        echo "127.0.0.1 k3d-registry.local portal.local" | sudo tee -a /etc/hosts
+        echo "$HOME/.auto" >> "$GITHUB_PATH"
+
+    - name: Start, resume and recreate
+      run: |
+        set -euo pipefail
+        portal() {  # portal.local over HTTPS with the cluster's own certificate
+          local code=000
+          for _ in $(seq 1 90); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+              --cacert "$(mkcert -CAROOT)/rootCA.pem" https://portal.local/) || true
+            [ "$code" = 200 ] && return 0
+            sleep 2
+          done
+          echo "portal.local answered $code"; kubectl get pods -A; return 1
+        }
+        timed() {  # label, then auto's arguments
+          local label=$1; shift
+          SECONDS=0
+          auto "$@" < /dev/null
+          portal
+          echo "| $label | ${SECONDS} s |" >> "$GITHUB_STEP_SUMMARY"
+        }
+        printf '| %s | |\n| --- | --- |\n' "auto start, ${{ matrix.asset_suffix }}" >> "$GITHUB_STEP_SUMMARY"
+        timed "First start, new machine" start
+        auto stop < /dev/null
+        timed "Resume after auto stop" start
+        auto stop --delete-cluster < /dev/null
+        timed "Recreate after --delete-cluster" start
+
+  release:
+    needs: [build, e2e]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
@@ -140,10 +227,12 @@ jobs:
           echo "path=$notes" >> "$GITHUB_OUTPUT"
         fi
 
+    # Only the release tarballs, not the test binaries (all named `auto`)
     - name: Download all artifacts
       uses: actions/download-artifact@v4
       with:
         path: artifacts
+        pattern: auto-v*
         merge-multiple: true
 
     - name: List downloaded artifacts

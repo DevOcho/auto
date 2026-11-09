@@ -270,3 +270,97 @@ def test_load_missing_images_with_nothing_to_load_asks_nothing():
     with patch("autocli.registry._get_registry_catalog") as catalog:
         registry.load_missing_images(set())
     catalog.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "image, repo",
+    [
+        ("mysql:8.0", "mysql"),
+        ("rancher/mirrored-pause:3.10.2", "rancher/mirrored-pause"),
+        ("registry.example.com:5000/team/app", "registry.example.com:5000/team/app"),
+        (
+            "registry.example.com:5000/team/app:1.4",
+            "registry.example.com:5000/team/app",
+        ),
+    ],
+)
+def test_repo_of_a_registry_port_is_not_a_tag(image, repo):
+    """The repository part of an image name"""
+    assert registry._repo_of(image) == repo
+
+
+def test_only_replaced_versions_of_k3s_and_envoy_images_are_stale():
+    """Old versions of images auto chooses go; anything a pod might pin stays"""
+    running = {
+        "docker.io/rancher/mirrored-coredns-coredns:1.14.7",
+        "docker.io/envoyproxy/envoy:distroless-v1.39.5",
+        "mysql:8.0",
+    }
+    listed = [
+        "rancher/mirrored-coredns-coredns:1.10.1",  # replaced: stale
+        "docker.io/rancher/mirrored-coredns-coredns:1.12.0",  # replaced: stale
+        "rancher/mirrored-coredns-coredns:1.14.7",  # running
+        "envoyproxy/envoy:distroless-v1.38.0",  # replaced: stale
+        "rancher/mirrored-library-traefik:2.10.7",  # not running at all: kept
+        "mysql:5.7",  # not one auto chooses: kept
+    ]
+    with patch.dict(registry.CONFIG, {"registry": [{"image": i} for i in listed]}):
+        assert registry._stale_managed_images(running) == [
+            listed[0],
+            listed[1],
+            listed[3],
+        ]
+
+
+def test_caching_drops_replaced_k3s_versions_from_local_yaml(monkeypatch):
+    """A new machine shouldn't download every coredns version auto ever saw"""
+    monkeypatch.setitem(
+        registry.CONFIG,
+        "registry",
+        [
+            {"image": "rancher/mirrored-pause:3.6"},
+            {"image": "rancher/mirrored-pause:3.10.2"},
+        ],
+    )
+    with patch(
+        "autocli.registry._scan_namespaces_for_images", return_value=set()
+    ), patch(
+        "autocli.registry._scan_nodes_for_sandbox_images",
+        return_value={"docker.io/rancher/mirrored-pause:3.10.2"},
+    ), patch(
+        "autocli.registry._get_registry_catalog",
+        return_value=["rancher/mirrored-pause"],
+    ), patch(
+        "autocli.registry._is_image_in_catalog", return_value=True
+    ), patch(
+        "autocli.registry.remove_images_from_local_config"
+    ) as remove:
+        registry.cache_running_images()
+    remove.assert_called_once_with(["rancher/mirrored-pause:3.6"])
+
+
+def test_images_are_cached_at_once_and_each_reported(capsys):
+    """Several downloads run together; a failure is named, not fatal"""
+    pairs = [(f"img{i}:1", f"img{i}:1") for i in range(6)]
+    with patch(
+        "autocli.registry._cache_single_image",
+        side_effect=lambda full, clean: clean != "img3:1",
+    ) as cache:
+        registry._cache_images(pairs)
+    assert cache.call_count == 6
+    out = capsys.readouterr().out
+    assert all(f"Cached: img{i}:1" in out for i in (0, 1, 2, 4, 5))
+    assert "Could not cache img3:1" in out
+
+
+@pytest.mark.parametrize("fails", ["inspect+pull", "tag", "push", None])
+def test_caching_one_image_reports_whether_it_worked(fails):
+    """No progress bars (they would overlap); the result is the return value"""
+
+    def run(cmd, **_kw):
+        if fails == "inspect+pull" and ("inspect" in cmd or "pull" in cmd):
+            return False
+        return not (fails and cmd.startswith(f"docker {fails}"))
+
+    with patch("autocli.registry.utils.run_and_wait", side_effect=run):
+        assert registry._cache_single_image("a:1", "a:1") is (fails is None)

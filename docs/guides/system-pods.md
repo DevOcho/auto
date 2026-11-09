@@ -16,7 +16,8 @@ are called *system pods*. Each one is off until something asks for it.
 
 Manifests for SQL Server (`mssql`, port 1433) and ProxySQL also ship in
 `~/.auto/k3s/`, but they aren't in the default `local.yaml`. To use one,
-add an entry for it as described [below](#add-your-own).
+add an entry for it as described [below](#add-your-own). SQL Server runs on
+x86-64 only: Microsoft publishes no ARM image of it.
 
 These credentials are for local development only. They are the same on every
 machine, which is the point: every developer's config works on every other

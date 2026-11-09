@@ -10,10 +10,11 @@ from autocli import core, https, registry
 from autocli.config import CONFIG
 
 
+@patch("autocli.utils.wait_for_api", return_value=True)
 @patch("autocli.utils.nodes_without_dns", return_value=[])
 @patch("autocli.utils.run_and_wait")
 @patch("autocli.utils.verify_cluster_connection")
-def test_start_cluster_existing(mock_verify, mock_run, mock_dns):
+def test_start_cluster_existing(mock_verify, mock_run, mock_dns, mock_api):
     """Test starting an existing cluster"""
     progress = MagicMock()
     task = MagicMock()
@@ -25,6 +26,7 @@ def test_start_cluster_existing(mock_verify, mock_run, mock_dns):
     result = core.start_cluster(progress, task)
     assert result is False
     mock_dns.assert_called_once()
+    mock_api.assert_called_once()
     gateway = f"kubectl get gateway {https.GATEWAY_NAME} -n {https.GATEWAY_NAMESPACE}"
     assert gateway in mock_run.call_args_list[-1].args[0]
 

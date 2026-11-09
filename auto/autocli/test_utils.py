@@ -388,3 +388,21 @@ def test_auto_s_own_system_pod_manifests_name_their_images():
     floci = [f"kubectl apply -f {k3s}/floci/deployment.yaml"]
     assert utils.manifest_images(mysql) == {"mysql:8.0"}
     assert utils.manifest_images(floci) == {"floci/floci:2.1.0"}
+
+
+@pytest.mark.parametrize("ready_after, expected", [(0, True), (3, True), (99, False)])
+def test_wait_for_api_waits_until_apply_would_work(ready_after, expected):
+    """After a resume, cluster-info answers before kubectl apply's schema is served"""
+    calls = []
+
+    def probe(cmd, **_kw):
+        calls.append(cmd)
+        return MagicMock(returncode=0 if len(calls) > ready_after else 1)
+
+    with patch("autocli.utils.subprocess.run", side_effect=probe), patch(
+        "autocli.utils.sleep"
+    ) as nap, patch("autocli.utils.rprint") as say:
+        assert utils.wait_for_api(max_wait_time=10) is expected
+    assert all("/openapi/v3" in cmd for cmd in calls)
+    assert nap.call_count == min(ready_after, 10)
+    assert say.called == (ready_after > 0)

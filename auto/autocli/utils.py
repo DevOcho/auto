@@ -293,6 +293,29 @@ def verify_cluster_connection(retries=10) -> bool:
     return False
 
 
+def wait_for_api(max_wait_time=90) -> bool:
+    """Wait until the Kubernetes API serves the schema `kubectl apply` validates against.
+
+    Right after `k3d cluster start`, `kubectl cluster-info` already answers
+    while `kubectl apply` still fails ("failed to download openapi"), so the
+    first system pod's commands retried every 2 s: one resume took 48 s
+    instead of about 20.
+    """
+    probe = "kubectl get --raw /openapi/v3"
+    for waited in range(max_wait_time):
+        if (
+            subprocess.run(
+                probe, shell=True, capture_output=True, check=False
+            ).returncode
+            == 0
+        ):
+            return True
+        if waited == 0:
+            rprint("     = Waiting for the Kubernetes API...")
+        sleep(1)
+    return False
+
+
 def wait_for_pod_status(podname: str, status: str, max_wait_time=60) -> bool:
     """Check for a pod to be complete and then return"""
 

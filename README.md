@@ -41,8 +41,8 @@ again is a normal, fast thing to do.
 
 You need Docker, [k3d](https://k3d.io), kubectl and git, plus
 [mkcert](https://github.com/FiloSottile/mkcert) and certutil for HTTPS
-(certutil is in `libnss3-tools` on Debian and Ubuntu). auto runs on Linux,
-macOS (Apple Silicon) and Windows through WSL2.
+(certutil is in `libnss3-tools` on Debian and Ubuntu). auto runs on Linux
+(x86-64 and ARM), macOS (Apple Silicon) and Windows through WSL2.
 
 ```bash
 curl -fsSL https://www.devocho.com/auto.sh | bash
