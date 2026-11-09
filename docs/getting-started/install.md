@@ -1,8 +1,8 @@
 # Install
 
 auto runs on Linux, macOS (Apple Silicon) and Windows through WSL2. On Linux
-it needs an x86-64 machine with glibc 2.35 or newer: Ubuntu 22.04 or newer,
-Debian 12 or newer, or a current Fedora or Arch.
+it needs an x86-64 machine with glibc 2.39 or newer: Ubuntu 24.04 or newer,
+Debian 13 or newer, or a current Fedora or Arch.
 
 ## What you need first
 

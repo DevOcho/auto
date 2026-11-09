@@ -23,11 +23,12 @@ jobs:
       matrix:
         include:
           # A Linux binary needs a glibc at least as new as the machine it was
-          # built on, so it is built on the oldest Ubuntu we support. 22.04's
-          # glibc 2.35 runs on Ubuntu 22.04 and newer, Debian 12, Fedora and
-          # Arch. Never ubuntu-latest: 0.9.0 was built on 26.04 when GitHub
-          # moved it there and needed glibc 2.42, which Ubuntu 24.04 lacks.
-          - os: ubuntu-22.04
+          # built on, so it is built on the oldest Ubuntu we support. 24.04's
+          # glibc 2.39 runs on Ubuntu 24.04 and newer, Debian 13 and newer,
+          # Fedora and Arch. Never ubuntu-latest: 0.9.0 was built on 26.04
+          # when GitHub moved it there and needed glibc 2.42, which Ubuntu
+          # 24.04 lacks.
+          - os: ubuntu-24.04
             asset_suffix: linux-x86_64
           - os: macos-latest
             asset_suffix: darwin-arm64
@@ -81,7 +82,7 @@ jobs:
         mkdir -p "$RUNNER_TEMP/home"
         echo y | HOME="$RUNNER_TEMP/home" AUTO_NO_UPDATE_CHECK=1 dist/auto --version
         if [ "$RUNNER_OS" = Linux ]; then
-          for image in ubuntu:22.04 debian:bookworm; do
+          for image in ubuntu:24.04 debian:trixie; do
             echo "== $image"
             echo y | docker run --rm -i -e AUTO_NO_UPDATE_CHECK=1 \
               -v "$PWD/dist:/dist:ro" "$image" /dist/auto --version
