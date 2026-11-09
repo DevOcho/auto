@@ -15,7 +15,7 @@ from autocli.config import CONFIG
 from rich import print as rprint
 from rich.progress import Progress
 
-VERSION = "0.9.0"
+VERSION = "0.9.1"
 
 
 # Global settings for click

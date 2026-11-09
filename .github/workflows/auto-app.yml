@@ -4,6 +4,14 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  # A pull request that changes the build is built and started here too, so a
+  # binary that won't run is caught before a tag publishes it. Only a tag
+  # packages and publishes.
+  pull_request:
+    paths:
+      - '.github/workflows/auto-app.yml'
+      - 'build_requirements.txt'
+      - 'requirements.txt'
 
 permissions:
   contents: write
@@ -14,7 +22,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # A Linux binary needs a glibc at least as new as the machine it was
+          # built on, so it is built on the oldest Ubuntu we support. 22.04's
+          # glibc 2.35 runs on Ubuntu 22.04 and newer, Debian 12, Fedora and
+          # Arch. Never ubuntu-latest: 0.9.0 was built on 26.04 when GitHub
+          # moved it there and needed glibc 2.42, which Ubuntu 24.04 lacks.
+          - os: ubuntu-22.04
             asset_suffix: linux-x86_64
           - os: macos-latest
             asset_suffix: darwin-arm64
@@ -61,7 +74,22 @@ jobs:
     - name: List dist directory
       run: ls -l dist/
 
+    # Start the binary here and, on Linux, on the oldest systems auto supports.
+    # With no config, auto offers to create its code folder: `y` answers that.
+    - name: Start the binary
+      run: |
+        mkdir -p "$RUNNER_TEMP/home"
+        echo y | HOME="$RUNNER_TEMP/home" AUTO_NO_UPDATE_CHECK=1 dist/auto --version
+        if [ "$RUNNER_OS" = Linux ]; then
+          for image in ubuntu:22.04 debian:bookworm; do
+            echo "== $image"
+            echo y | docker run --rm -i -e AUTO_NO_UPDATE_CHECK=1 \
+              -v "$PWD/dist:/dist:ro" "$image" /dist/auto --version
+          done
+        fi
+
     - name: Create distribution directory
+      if: github.ref_type == 'tag'
       run: |
         # Stage release files under an arch-tagged directory so the tarball is unambiguous
         STAGE=release/auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}
@@ -72,11 +100,13 @@ jobs:
         cp README.md "$STAGE/"
 
     - name: Create tar.gz archive
+      if: github.ref_type == 'tag'
       run: |
         tar -czvf auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}.tar.gz \
             -C release auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}
 
     - name: Upload artifact
+      if: github.ref_type == 'tag'
       uses: actions/upload-artifact@v4
       with:
         name: auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}
@@ -85,6 +115,7 @@ jobs:
 
   release:
     needs: build
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
