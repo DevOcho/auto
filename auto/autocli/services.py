@@ -202,6 +202,8 @@ def install_system_pods():
         _start_system_pod(pod_name, sys_pod["pod"]["commands"])
         started.add(pod_name)
 
+    _warn_about_undefined_system_pods(required_pods)
+
     # A local.yaml written before floci-aws shipped has no entry for it
     if S3_POD in required_pods and S3_POD not in started:
         _start_system_pod(S3_POD, FLOCI_COMMANDS)
@@ -211,6 +213,31 @@ def install_system_pods():
 
     # Buckets wait for floci-aws where they are made (_process_s3_buckets), so
     # loading the system pods never blocks on it.
+
+
+def _warn_about_undefined_system_pods(required_pods):
+    """Name each system pod a pod asks for that local.yaml has no entry for
+
+    Without this it is silently never started, and the pod that needs it fails
+    later in a way that doesn't point here.
+    """
+    defined = {sys_pod["pod"]["name"] for sys_pod in CONFIG.get("system-pods", [])}
+    # minio is served by floci-aws, which starts even without an entry
+    undefined = required_pods - defined - set(REPLACED_SYSTEM_PODS) - {S3_POD}
+    if not undefined:
+        return
+    requests = utils.system_pod_requests(CONFIG)
+    for name in sorted(undefined):
+        askers = requests.get(name, [])
+        who = (
+            f"{' and '.join(askers)} {'asks' if len(askers) == 1 else 'ask'}"
+            if askers
+            else "A pod asks"
+        )
+        rprint(
+            f"  -- [yellow]{name} won't start[/]: {who} for it, but "
+            "~/.auto/config/local.yaml has no system pod by that name"
+        )
 
 
 def _start_system_pod(pod_name, commands):

@@ -46,7 +46,7 @@ downloaded binaries, so auto runs without a "cannot verify developer" prompt.
 To install a specific release, set `AUTO_VERSION`:
 
 ```bash
-curl -fsSL https://www.devocho.com/auto.sh | AUTO_VERSION=0.9.1 bash
+curl -fsSL https://www.devocho.com/auto.sh | AUTO_VERSION=0.9.2 bash
 ```
 
 ## Add the registry's hostname

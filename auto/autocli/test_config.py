@@ -2,6 +2,7 @@
 
 # pylint: disable=protected-access
 
+import os
 from unittest.mock import patch
 
 import pytest
@@ -70,3 +71,68 @@ def test_load_config_treats_empty_file_as_empty_config(tmp_path):
 
     with patch("autocli.config.os.path.expanduser", return_value=str(tmp_path)):
         assert config.load_config() == {}
+
+
+@pytest.mark.parametrize(
+    "argv, needed",
+    [
+        (["--version"], False),
+        (["--help"], False),
+        (["start", "-h"], False),
+        ([], False),  # bare `auto` prints help
+        (["start"], True),
+        (["logs", "shop"], True),
+    ],
+)
+def test_only_real_commands_need_the_code_folder(argv, needed):
+    """`auto --version` and help must not ask to create the code folder"""
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("_AUTO_COMPLETE", None)
+        assert config._needs_code_folder(argv) is needed
+
+
+def test_tab_completion_never_asks_for_the_code_folder():
+    """Completing a word must never stop to ask a question"""
+    with patch.dict(os.environ, {"_AUTO_COMPLETE": "bash_complete"}):
+        assert config._needs_code_folder(["start"]) is False
+
+
+def _config_pointing_at_a_missing_folder(tmp_path):
+    config_dir = tmp_path / ".auto" / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "local.yaml").write_text(
+        f"code: {tmp_path / 'missing'}\n", encoding="utf-8"
+    )
+
+
+def test_version_with_a_missing_code_folder_asks_nothing(tmp_path):
+    """`auto --version` on a fresh machine prints the version and asks nothing"""
+    _config_pointing_at_a_missing_folder(tmp_path)
+    with patch(
+        "autocli.config.os.path.expanduser",
+        side_effect=lambda p: p.replace("~", str(tmp_path)),
+    ), patch("autocli.config.sys.argv", ["auto", "--version"]), patch(
+        "autocli.config.Confirm.ask"
+    ) as ask:
+        assert config.load_config()["code"] == str(tmp_path / "missing")
+    ask.assert_not_called()
+
+
+def test_missing_code_folder_without_a_terminal_says_what_to_do(tmp_path):
+    """A script or CI has no one to answer the prompt: explain, don't traceback"""
+    _config_pointing_at_a_missing_folder(tmp_path)
+    with patch(
+        "autocli.config.os.path.expanduser",
+        side_effect=lambda p: p.replace("~", str(tmp_path)),
+    ), patch("autocli.config.sys.argv", ["auto", "start"]), patch(
+        "autocli.config.sys.stdin.isatty", return_value=False
+    ), patch(
+        "autocli.config.Confirm.ask"
+    ) as ask, patch(
+        "autocli.config.rprint"
+    ) as mock_print:
+        with pytest.raises(SystemExit):
+            config.load_config()
+    ask.assert_not_called()
+    message = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
+    assert "set code:" in message

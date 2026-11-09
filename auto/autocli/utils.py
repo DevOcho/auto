@@ -467,6 +467,14 @@ def get_required_system_pods(config):
                 required_pods.add(sys_pod["pod"]["name"])
 
     # 2. Extract implied system pod requirements by crawling inside pulled application repositories
+    required_pods.update(system_pod_requests(config))
+
+    return required_pods
+
+
+def system_pod_requests(config):
+    """Map each system pod the pods' .auto/config.yaml ask for to the pods asking"""
+    requests = {}
     code_dir = config.get("code", "")
     for pod in config.get("pods", []):
         if isinstance(pod, dict):
@@ -484,12 +492,14 @@ def get_required_system_pods(config):
                     pod_config = yaml.safe_load(pod_yaml)
                     if pod_config and "system-pods" in pod_config:
                         for req_sys_pod in pod_config["system-pods"]:
-                            required_pods.add(req_sys_pod["name"])
+                            requests.setdefault(req_sys_pod["name"], []).append(
+                                pod_name
+                            )
             except (OSError, yaml.YAMLError):
                 # Pass gracefully if we hit a permission/read issue or badly formatted yaml
                 pass
 
-    return required_pods
+    return requests
 
 
 # Where the cluster's ports and the registry listen on this machine. Localhost

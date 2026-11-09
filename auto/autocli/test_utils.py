@@ -7,14 +7,16 @@ import pytest
 from autocli import config, utils
 
 
+@patch("autocli.config.sys.stdin.isatty", return_value=True)
+@patch("autocli.config._needs_code_folder", return_value=True)
 @patch("autocli.config.Confirm.ask")
 @patch("os.makedirs")
 @patch("os.path.exists")
 @patch("os.path.isfile")
 @patch("builtins.open", new_callable=mock_open, read_data="code: /tmp/code")
 @patch("yaml.safe_load")
-def test_load_config(
-    mock_yaml, _mock_file, mock_isfile, mock_exists, mock_makedirs, mock_confirm
+def test_load_config(  # pylint: disable=unused-argument
+    mock_yaml, _mock_file, mock_isfile, mock_exists, mock_makedirs, mock_confirm, *_
 ):
     """Test loading configuration safely routes from config.py"""
     mock_yaml.return_value = {"code": "/tmp/code"}
@@ -307,3 +309,29 @@ def test_container_made_with_another_address_is_reported(bind, published, warns)
             "k3d-registry.local", "The image registry", "recreate it"
         )
     assert mock_print.called is warns
+
+
+def test_system_pod_requests_name_the_pods_asking(tmp_path):
+    """Each requested system pod maps to the pods whose .auto/config.yaml ask for it"""
+    for repo, pods in {"shop": ["mysql", "floci-aws"], "blog": ["mysql"]}.items():
+        (tmp_path / repo / ".auto").mkdir(parents=True)
+        (tmp_path / repo / ".auto" / "config.yaml").write_text(
+            "system-pods:\n" + "".join(f"  - name: {p}\n" for p in pods),
+            encoding="utf-8",
+        )
+    cfg = {
+        "code": str(tmp_path),
+        "pods": [
+            {"repo": "git@example.com:acme/shop.git"},
+            {"repo": "git@example.com:acme/blog.git"},
+        ],
+        "system-pods": [
+            {"pod": {"name": "redis", "active": True}},
+            {"pod": {"name": "mailpit"}},
+        ],
+    }
+    assert utils.system_pod_requests(cfg) == {
+        "mysql": ["shop", "blog"],
+        "floci-aws": ["shop"],
+    }
+    assert utils.get_required_system_pods(cfg) == {"mysql", "floci-aws", "redis"}

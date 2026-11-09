@@ -178,11 +178,23 @@ def test_external_image_is_reported_loaded_only_when_it_was(
     assert push.called == bool(tag_ok)
 
 
-def test_retired_image_is_skipped_with_a_note(capsys):
-    """An old local.yaml's minio/minio entry can't be pulled; say so once, quietly"""
-    images = [
-        {"image": "minio/minio:RELEASE.2025-09-07T16-13-09Z"},
-        {"image": "floci/floci:2.1.0"},
-    ]
+@pytest.mark.parametrize(
+    "image, repo",
+    [
+        ("minio/minio:RELEASE.2025-09-07T16-13-09Z", "minio/minio"),
+        (
+            "registry.k8s.io/ingress-nginx/controller:v1.15.1",
+            "registry.k8s.io/ingress-nginx/controller",
+        ),
+        (
+            "registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.6.4",
+            "registry.k8s.io/ingress-nginx/kube-webhook-certgen",
+        ),
+        ("matomo:5.3.1-fpm-alpine", "matomo"),
+    ],
+)
+def test_retired_image_is_skipped_with_a_note(capsys, image, repo):
+    """An old local.yaml lists images 0.9 never uses; skip each with a note"""
+    images = [{"image": image}, {"image": "floci/floci:2.1.0"}]
     assert registry._filter_images_to_load(images, loaded_repos=[]) == [images[1]]
-    assert "Skipping minio/minio" in capsys.readouterr().out
+    assert f"Skipping {repo}" in capsys.readouterr().out

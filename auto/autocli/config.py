@@ -14,6 +14,22 @@ def _fatal_error(msg, exit_code=1):
     sys.exit(exit_code)
 
 
+# Click prints these and exits before any command runs
+INFO_FLAGS = {"--help", "-h", "--version"}
+
+
+def _needs_code_folder(argv=None):
+    """False when auto only prints help or its version, or completes a word
+
+    CONFIG loads when autocli is imported, before Click reads the command line,
+    so without this `auto --version` asked to create the code folder.
+    """
+    if "_AUTO_COMPLETE" in os.environ:
+        return False
+    args = sys.argv[1:] if argv is None else argv
+    return bool(args) and not any(arg in INFO_FLAGS for arg in args)
+
+
 def load_config():
     """Load the global auto config"""
     config = {}
@@ -47,10 +63,16 @@ def load_config():
         expanded_path = os.path.expandvars(expanded_path)
         config["code"] = expanded_path
 
-        if not os.path.exists(config["code"]):
+        if not os.path.exists(config["code"]) and _needs_code_folder():
             rprint(
                 f"\n[yellow]Warning: Code folder '{config['code']}' does not exist.[/]"
             )
+            # No terminal to answer the question (a script, CI): say what to do
+            # instead of failing with a traceback from the prompt.
+            if not sys.stdin.isatty():
+                _fatal_error(
+                    f"Create {config['code']}, or set code: in {config_path} to your code folder."
+                )
             if Confirm.ask("Do you want us to create it for you?"):
                 try:
                     os.makedirs(config["code"])

@@ -450,6 +450,40 @@ def test_retired_system_pod_is_not_started(_mock_required, mock_cmd):
     mock_cmd.assert_not_called()
 
 
+@patch("autocli.services.rprint")
+@patch("autocli.services._run_command_with_retry")
+@patch("autocli.utils.system_pod_requests", return_value={"search": ["shop"]})
+@patch("autocli.utils.get_required_system_pods", return_value={"redis", "search"})
+def test_undefined_system_pod_is_named_with_the_pod_asking(
+    _mock_required, _mock_requests, _mock_cmd, mock_rprint
+):
+    """shop asks for search, which local.yaml doesn't define: say so."""
+    redis = {"pod": {"name": "redis", "commands": ["kubectl apply -f redis.yaml"]}}
+    with patch.dict(CONFIG, {"system-pods": [redis]}), patch(
+        "autocli.services._expose_system_pod_port", return_value=True
+    ):
+        services.install_system_pods()
+    printed = " ".join(str(c.args[0]) for c in mock_rprint.call_args_list)
+    assert "search won't start" in printed
+    assert "shop asks for it" in printed
+    assert "redis won't start" not in printed
+
+
+@patch("autocli.services.rprint")
+@patch("autocli.services._run_command_with_retry")
+@patch("autocli.utils.get_required_system_pods", return_value={"minio"})
+def test_minio_and_floci_without_entries_are_not_called_undefined(
+    _mock_required, _mock_cmd, mock_rprint
+):
+    """minio is served by floci-aws, which starts with or without an entry."""
+    with patch.dict(CONFIG, {"system-pods": []}), patch(
+        "autocli.services.wait_for_floci", return_value=True
+    ):
+        services.install_system_pods()
+    printed = " ".join(str(c.args[0]) for c in mock_rprint.call_args_list)
+    assert "won't start" not in printed
+
+
 def test_sites_and_api_are_published_on_the_bind_address():
     """With HTTPS, 80 and 443; without, 8088; the API on 6550; all on bind-address."""
     with patch.dict(CONFIG, {"bind-address": "127.0.0.1", "https": True}):

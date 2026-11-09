@@ -50,8 +50,14 @@ def _get_registry_catalog():
 # Images auto no longer uses that an old local.yaml still lists under
 # `registry:`. minio/minio can't even be pulled any more (MinIO stopped
 # publishing it; floci-aws serves S3 instead), so trying would only print an
-# error on every start.
-RETIRED_IMAGES = {"minio/minio"}
+# error on every start. Envoy Gateway replaced ingress-nginx in 0.9, and the
+# matomo system pod is gone, so caching those only costs time and disk.
+RETIRED_IMAGES = {
+    "minio/minio",
+    "registry.k8s.io/ingress-nginx/controller",
+    "registry.k8s.io/ingress-nginx/kube-webhook-certgen",
+    "matomo",
+}
 
 
 def _filter_images_to_load(registry_load_list, loaded_repos):
