@@ -1,11 +1,10 @@
 """Tests for auto.autocli.core and auto.autocli.registry"""
 
-# pylint: disable=protected-access,unused-argument,too-many-positional-arguments
-
 import sys
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
+
 from autocli import core, https, registry
 from autocli.config import CONFIG
 
@@ -278,7 +277,7 @@ def test_output_logs_cluster_down_missing_pod(
 @patch("autocli.core._prepare_single_pod")
 @patch("autocli.core.verify_dependencies")
 @patch("autocli.utils.get_cluster_status")
-def test_bootstrap_single_pod_cluster_running(  # pylint: disable=too-many-arguments
+def test_bootstrap_single_pod_cluster_running(
     mock_status,
     mock_verify,
     mock_prepare,
@@ -311,7 +310,7 @@ def test_bootstrap_single_pod_cluster_running(  # pylint: disable=too-many-argum
 @patch("autocli.core._prepare_single_pod")
 @patch("autocli.core.verify_dependencies")
 @patch("autocli.utils.get_cluster_status")
-def test_bootstrap_single_pod_db_created_before_pod_starts(  # pylint: disable=too-many-arguments
+def test_bootstrap_single_pod_db_created_before_pod_starts(
     mock_status,
     mock_verify,
     mock_prepare,
@@ -347,7 +346,7 @@ def test_bootstrap_single_pod_db_created_before_pod_starts(  # pylint: disable=t
 @patch("autocli.core.verify_dependencies")
 @patch("autocli.utils.declare_error", side_effect=SystemExit)
 @patch("autocli.utils.get_cluster_status")
-def test_bootstrap_single_pod_cluster_down_errors(  # pylint: disable=too-many-arguments
+def test_bootstrap_single_pod_cluster_down_errors(
     mock_status,
     mock_declare,
     mock_verify,
@@ -383,7 +382,7 @@ def test_bootstrap_single_pod_cluster_down_errors(  # pylint: disable=too-many-a
 @patch("autocli.core._prepare_single_pod")
 @patch("autocli.core.verify_dependencies")
 @patch("autocli.utils.get_cluster_status")
-def test_bootstrap_single_pod_dry_run(  # pylint: disable=too-many-arguments
+def test_bootstrap_single_pod_dry_run(
     mock_status, mock_verify, mock_prepare, mock_install_sys, mock_create_db, mock_start
 ):
     """--dry-run skips every side-effecting step on the single-pod path."""
@@ -605,8 +604,9 @@ def test_quit_key_pressed_q(mock_select, mock_read):
 def test_quit_key_pressed_other_key_keeps_waiting(mock_select, mock_read):
     """Any other key is ignored and the wait continues until the timeout"""
     mock_select.side_effect = [([sys.stdin], [], []), ([], [], [])]
-    with patch("autocli.core.sys.stdin") as mock_stdin, patch(
-        "autocli.core.time.monotonic", side_effect=[0, 1, 3]
+    with (
+        patch("autocli.core.sys.stdin") as mock_stdin,
+        patch("autocli.core.time.monotonic", side_effect=[0, 1, 3]),
     ):
         mock_stdin.fileno.return_value = 0
         assert core._quit_key_pressed(3, interactive=True) is False
@@ -689,13 +689,15 @@ def test_stop_pod_removes_routes_even_when_not_running(
 @patch("autocli.utils.run_and_wait")
 def test_new_cluster_starts_its_databases_before_envoy_gateway(mock_run):
     """MySQL's first boot is the longest wait, so it starts before Envoy's install"""
-    mock_run.side_effect = lambda cmd, **kw: not (
-        "cluster list" in cmd and kw.get("check_result") == "k3s-default"
+    mock_run.side_effect = lambda cmd, **kw: (
+        not ("cluster list" in cmd and kw.get("check_result") == "k3s-default")
     )
     order = MagicMock()
-    with patch("autocli.services.install_system_pods", order.system_pods), patch(
-        "autocli.https.install_envoy_gateway", order.envoy
-    ), patch.dict(CONFIG, {"code": "/tmp", "https": True}):
+    with (
+        patch("autocli.services.install_system_pods", order.system_pods),
+        patch("autocli.https.install_envoy_gateway", order.envoy),
+        patch.dict(CONFIG, {"code": "/tmp", "https": True}),
+    ):
         assert core.start_cluster(MagicMock(), MagicMock(), "k.pem", "c.pem") is True
     assert [c[0] for c in order.mock_calls if c[0] in ("system_pods", "envoy")] == [
         "system_pods",
@@ -715,9 +717,11 @@ def test_new_cluster_starts_its_databases_before_envoy_gateway(mock_run):
 def test_urls_are_printed_before_images_are_cached():
     """The sites already work; caching only speeds up the next start"""
     order = MagicMock()
-    with patch("autocli.core._print_access_hints", order.hints), patch(
-        "autocli.registry.cache_running_images", order.cache
-    ), patch.dict(CONFIG, {"pods": [], "https": False}):
+    with (
+        patch("autocli.core._print_access_hints", order.hints),
+        patch("autocli.registry.cache_running_images", order.cache),
+        patch.dict(CONFIG, {"pods": [], "https": False}),
+    ):
         core.bootstrap_cluster(None, dry_run=False, offline=False)
     assert [c[0] for c in order.mock_calls if c[0] in ("hints", "cache")] == [
         "hints",

@@ -6,11 +6,10 @@ held under the same tag, and the pod started on old code while `auto start`
 exited 0. Each step now has to succeed before the next one runs.
 """
 
-# pylint: disable=protected-access
-
 from unittest.mock import patch
 
 import pytest
+
 from autocli import registry
 
 
@@ -30,9 +29,11 @@ def _commands(run_and_wait):
 
 def test_failed_build_stops_before_tag_and_push(pod_repo):
     """A failed build must never push the stale image or exit 0"""
-    with patch.object(registry.progress, "build_image", return_value=0), patch.object(
-        registry.progress, "push_image", return_value=1
-    ) as push, patch.object(registry.utils, "run_and_wait", return_value=1) as run:
+    with (
+        patch.object(registry.progress, "build_image", return_value=0),
+        patch.object(registry.progress, "push_image", return_value=1) as push,
+        patch.object(registry.utils, "run_and_wait", return_value=1) as run,
+    ):
         with pytest.raises(SystemExit) as exited:
             registry.tag_pod_docker_image(pod_repo)
 
@@ -43,9 +44,11 @@ def test_failed_build_stops_before_tag_and_push(pod_repo):
 
 def test_failed_tag_stops_before_push(pod_repo):
     """Without the registry tag there is nothing correct to push"""
-    with patch.object(registry.progress, "build_image", return_value=1), patch.object(
-        registry.progress, "push_image", return_value=1
-    ) as push, patch.object(registry.utils, "run_and_wait", return_value=0):
+    with (
+        patch.object(registry.progress, "build_image", return_value=1),
+        patch.object(registry.progress, "push_image", return_value=1) as push,
+        patch.object(registry.utils, "run_and_wait", return_value=0),
+    ):
         with pytest.raises(SystemExit) as exited:
             registry.tag_pod_docker_image(pod_repo)
 
@@ -55,9 +58,11 @@ def test_failed_tag_stops_before_push(pod_repo):
 
 def test_failed_push_is_fatal(pod_repo):
     """The registry would keep serving the previous image, so this is fatal too"""
-    with patch.object(registry.progress, "build_image", return_value=1), patch.object(
-        registry.progress, "push_image", return_value=0
-    ), patch.object(registry.utils, "run_and_wait", return_value=1) as run:
+    with (
+        patch.object(registry.progress, "build_image", return_value=1),
+        patch.object(registry.progress, "push_image", return_value=0),
+        patch.object(registry.utils, "run_and_wait", return_value=1) as run,
+    ):
         with pytest.raises(SystemExit) as exited:
             registry.tag_pod_docker_image(pod_repo)
 
@@ -67,13 +72,11 @@ def test_failed_push_is_fatal(pod_repo):
 
 def test_successful_build_tags_pushes_and_cleans_up(pod_repo):
     """The happy path still builds, tags, pushes and prunes, in that order"""
-    with patch.object(
-        registry.progress, "build_image", return_value=1
-    ) as build, patch.object(
-        registry.progress, "push_image", return_value=1
-    ) as push, patch.object(
-        registry.utils, "run_and_wait", return_value=1
-    ) as run:
+    with (
+        patch.object(registry.progress, "build_image", return_value=1) as build,
+        patch.object(registry.progress, "push_image", return_value=1) as push,
+        patch.object(registry.utils, "run_and_wait", return_value=1) as run,
+    ):
         assert registry.tag_pod_docker_image(pod_repo) is True
 
     build.assert_called_once()
@@ -131,18 +134,16 @@ def test_sandbox_image_is_read_from_the_nodes():
 def test_running_images_cache_includes_the_pause_image(monkeypatch):
     """A new k3s version's pause image ends up in the registry for the next cluster."""
     monkeypatch.setitem(registry.CONFIG, "registry", [])
-    with patch(
-        "autocli.registry._scan_namespaces_for_images", return_value=set()
-    ), patch(
-        "autocli.registry._scan_nodes_for_sandbox_images",
-        return_value={"docker.io/rancher/mirrored-pause:3.10.2"},
-    ), patch(
-        "autocli.registry._get_registry_catalog", return_value=[]
-    ), patch(
-        "autocli.registry._cache_single_image"
-    ) as cache, patch(
-        "autocli.registry.add_images_to_local_config"
-    ) as add:
+    with (
+        patch("autocli.registry._scan_namespaces_for_images", return_value=set()),
+        patch(
+            "autocli.registry._scan_nodes_for_sandbox_images",
+            return_value={"docker.io/rancher/mirrored-pause:3.10.2"},
+        ),
+        patch("autocli.registry._get_registry_catalog", return_value=[]),
+        patch("autocli.registry._cache_single_image") as cache,
+        patch("autocli.registry.add_images_to_local_config") as add,
+    ):
         registry.cache_running_images()
     cache.assert_called_once_with(
         "rancher/mirrored-pause:3.10.2", "rancher/mirrored-pause:3.10.2"
@@ -165,11 +166,11 @@ def test_external_image_is_reported_loaded_only_when_it_was(
             return tag_ok
         return 0  # `docker images` doesn't list it, so it is pulled
 
-    with patch.object(
-        registry.utils, "run_and_wait", side_effect=run_and_wait
-    ), patch.object(registry.progress, "pull_image", return_value=0), patch.object(
-        registry.progress, "push_image", return_value=push_ok
-    ) as push:
+    with (
+        patch.object(registry.utils, "run_and_wait", side_effect=run_and_wait),
+        patch.object(registry.progress, "pull_image", return_value=0),
+        patch.object(registry.progress, "push_image", return_value=push_ok) as push,
+    ):
         registry._load_single_image(image)
 
     out = capsys.readouterr().out
@@ -229,17 +230,18 @@ def test_images_of_system_pods_that_are_off_wait(tmp_path, capsys, required):
         {"image": "gitea/gitea:1.22"},
     ]
     loaded = []
-    with patch.dict(
-        registry.CONFIG, {"registry": images, "system-pods": system_pods, "pods": []}
-    ), patch(
-        "autocli.utils.get_required_system_pods", return_value=set(required)
-    ), patch(
-        "autocli.registry._get_registry_catalog", return_value=[]
-    ), patch(
-        "autocli.registry._load_single_image",
-        side_effect=lambda i: loaded.append(i["image"]),
-    ), patch(
-        "autocli.registry._build_and_load_pods"
+    with (
+        patch.dict(
+            registry.CONFIG,
+            {"registry": images, "system-pods": system_pods, "pods": []},
+        ),
+        patch("autocli.utils.get_required_system_pods", return_value=set(required)),
+        patch("autocli.registry._get_registry_catalog", return_value=[]),
+        patch(
+            "autocli.registry._load_single_image",
+            side_effect=lambda i: loaded.append(i["image"]),
+        ),
+        patch("autocli.registry._build_and_load_pods"),
     ):
         registry.populate_registry()
     expected = {"gitea/gitea:1.22"}  # no system pod's image: always loaded
@@ -257,9 +259,12 @@ def test_images_of_system_pods_that_are_off_wait(tmp_path, capsys, required):
 def test_load_missing_images_loads_only_what_the_registry_lacks():
     """Starting a system pod loads its images if they were skipped earlier"""
     loaded = []
-    with patch("autocli.registry._get_registry_catalog", return_value=["mysql"]), patch(
-        "autocli.registry._load_single_image",
-        side_effect=lambda i: loaded.append(i["image"]),
+    with (
+        patch("autocli.registry._get_registry_catalog", return_value=["mysql"]),
+        patch(
+            "autocli.registry._load_single_image",
+            side_effect=lambda i: loaded.append(i["image"]),
+        ),
     ):
         registry.load_missing_images({"mysql:8.0", "postgres:18.1-trixie"})
     assert loaded == ["postgres:18.1-trixie"]
@@ -322,19 +327,19 @@ def test_caching_drops_replaced_k3s_versions_from_local_yaml(monkeypatch):
             {"image": "rancher/mirrored-pause:3.10.2"},
         ],
     )
-    with patch(
-        "autocli.registry._scan_namespaces_for_images", return_value=set()
-    ), patch(
-        "autocli.registry._scan_nodes_for_sandbox_images",
-        return_value={"docker.io/rancher/mirrored-pause:3.10.2"},
-    ), patch(
-        "autocli.registry._get_registry_catalog",
-        return_value=["rancher/mirrored-pause"],
-    ), patch(
-        "autocli.registry._is_image_in_catalog", return_value=True
-    ), patch(
-        "autocli.registry.remove_images_from_local_config"
-    ) as remove:
+    with (
+        patch("autocli.registry._scan_namespaces_for_images", return_value=set()),
+        patch(
+            "autocli.registry._scan_nodes_for_sandbox_images",
+            return_value={"docker.io/rancher/mirrored-pause:3.10.2"},
+        ),
+        patch(
+            "autocli.registry._get_registry_catalog",
+            return_value=["rancher/mirrored-pause"],
+        ),
+        patch("autocli.registry._is_image_in_catalog", return_value=True),
+        patch("autocli.registry.remove_images_from_local_config") as remove,
+    ):
         registry.cache_running_images()
     remove.assert_called_once_with(["rancher/mirrored-pause:3.6"])
 

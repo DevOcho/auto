@@ -7,14 +7,15 @@ import time
 
 import requests
 import yaml
+from requests.exceptions import RequestException
+from rich import print as rprint
+
 from autocli import progress, utils
 from autocli.config import (
     CONFIG,
     add_images_to_local_config,
     remove_images_from_local_config,
 )
-from requests.exceptions import RequestException
-from rich import print as rprint
 
 
 def start_registry():
@@ -353,7 +354,7 @@ def _cache_images(to_cache):
         for future in concurrent.futures.as_completed(futures):
             try:
                 cached = future.result()
-            except Exception:  # pylint: disable=broad-except
+            except Exception:  # noqa: BLE001
                 cached = False
             if cached:
                 rprint(f"     =[green]Cached:[/green] {futures[future]}")

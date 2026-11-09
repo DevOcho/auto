@@ -4,6 +4,7 @@ import signal
 from unittest.mock import MagicMock, patch
 
 import yaml
+
 from autocli import runner
 
 
@@ -97,11 +98,11 @@ def test_build_runner_pod_manifest_mirrors_security_contexts():
         "capabilities": {"drop": ["ALL"]},
     }
     deployment["spec"]["template"]["spec"]["securityContext"] = pod_ctx
-    deployment["spec"]["template"]["spec"]["containers"][0][
-        "securityContext"
-    ] = container_ctx
+    deployment["spec"]["template"]["spec"]["containers"][0]["securityContext"] = (
+        container_ctx
+    )
 
-    manifest = runner._build_runner_pod_manifest(  # pylint: disable=protected-access
+    manifest = runner._build_runner_pod_manifest(
         "api", "api-seed-x", "seed", ["x"], deployment, [], "default"
     )
 
@@ -111,7 +112,7 @@ def test_build_runner_pod_manifest_mirrors_security_contexts():
 
 def test_build_runner_pod_manifest_without_security_contexts():
     """Deployments with no securityContext produce a runner without one."""
-    manifest = runner._build_runner_pod_manifest(  # pylint: disable=protected-access
+    manifest = runner._build_runner_pod_manifest(
         "api", "api-seed-x", "seed", ["x"], _fake_deployment(), [], "default"
     )
 

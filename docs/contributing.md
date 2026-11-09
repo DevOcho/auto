@@ -19,10 +19,11 @@ Everyone taking part follows the short
 
 ## Preview the site locally
 
+With [uv](https://docs.astral.sh/uv/) installed:
+
 ```bash
 git clone git@github.com:DevOcho/auto.git && cd auto
-pip install -r docs-requirements.txt
-zensical serve        # http://localhost:8000, rebuilds as you edit
+uv run --group docs zensical serve   # http://localhost:8000, rebuilds as you edit
 ```
 
 The site is built with [Zensical](https://zensical.org) from

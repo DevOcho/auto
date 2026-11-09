@@ -18,8 +18,7 @@ edit button that opens the file on GitHub. The pages are Markdown in `docs/`.
 To preview the site locally:
 
 ```bash
-pip install -r docs-requirements.txt
-zensical serve        # http://localhost:8000, rebuilds as you edit
+uv run --group docs zensical serve   # http://localhost:8000, rebuilds as you edit
 ```
 
 The README is the project's front page. Keep it short and send readers to
@@ -48,21 +47,26 @@ auto/
 └── k3s/               # manifests for system pods and Envoy Gateway
 ```
 
-Set up a development environment:
+Set up a development environment with [uv](https://docs.astral.sh/uv/),
+which installs the locked dependencies (`uv.lock`) and Python 3.12, the
+version the release binary is built with:
 
 ```bash
 git clone git@github.com:DevOcho/auto.git
 cd auto
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt -r build_requirements.txt
-pre-commit install
+uv sync
+uv run pre-commit install
 ```
 
 Run auto from your checkout:
 
 ```bash
-python auto/auto.py --help
+uv run auto/auto.py --help
 ```
+
+Dependencies are in `pyproject.toml`: what auto needs at run time, plus the
+`dev` (tests and checks), `build` (PyInstaller) and `docs` groups. Change
+them with `uv add` or `uv remove`, which update `uv.lock` too.
 
 It reads the manifests from `~/.auto/k3s/`, not from the repo. To try a
 change to a file under `auto/k3s/`, copy it there first.
@@ -70,11 +74,11 @@ change to a file under `auto/k3s/`, copy it there first.
 ### Tests and checks
 
 ```bash
-pytest auto/autocli          # the test suite
-pre-commit run --all-files   # black, isort, flake8, pylint, codespell, the tests
+uv run pytest auto/autocli          # the test suite
+uv run pre-commit run --all-files   # ruff, codespell, file checks, the tests
 ```
 
-CI runs the tests on Ubuntu, Debian, Fedora, Arch and macOS. Most of auto
+CI runs the tests on Ubuntu, Debian, Fedora, Arch and macOS, and on ARM. Most of auto
 drives a real cluster, so for anything that changes what happens to one,
 also try it: `auto stop --delete-cluster`, `auto start`, and the commands you
 touched. Say what you ran in the pull request.
@@ -87,7 +91,10 @@ touched. Say what you ran in the pull request.
 - Comments explain why, especially about infrastructure behavior that isn't
   obvious from the code. Keep existing ones when you change the code around
   them.
-- Lines up to 110 characters (black and flake8 enforce it).
+- [ruff](https://docs.astral.sh/ruff/) formats the code and lints it, with
+  its settings in `pyproject.toml`: lines up to 110 characters, complexity up
+  to 15, and pylint's checks where ruff has them. A test keeps each module
+  under 1000 lines.
 
 ### Commits and pull requests
 

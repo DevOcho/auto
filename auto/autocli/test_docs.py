@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 import click
+
 from autocli.commands import auto
 
 DOCS = Path(__file__).resolve().parents[2] / "docs"
@@ -40,14 +41,14 @@ def test_every_option_is_documented():
             if not isinstance(param, click.Option):
                 continue
             long_flags = [opt for opt in param.opts if opt.startswith("--")]
-            assert any(
-                f"`{flag}`" in sections.get(name, "") for flag in long_flags
-            ), f"auto {name}: document {long_flags} in {COMMANDS_PAGE.name}"
+            assert any(f"`{flag}`" in sections.get(name, "") for flag in long_flags), (
+                f"auto {name}: document {long_flags} in {COMMANDS_PAGE.name}"
+            )
 
 
 def test_no_documented_command_is_gone():
     """A removed command's section goes too."""
     stale = set(_command_sections()) - set(auto.commands)
-    assert (
-        not stale
-    ), f"{COMMANDS_PAGE.name} documents removed commands: {sorted(stale)}"
+    assert not stale, (
+        f"{COMMANDS_PAGE.name} documents removed commands: {sorted(stale)}"
+    )

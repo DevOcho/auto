@@ -16,8 +16,9 @@ from subprocess import CalledProcessError
 from time import sleep
 
 import yaml
-from autocli.utils import declare_error, run_and_return, run_and_wait
 from rich import print as rprint
+
+from autocli.utils import declare_error, run_and_return, run_and_wait
 
 
 def get_deployment_spec(name, namespace="default"):
@@ -35,7 +36,7 @@ def get_deployment_spec(name, namespace="default"):
         return None
 
 
-def _build_runner_pod_manifest(
+def _build_runner_pod_manifest(  # noqa: PLR0913, PLR0917
     pod_name,
     runner_name,
     action_label,
@@ -43,7 +44,7 @@ def _build_runner_pod_manifest(
     deployment,
     extra_env,
     namespace,
-):  # pylint: disable=too-many-arguments
+):
     """Build a Pod manifest mirroring deployment's first container, with overrides"""
     spec_template = deployment["spec"]["template"]["spec"]
     container = spec_template["containers"][0]
@@ -222,7 +223,7 @@ def run_one_shot_pod_command(
     )
     manifest_yaml = yaml.safe_dump(pod_manifest)
     phase_cmd = (
-        f"kubectl get pod/{runner_name} -n {namespace} " "-o jsonpath='{.status.phase}'"
+        f"kubectl get pod/{runner_name} -n {namespace} -o jsonpath='{{.status.phase}}'"
     )
 
     try:
@@ -256,7 +257,7 @@ def run_one_shot_pod_command(
     finally:
         # Always clean up so a leaked migrator doesn't block a retry
         run_and_wait(
-            f"kubectl delete pod/{runner_name} -n {namespace} " f"--ignore-not-found",
+            f"kubectl delete pod/{runner_name} -n {namespace} --ignore-not-found",
             capture_output=True,
             suppress_error=True,
         )

@@ -1,11 +1,10 @@
 """Tests for auto.autocli.services orchestration"""
 
-# pylint: disable=protected-access
-
 import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from autocli import services
 from autocli.config import CONFIG
 
@@ -99,9 +98,12 @@ def test_create_databases_waits_only_for_databases_that_were_asked_for(
     _mock_required, _mock_config, mock_process
 ):
     """A start without Postgres must not wait for it, then skip every bucket"""
-    with patch(
-        "autocli.services._verify_required_dbs_ready", return_value=True
-    ) as mock_verify, patch.dict(CONFIG, {"pods": [{"repo": "x/portal.git"}]}):
+    with (
+        patch(
+            "autocli.services._verify_required_dbs_ready", return_value=True
+        ) as mock_verify,
+        patch.dict(CONFIG, {"pods": [{"repo": "x/portal.git"}]}),
+    ):
         services.create_databases()
     assert mock_verify.call_args.args[0] == {"mysql", "floci-aws"}
     mock_process.assert_called_once()
@@ -433,8 +435,9 @@ def test_retired_database_routes_are_skipped(_mock_required, mock_cmd):
             ],
         }
     }
-    with patch.dict(CONFIG, {"system-pods": [mysql]}), patch(
-        "autocli.services._expose_system_pod_port", return_value=True
+    with (
+        patch.dict(CONFIG, {"system-pods": [mysql]}),
+        patch("autocli.services._expose_system_pod_port", return_value=True),
     ):
         services.install_system_pods()
     assert [c.args[0] for c in mock_cmd.call_args_list] == [
@@ -467,8 +470,9 @@ def test_undefined_system_pod_is_named_with_the_pod_asking(
 ):
     """shop asks for search, which local.yaml doesn't define: say so."""
     redis = {"pod": {"name": "redis", "commands": ["kubectl apply -f redis.yaml"]}}
-    with patch.dict(CONFIG, {"system-pods": [redis]}), patch(
-        "autocli.services._expose_system_pod_port", return_value=True
+    with (
+        patch.dict(CONFIG, {"system-pods": [redis]}),
+        patch("autocli.services._expose_system_pod_port", return_value=True),
     ):
         services.install_system_pods()
     printed = " ".join(str(c.args[0]) for c in mock_rprint.call_args_list)
@@ -484,8 +488,9 @@ def test_minio_and_floci_without_entries_are_not_called_undefined(
     _mock_required, _mock_cmd, mock_rprint
 ):
     """minio is served by floci-aws, which starts with or without an entry."""
-    with patch.dict(CONFIG, {"system-pods": []}), patch(
-        "autocli.services.wait_for_floci", return_value=True
+    with (
+        patch.dict(CONFIG, {"system-pods": []}),
+        patch("autocli.services.wait_for_floci", return_value=True),
     ):
         services.install_system_pods()
     printed = " ".join(str(c.args[0]) for c in mock_rprint.call_args_list)
@@ -526,8 +531,9 @@ def test_databases_start_early_and_are_not_started_twice(
     """The early pass starts mysql; the pass after Envoy Gateway starts the rest"""
     mysql = {"pod": {"name": "mysql", "commands": ["kubectl apply -f mysql.yaml"]}}
     redis = {"pod": {"name": "redis", "commands": ["kubectl apply -f redis.yaml"]}}
-    with patch.dict(CONFIG, {"system-pods": [mysql, redis]}), patch(
-        "autocli.services._expose_system_pod_port", return_value=True
+    with (
+        patch.dict(CONFIG, {"system-pods": [mysql, redis]}),
+        patch("autocli.services._expose_system_pod_port", return_value=True),
     ):
         services.install_system_pods(only=services.EARLY_SYSTEM_PODS)
         assert [c.args[0] for c in mock_cmd.call_args_list] == [

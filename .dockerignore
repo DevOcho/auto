@@ -1,0 +1,13 @@
+# Keep local environments and build output out of the test image
+.venv
+bin
+include
+lib
+pyvenv.cfg
+build
+dist
+site
+.git
+**/__pycache__
+.pytest_cache
+.coverage

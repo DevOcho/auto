@@ -4,8 +4,6 @@ The stream parsers and timing cache are module private, but they are the
 part worth pinning down, so this module reaches into them deliberately.
 """
 
-# pylint: disable=protected-access
-
 import json
 from unittest.mock import MagicMock, patch
 
