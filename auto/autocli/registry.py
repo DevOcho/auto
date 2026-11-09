@@ -156,6 +156,20 @@ def _build_and_load_pods(loaded_repos):
         tag_pod_docker_image(pod_name)
 
 
+def _images_only_off_system_pods_use():
+    """Images that only the system pods this start won't run use"""
+    required = utils.get_required_system_pods(CONFIG)
+    # minio is served by floci-aws (services.REPLACED_SYSTEM_PODS)
+    if "minio" in required:
+        required.add("floci-aws")
+    used, unused = set(), set()
+    for sys_pod in CONFIG.get("system-pods", []):
+        pod = sys_pod.get("pod", {})
+        images = utils.manifest_images(pod.get("commands", []))
+        (used if pod.get("name") in required else unused).update(images)
+    return unused - used
+
+
 def populate_registry():
     """Load important images into the registry to speed up deployment."""
     registry_load_list = list(CONFIG.get("registry", []))
@@ -163,10 +177,33 @@ def populate_registry():
 
     filtered_load_list = _filter_images_to_load(registry_load_list, loaded_repos)
 
+    # A system pod that is off doesn't need its images yet; each loads when its
+    # pod starts (load_missing_images). On a new machine with the default
+    # config, that skips about 1.5 minutes of downloads.
+    deferred = _images_only_off_system_pods_use()
+    later = [
+        i for i in filtered_load_list if utils.plain_image_name(i["image"]) in deferred
+    ]
+    if later:
+        rprint(
+            "  -- Not downloading yet, as their system pods are off: "
+            + ", ".join(i["image"] for i in later)
+        )
+
     for image_obj in filtered_load_list:
-        _load_single_image(image_obj)
+        if image_obj not in later:
+            _load_single_image(image_obj)
 
     _build_and_load_pods(loaded_repos)
+
+
+def load_missing_images(images):
+    """Load any of these images the local registry doesn't have yet"""
+    if not images:
+        return
+    wanted = [{"image": image} for image in sorted(images)]
+    for image_obj in _filter_images_to_load(wanted, _get_registry_catalog()):
+        _load_single_image(image_obj)
 
 
 def _scan_namespaces_for_images(namespaces):

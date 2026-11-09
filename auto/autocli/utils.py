@@ -472,6 +472,54 @@ def get_required_system_pods(config):
     return required_pods
 
 
+# How auto's own manifests name the local registry, and Docker Hub's defaults.
+# `registry:` in local.yaml names images without them.
+IMAGE_PREFIXES = ("k3d-registry.local:12345/", "docker.io/library/", "docker.io/")
+
+
+def plain_image_name(image):
+    """mysql:8.0 for k3d-registry.local:12345/mysql:8.0 or docker.io/library/mysql:8.0"""
+    image = image.split("@")[0]
+    for prefix in IMAGE_PREFIXES:
+        if image.startswith(prefix):
+            return image.removeprefix(prefix)
+    return image
+
+
+def manifest_images(commands):
+    """The container images in the manifests a system pod's commands apply"""
+    images = set()
+    for command in commands:
+        try:
+            words = shlex.split(command)
+        except ValueError:
+            continue
+        for flag, path in zip(words, words[1:]):
+            path = os.path.expanduser(path)
+            if flag != "-f" or not os.path.isfile(path):
+                continue
+            try:
+                with open(path, encoding="utf-8") as manifest:
+                    docs = list(yaml.safe_load_all(manifest))
+            except (OSError, yaml.YAMLError):
+                continue
+            _collect_images(docs, images)
+    return images
+
+
+def _collect_images(node, images):
+    """Add every `image:` value under node to images"""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "image" and isinstance(value, str):
+                images.add(plain_image_name(value))
+            else:
+                _collect_images(value, images)
+    elif isinstance(node, list):
+        for item in node:
+            _collect_images(item, images)
+
+
 def system_pod_requests(config):
     """Map each system pod the pods' .auto/config.yaml ask for to the pods asking"""
     requests = {}

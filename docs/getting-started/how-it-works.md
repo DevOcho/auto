@@ -43,24 +43,27 @@ flowchart LR
    fast-forwards, so local commits are never lost.
 3. **Registry.** A local registry, `k3d-registry.local:12345`, holds your
    images and caches every third-party image the cluster uses, so the next
-   start doesn't download them again. A repo's `Dockerfile` is built into an
+   start doesn't download them again. Images that only a system pod that is
+   off uses wait until it starts. A repo's `Dockerfile` is built into an
    image named after the repo and tagged with the `version` in its
    `.auto/config.yaml`, when the registry doesn't have that version yet.
 4. **Cluster.** A new k3s cluster in Docker (one server and one agent node by
    default), or the existing one resumed. Your code folder is mounted into
-   every node at `/mnt/code`. Envoy Gateway is installed with one shared
-   Gateway, `auto`, that every service's routes attach to.
-5. **System pods.** The databases and services your pods ask for (MySQL,
-   Postgres, Redis, Floci, Mailpit and others) start, then auto creates the
-   databases and buckets each pod named.
+   every node at `/mnt/code`. On a new cluster, MySQL and Postgres start
+   first, since they take longest to come up, then Envoy Gateway is installed
+   with one shared Gateway, `auto`, that every service's routes attach to.
+5. **System pods.** The other services your pods ask for (Redis, Floci,
+   Mailpit and others) start, then auto creates the databases and buckets
+   each pod named.
 6. **Your pods.** Each one is deployed with its own command, `helm install`
    or `kubectl apply`, then its `.auto/routes.yaml` is applied.
 7. **Certificate.** auto reads every hostname the routes declare and issues
    one certificate that covers them all. Envoy picks it up live.
-8. **Cache.** Third-party images found running in the cluster are pushed to
+8. **URLs.** auto prints each URL and the `/etc/hosts` lines you are
+   missing. The sites work from here on.
+9. **Cache.** Third-party images found running in the cluster are pushed to
    the registry and added to `local.yaml`'s `registry:` list for next time.
-
-At the end it prints each URL and the `/etc/hosts` lines you are missing.
+   On a new machine this takes about a minute, after the URLs are shown.
 
 ## Where things live
 

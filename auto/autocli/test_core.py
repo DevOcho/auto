@@ -78,6 +78,7 @@ def test_heal_dns_warns_without_failing_if_restart_does_not_help(
     assert "still can't resolve" in str(mock_print.call_args_list[-1])
 
 
+@patch("autocli.services.install_system_pods", new=lambda only=None: None)
 @patch("autocli.services.cluster_port_args", new=lambda: '-p "3306:30036@loadbalancer"')
 @patch("autocli.https._envoy_gateway_manifest", new=lambda: "/cache/eg.yaml")
 @patch("autocli.utils.wait_for_pod_status")
@@ -679,3 +680,44 @@ def test_stop_pod_removes_routes_even_when_not_running(
     with patch.dict(CONFIG, {"code": str(tmp_path)}):
         core.stop_pod("api")
     mock_routes.assert_called_once_with(str(tmp_path / "api"))
+
+
+@patch("autocli.core._verify_and_heal_connection", new=lambda: None)
+@patch("autocli.services.cluster_port_args", new=lambda: "")
+@patch("autocli.utils.run_and_wait")
+def test_new_cluster_starts_its_databases_before_envoy_gateway(mock_run):
+    """MySQL's first boot is the longest wait, so it starts before Envoy's install"""
+    mock_run.side_effect = lambda cmd, **kw: not (
+        "cluster list" in cmd and kw.get("check_result") == "k3s-default"
+    )
+    order = MagicMock()
+    with patch("autocli.services.install_system_pods", order.system_pods), patch(
+        "autocli.https.install_envoy_gateway", order.envoy
+    ), patch.dict(CONFIG, {"code": "/tmp", "https": True}):
+        assert core.start_cluster(MagicMock(), MagicMock(), "k.pem", "c.pem") is True
+    assert [c[0] for c in order.mock_calls if c[0] in ("system_pods", "envoy")] == [
+        "system_pods",
+        "envoy",
+    ]
+    assert order.system_pods.call_args.kwargs == {"only": ("mysql", "postgres")}
+
+
+@patch("autocli.core.verify_dependencies", new=lambda: None)
+@patch("autocli.core.pull_and_build_pods", new=lambda: None)
+@patch("autocli.registry.start_registry", new=lambda: None)
+@patch("autocli.registry.populate_registry", new=lambda: None)
+@patch("autocli.core.start_cluster", new=lambda *a, **kw: False)
+@patch("autocli.core._install_system_sequence", new=lambda new_cluster: None)
+@patch("autocli.core.install_pods_in_cluster", new=lambda: None)
+@patch("autocli.https.finish_ingress", new=lambda use_https: None)
+def test_urls_are_printed_before_images_are_cached():
+    """The sites already work; caching only speeds up the next start"""
+    order = MagicMock()
+    with patch("autocli.core._print_access_hints", order.hints), patch(
+        "autocli.registry.cache_running_images", order.cache
+    ), patch.dict(CONFIG, {"pods": [], "https": False}):
+        core.bootstrap_cluster(None, dry_run=False, offline=False)
+    assert [c[0] for c in order.mock_calls if c[0] in ("hints", "cache")] == [
+        "hints",
+        "cache",
+    ]
