@@ -1,0 +1,47 @@
+# Template for a pod repo's .auto/routes.yaml: how auto 0.9 and newer route
+# traffic to the pod. Copy it, then replace the names marked below.
+#
+# auto 0.8 and older never read this file and keep using the Ingress in the
+# pod's main manifest, so a repo can carry both while people upgrade. The
+# Ingress is removed in a later release.
+#
+# Served on both http and https; for HTTPS only, use routes-https-only.yaml.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: my-pod            # replace: usually the pod name
+  namespace: default
+spec:
+  parentRefs:
+  - name: auto            # auto's shared Gateway, the same in every cluster
+    namespace: auto-gateway
+  hostnames:
+  - my-pod.local          # replace; list every host, each goes on the certificate
+  rules:
+  - backendRefs:
+    - name: my-pod        # replace: the pod's Service
+      port: 80
+    # Optional. auto's Gateway sets no overall cap on a request and lets a
+    # silent one wait an hour; set this only to cut long requests sooner.
+    # timeouts:
+    #   request: 300s
+#
+# Optional: refuse request bodies over a size at the proxy, as nginx's
+# proxy-body-size did. Most pods don't need it: Envoy streams bodies through
+# and the app's own limit applies. Envoy holds each limited body in memory, so
+# keep the limit small. Keep mergeType: without it this policy replaces the
+# Gateway's for the route, and the route is cut at Envoy's 15 s default.
+# ---
+# apiVersion: gateway.envoyproxy.io/v1alpha1
+# kind: BackendTrafficPolicy
+# metadata:
+#   name: my-pod-body-limit   # replace the "my-pod" part
+#   namespace: default
+# spec:
+#   targetRefs:
+#   - group: gateway.networking.k8s.io
+#     kind: HTTPRoute
+#     name: my-pod            # replace: the route above
+#   mergeType: StrategicMerge
+#   requestBuffer:
+#     limit: 10Mi

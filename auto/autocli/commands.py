@@ -15,7 +15,7 @@ from autocli.config import CONFIG
 from rich import print as rprint
 from rich.progress import Progress
 
-VERSION = "0.8.3"
+VERSION = "0.9.0"
 
 
 # Global settings for click
@@ -190,13 +190,6 @@ def mysql(self):  # pylint: disable=unused-argument
 def postgres(self):  # pylint: disable=unused-argument
     """Connect to the postgres database"""
     services.connect_to_postgres()
-
-
-@auto.command()
-@click.pass_context
-def minio(self):  # pylint: disable=unused-argument
-    """Open Connection to MinIO Server"""
-    services.connect_to_minio()
 
 
 @auto.command()

@@ -1,16 +1,17 @@
-apiVersion: networking.k8s.io/v1
-kind: Ingress
+# Gateway API route (served by Envoy Gateway). Kept under the old ingress.yaml
+# name because every local.yaml's system-pod commands apply this exact path.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
 metadata:
   name: floci-aws
+  namespace: default
 spec:
+  parentRefs:
+  - name: auto
+    namespace: auto-gateway
+  hostnames:
+  - floci-aws.local
   rules:
-    - host: floci-aws.local
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: floci-aws
-                port:
-                  number: 4566
+  - backendRefs:
+    - name: floci-aws
+      port: 4566

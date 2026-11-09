@@ -14,9 +14,9 @@ productivity.
 
 Features:
  - Kubernetes local development environment
- - Nginx ingress
+ - Envoy Gateway ingress (Gateway API `HTTPRoute`s)
  - HTTPS support for local development
- - Quick access to databases installed in the cluster (i.e. mysql, postgres, minio, redis, mssql, proxysql, matomo, etc.)
+ - Quick access to databases installed in the cluster (i.e. mysql, postgres, minio, redis, mssql, proxysql, etc.)
  - Local email capture with mailpit (read what your pods send in a browser)
  - Shell autocompletion for commands and pod names
 
@@ -76,6 +76,23 @@ You can verify `auto` is installed with the following command:
 ```bash
 auto --version
 ```
+
+### Upgrading from 0.8 to 0.9
+
+0.9 replaces ingress-nginx with Envoy Gateway and needs a newer Kubernetes, so
+every existing cluster has to be recreated once, which resets its local
+databases. Back them up first, then:
+
+```bash
+auto update
+auto stop --delete-cluster
+auto start
+auto seed <pod>   # for each pod, or restore your backup
+```
+
+To go back, run `auto update 0.8.3` and recreate the cluster the same way. The
+full steps, including backup and restore commands, are in
+[docs/releases/0.9.0.md](docs/releases/0.9.0.md).
 
 ### `/etc/hosts` requirement
 
@@ -171,6 +188,12 @@ registry:
 This list is auto-populated by `auto images` and is also updated automatically
 after each successful `auto start`, so you rarely need to edit it by hand.
 
+The cluster's nodes also look up the Docker Hub images the cluster pulls by
+itself (k3s's own pods and Envoy Gateway) in this registry first, through a
+`docker.io` mirror in `~/.auto/k3s/registries.yaml`. An image that isn't
+cached there is pulled from Docker Hub as usual, and `auto start` caches it
+for the next cluster.
+
 #### System Pods
 
 `auto` ships ready-made manifests for the services your pods depend on, so you
@@ -182,7 +205,6 @@ don't have to package them yourself:
 | `postgres` | Postgres database | `postgres:5432` (and `localhost:5432`) |
 | `redis`    | Redis cache/broker | `redis:6379` (and `localhost:6379`) |
 | `minio`    | S3-compatible object storage | `minio:9000`, console via `auto minio` |
-| `matomo`   | Analytics | `http://matomo.local/` |
 | `mailpit`  | SMTP catch-all + web inbox | `mailpit:1025` (SMTP), `http://mailpit.local/` (inbox) |
 | `floci-aws` | Floci AWS emulator | `http://floci-aws.local/` |
 | `floci-ui` | Floci UI | `http://floci-ui.local/` |
@@ -246,13 +268,25 @@ skip the host entry entirely, `auto mailpit` port-forwards the inbox to
 Messages live inside the pod and are dropped when it restarts, which keeps
 yesterday's experiments out of today's inbox.
 
+#### Cluster size
+
+New clusters get one server and one agent node. Set `agents:` to change the
+number of agent nodes:
+
+```yaml
+agents: 2
+```
+
+`agents: 0` gives a single-node cluster. It is not faster to start: every
+image pull and database start then lands on one node.
+
 #### Extra cluster creation args
 
 Use `extra-args:` to pass arbitrary flags directly to `k3d cluster create` at
 cluster creation time:
 
 ```yaml
-extra-args: "--agents 2 --k3s-arg '--disable=traefik@server:*'"
+extra-args: "--k3s-arg '--disable=metrics-server@server:*'"
 ```
 
 ### Setting up your application to run in `auto`
@@ -322,17 +356,72 @@ command-args: -f '.auto/deployment.yaml'
 Where your entire yaml is in that file.  This command is run blindly so be careful.  With much
 power comes much responsibility.
 
+### Exposing your pod (HTTPRoute)
+
+`auto` routes traffic with [Envoy Gateway](https://gateway.envoyproxy.io/), which
+reads Gateway API `HTTPRoute`s. It does **not** read `kind: Ingress` objects
+(ingress-nginx was retired in March 2026), so a pod that only ships an Ingress
+starts fine but its URL never answers. `auto start` names any Ingress whose
+hosts no HTTPRoute serves.
+
+Put your routes in `.auto/routes.yaml` in the pod repo. `auto` 0.9 and newer
+apply that file after the pod's own install command (and delete it when the pod
+stops); `auto` 0.8 never reads it. So during the move a repo carries both: its
+Ingress in the main manifest for anyone still on 0.8, and its HTTPRoute here.
+The Ingress is removed in a later release. Keep HTTPRoutes out of the main
+manifest: on a cluster made by `auto` 0.8 there are no Gateway API CRDs, and an
+HTTPRoute there fails the whole install.
+
+Start from a template:
+
+- [`docs/templates/routes.yaml`](docs/templates/routes.yaml): served on http and https.
+- [`docs/templates/routes-https-only.yaml`](docs/templates/routes-https-only.yaml):
+  HTTPS only, with a 308 redirect from http (what `force-ssl-redirect` did).
+
+Routes attach to the one Gateway `auto` creates, named `auto` in the
+`auto-gateway` namespace:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: portal
+  namespace: default
+spec:
+  parentRefs:
+  - name: auto
+    namespace: auto-gateway
+  hostnames:
+  - portal.local
+  - customer.portal.local   # list every host; each one goes on the certificate
+  rules:
+  - backendRefs:
+    - name: portal          # your Service
+      port: 80
+```
+
+No `tls:` block is needed: the Gateway terminates HTTPS for every host with the
+local certificate. What the `nginx.ingress.kubernetes.io/*` annotations become:
+
+| ingress-nginx annotation | With Envoy Gateway |
+|---|---|
+| `proxy-body-size` | Usually drop it. Envoy streams request bodies to your pod with no limit, so your app's own limit applies. A route that wants the proxy to refuse large bodies can opt in with a BackendTrafficPolicy `requestBuffer.limit`, which must also set `mergeType: StrategicMerge`: without it the policy replaces the Gateway's and the route is cut at 15 s. |
+| `proxy-read-timeout` / `proxy-send-timeout` | Usually drop it. `auto`'s Gateway sets no overall cap on a request and lets a silent one wait an hour (its `streamIdleTimeout`, the equivalent of `proxy-read-timeout`). To cap a route, add `timeouts: {request: 300s}` to its rule. |
+| `force-ssl-redirect` | Use [`routes-https-only.yaml`](docs/templates/routes-https-only.yaml): the route answers on the `https` listener only, and a second route redirects http with a 308. |
+| `rewrite-target: /` | Drop it; rewriting `/` to `/` does nothing. Real rewrites use a `URLRewrite` filter. |
+
 ## HTTPS Support
 
 HTTPS is enabled by default. When `https: true` is set in your `local.yaml`, `auto` will automatically:
 1. Generate a local Certificate Authority (CA) using `mkcert`.
 2. Generate SSL certificates for `localhost`, `*.local`, and your specific pod names (e.g., `portal.local`).
-3. Configure the Nginx Ingress Controller in the cluster to use these certificates.
+3. Give Envoy Gateway an HTTPS listener that serves these certificates for every host.
 4. Expose port `443` on the load balancer.
 
 After pods are installed, `auto` re-issues the TLS certificate to cover every
-host declared in deployed Ingress resources. This means multi-label subdomains
-like `portal.app.local` are covered automatically — not just `*.local`.
+host declared in deployed `HTTPRoute`s. This means multi-label subdomains
+like `portal.app.local` are covered automatically — not just `*.local`. Envoy
+picks up the new certificate live; nothing restarts.
 
 **Prerequisites:**
 You must install `mkcert` and `certutil` (often found in `libnss3-tools`) for this to work.
@@ -375,6 +464,13 @@ Stop the cluster.
 
 Optionally you can `--delete-cluster` to remove the entire cluster from
 your machine.
+
+Clusters created before `auto` moved to Envoy Gateway run ingress-nginx on
+Kubernetes 1.31, which current Envoy Gateway releases do not support, so
+`auto start` stops on one and asks you to recreate it: `auto stop
+--delete-cluster`, then `auto start`. Recreating resets the local databases
+(re-seed with `auto seed <pod>`). To keep the old cluster for now, run
+`auto update 0.8.3`.
 
 Pass `--dry-run` to print what would happen without making any changes.
 

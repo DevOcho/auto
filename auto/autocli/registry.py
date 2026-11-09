@@ -20,10 +20,21 @@ def start_registry():
     if not utils.run_and_wait(bash_command, check_result="k3d-registry.local"):
         # No registry found so we need to make one
         rprint(" -- Creating new registry")
-        bash_command = """k3d registry create registry.local --port 12345"""
+        bash_command = (
+            f"k3d registry create registry.local --port {utils.bind_address()}:12345"
+        )
         utils.run_and_wait(bash_command)
         rprint("    [steel_blue1]Created Registry")
         time.sleep(3)
+    else:
+        # The nodes reach it inside Docker's network, so recreating it also
+        # means recreating the cluster that was connected to the old one.
+        utils.warn_if_bound_elsewhere(
+            "k3d-registry.local",
+            "The image registry",
+            "auto stop --delete-cluster, k3d registry delete k3d-registry.local, "
+            "then auto start",
+        )
 
 
 def _get_registry_catalog():
@@ -36,6 +47,13 @@ def _get_registry_catalog():
         return []
 
 
+# Images auto no longer uses that an old local.yaml still lists under
+# `registry:`. minio/minio can't even be pulled any more (MinIO stopped
+# publishing it; floci-aws serves S3 instead), so trying would only print an
+# error on every start.
+RETIRED_IMAGES = {"minio/minio"}
+
+
 def _filter_images_to_load(registry_load_list, loaded_repos):
     """Filter out images that are already in the local registry."""
     filtered_list = []
@@ -46,6 +64,13 @@ def _filter_images_to_load(registry_load_list, loaded_repos):
         full_image = image_obj["image"]
         clean_image = full_image.split("@")[0]
         repo_name = clean_image.split(":")[0] if ":" in clean_image else clean_image
+
+        if repo_name in RETIRED_IMAGES:
+            rprint(
+                f"  -- [yellow]Skipping {repo_name}[/]: auto no longer uses it. "
+                "Remove it from registry: in ~/.auto/config/local.yaml"
+            )
+            continue
 
         needs_load = True
         for image in loaded_repos:
@@ -67,10 +92,24 @@ def _load_single_image(image_obj):
     if not utils.run_and_wait(bash_cmd, check_result=clean_image, suppress_error=True):
         progress.pull_image(full_image)
 
+    # A failed pull is not the end: a copy Docker already holds still tags and
+    # pushes, which keeps an image working after its upstream repo disappears
+    # (minio/minio left Docker Hub). The tag is what says whether we have one.
     tag_cmd = f"docker tag {full_image} k3d-registry.local:12345/{clean_image}"
-    utils.run_and_wait(tag_cmd, capture_output=True, suppress_error=True)
+    if not utils.run_and_wait(tag_cmd, capture_output=True, suppress_error=True):
+        rprint(
+            f"  -- [red]Not loaded: {clean_image}[/] could not be pulled and isn't on this "
+            "machine. Pods that use it won't start."
+        )
+        return
 
-    progress.push_image(f"k3d-registry.local:12345/{clean_image}", suppress_error=True)
+    if not progress.push_image(
+        f"k3d-registry.local:12345/{clean_image}", suppress_error=True
+    ):
+        rprint(
+            f"  -- [red]Not loaded: {clean_image}[/] could not be pushed to the local registry."
+        )
+        return
     rprint(f"  -- Loaded: [bright_cyan]{clean_image}[/]")
 
 
@@ -153,11 +192,29 @@ def _get_local_pod_names():
     return local_pod_names
 
 
+def _scan_nodes_for_sandbox_images():
+    """Return the pause image(s) the nodes run every pod's sandbox with.
+
+    It is in no pod spec, so the namespace scan never sees it, but every pod
+    waits on it; the nodes list it among their images. Its version follows the
+    k3s version, so it is read from the cluster rather than pinned.
+    """
+    cmd = "kubectl get nodes -o jsonpath='{.items[*].status.images[*].names[*]}'"
+    output = utils.run_and_return(cmd)
+    return {name for name in output.split() if "/mirrored-pause:" in name}
+
+
 def _filter_external_images(found_images, local_pod_names):
-    """Filter out local images from the running cluster images."""
+    """Filter out local images from the running cluster images.
+
+    An explicit docker.io/ is dropped so a Docker Hub image is cached under the
+    path the nodes' docker.io mirror asks for (envoyproxy/envoy, not
+    docker.io/envoyproxy/envoy); see auto/k3s/registries.yaml.
+    """
     images_to_process = set()
     for img in found_images:
         clean_image = img.replace("k3d-registry.local:12345/", "")
+        clean_image = clean_image.removeprefix("docker.io/")
 
         is_local = False
         for pod_name in local_pod_names:
@@ -202,11 +259,12 @@ def _cache_single_image(full_image, clean_image):
 def cache_running_images():
     """Scan running pods for images and auto-add them to local registry and local.yaml silently."""
     rprint(
-        "  -- Scanning default, kube-system, and ingress-nginx for external images..."
+        "  -- Scanning default, kube-system, and envoy-gateway-system for external images..."
     )
 
-    namespaces = ["default", "kube-system", "ingress-nginx"]
+    namespaces = ["default", "kube-system", "envoy-gateway-system"]
     found_images = _scan_namespaces_for_images(namespaces)
+    found_images |= _scan_nodes_for_sandbox_images()
     local_pod_names = _get_local_pod_names()
     images_to_process = _filter_external_images(found_images, local_pod_names)
 

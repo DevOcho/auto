@@ -77,6 +77,13 @@ code: ${HOME}/source/devocho
 # Set to `false` if you don't want this.  If it's false we will use port 8088 for local pod access.
 https: true
 
+# Which address the cluster's ports listen on: the sites, the databases, the
+# image registry and the Kubernetes API. 127.0.0.1 keeps them on this machine.
+# A team sharing one dev setup can set 0.0.0.0 to open them to the network --
+# only on a network you trust, since the databases use fixed passwords.
+# Takes effect when the cluster is created.
+bind-address: 127.0.0.1
+
 # Each repo listed here will be run as a pod in k3s
 pods:
   - repo: https://github.com/DevOcho/portal.git
@@ -92,7 +99,6 @@ system-pods:
         - "kubectl apply -f ~/.auto/k3s/mysql/pvc.yaml"
         - "kubectl apply -f ~/.auto/k3s/mysql/deployment.yaml"
         - "kubectl apply -f ~/.auto/k3s/mysql/service.yaml"
-        - "kubectl apply -f ~/.auto/k3s/mysql/ingress.yaml"
       databases:
         - name: portal
   - pod:
@@ -104,19 +110,7 @@ system-pods:
         - "kubectl apply -f ~/.auto/k3s/postgres/pvc.yaml"
         - "kubectl apply -f ~/.auto/k3s/postgres/deployment.yaml"
         - "kubectl apply -f ~/.auto/k3s/postgres/service.yaml"
-        - "kubectl apply -f ~/.auto/k3s/postgres/ingress.yaml"
       databases:
-        - name: portal
-  - pod:
-      name: minio
-      active: false
-      commands:
-        - "kubectl apply -f ~/.auto/k3s/minio/pv.yaml"
-        - "kubectl apply -f ~/.auto/k3s/minio/pvc.yaml"
-        - "kubectl apply -f ~/.auto/k3s/minio/deployment.yaml"
-        - "kubectl apply -f ~/.auto/k3s/minio/service.yaml"
-        - "kubectl apply -f ~/.auto/k3s/minio/ingress.yaml"
-      buckets:
         - name: portal
   - pod:
       name: redis
@@ -126,7 +120,6 @@ system-pods:
         - "kubectl apply -f ~/.auto/k3s/redis/pvc.yaml"
         - "kubectl apply -f ~/.auto/k3s/redis/deployment.yaml"
         - "kubectl apply -f ~/.auto/k3s/redis/service.yaml"
-        - "kubectl apply -f ~/.auto/k3s/redis/ingress.yaml"
   # Local SMTP catch-all.  Pods send mail to `mailpit` on port 1025 and
   # read it in the browser at http://mailpit.local/
   - pod:
@@ -136,7 +129,7 @@ system-pods:
         - "kubectl apply -f ~/.auto/k3s/mailpit/deployment.yaml"
         - "kubectl apply -f ~/.auto/k3s/mailpit/service.yaml"
         - "kubectl apply -f ~/.auto/k3s/mailpit/ingress.yaml"
-  # Local AWS emulator (runs alongside MinIO).  Pods reach it at
+  # S3 (in place of MinIO) and the rest of AWS, emulated.  Pods reach it at
   # `floci-aws:4566`; the dashboard is at http://floci-ui.local/
   - pod:
       name: floci-aws
