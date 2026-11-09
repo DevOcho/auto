@@ -13,7 +13,7 @@ Kubernetes cluster.**
 [Documentation](https://devocho.github.io/auto/) ·
 [Try it](#try-it-in-five-minutes) ·
 [Why auto?](#why-auto) ·
-[Release notes](https://devocho.github.io/auto/releases/0.9.0/)
+[Release notes](https://github.com/DevOcho/auto/releases)
 
 </div>
 
