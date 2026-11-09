@@ -88,6 +88,15 @@ jobs:
           done
         fi
 
+    # A pull request's binary is kept for a week, to try it before a release.
+    - name: Keep the binary for testing
+      if: github.ref_type != 'tag'
+      uses: actions/upload-artifact@v4
+      with:
+        name: auto-test-${{ matrix.asset_suffix }}
+        path: dist/auto
+        retention-days: 7
+
     - name: Create distribution directory
       if: github.ref_type == 'tag'
       run: |
