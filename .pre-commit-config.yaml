@@ -5,6 +5,8 @@ repos:
     rev: v4.6.0
     hooks:
       - id: check-added-large-files
+        # The README's demo recording (about 650 KB)
+        exclude: ^docs/assets/demo\.gif$
       - id: check-ast
       - id: check-json
       - id: check-toml

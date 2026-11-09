@@ -17,6 +17,8 @@ Kubernetes cluster.**
 
 </div>
 
+![A first `auto start` on a new machine: it builds portal's image, creates the cluster and serves https://portal.local/ in about three minutes, shown here sped up](docs/assets/demo.gif)
+
 Your product is a handful of services, two databases, a storage bucket and an
 email provider. Getting a new developer running takes a day of setup notes,
 and every laptop ends up a little different.
