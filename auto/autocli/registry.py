@@ -346,9 +346,7 @@ def _stale_managed_images(running_images):
 
 def _cache_images(to_cache):
     """Cache (full_image, clean_image) pairs, several at once"""
-    rprint(
-        f"     = Caching {len(to_cache)} images: " + ", ".join(c for _, c in to_cache)
-    )
+    rprint(f"     = Caching {len(to_cache)} images, {CACHE_WORKERS} at a time")
     with concurrent.futures.ThreadPoolExecutor(max_workers=CACHE_WORKERS) as pool:
         futures = {pool.submit(_cache_single_image, f, c): c for f, c in to_cache}
         for future in concurrent.futures.as_completed(futures):
