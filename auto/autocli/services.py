@@ -121,19 +121,25 @@ PORT_MAPPINGS = {
 }
 
 
-def load_balancer_args():
-    """k3d flags for the Kubernetes API and the sites, published on bind-address.
+# The load balancer's own ports for the sites: 80 and 443 behind host 80 and
+# 443 with HTTPS, or 80 behind host 8088 without it
+SITE_LB_PORTS = ("80", "443")
 
-    bind-address is localhost unless local.yaml opens it to the network. Sites
-    are on 80 and 443 with HTTPS, or on 8088 without it.
+
+def load_balancer_args():
+    """k3d flags for the Kubernetes API and the sites.
+
+    The API is published on bind-address, the sites on sites-bind-address,
+    both localhost unless local.yaml opens them to the network. Sites are on
+    80 and 443 with HTTPS, or on 8088 without it.
     """
-    addr = utils.bind_address()
+    api, addr = utils.bind_address(), utils.sites_bind_address()
     sites = (
         f'-p "{addr}:80:80@loadbalancer" -p "{addr}:443:443@loadbalancer"'
         if CONFIG.get("https", False)
         else f'-p "{addr}:8088:80@loadbalancer"'
     )
-    return f"--api-port {addr}:6550 {sites}"
+    return f"--api-port {api}:6550 {sites}"
 
 
 def warn_if_cluster_bound_elsewhere():
@@ -142,6 +148,7 @@ def warn_if_cluster_bound_elsewhere():
         "k3d-k3s-default-serverlb",
         "The cluster",
         "auto stop --delete-cluster, then auto start",
+        site_ports=SITE_LB_PORTS,
     )
 
 

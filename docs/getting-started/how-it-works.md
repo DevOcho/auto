@@ -87,8 +87,9 @@ flowchart LR
 | 12345 | The image registry |
 
 They listen on `127.0.0.1`, so nothing here is reachable from your network.
-To share a setup with other machines, see
-[`bind-address`](../reference/local-yaml.md#bind-address).
+To let teammates open your sites, see
+[`sites-bind-address`](../reference/local-yaml.md#sites-bind-address); to
+share everything, [`bind-address`](../reference/local-yaml.md#bind-address).
 
 A database port already in use on your machine is skipped with a warning,
 along with that database.

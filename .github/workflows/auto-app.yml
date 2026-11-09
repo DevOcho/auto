@@ -205,6 +205,35 @@ jobs:
         auto stop --delete-cluster < /dev/null
         timed "Recreate after --delete-cluster" start
 
+    # sites-bind-address: 0.0.0.0 shares the sites, and only the sites: portal
+    # answers on the runner's own network address, while the Kubernetes API
+    # and the registry stay on 127.0.0.1.
+    - name: Share the sites
+      run: |
+        set -euo pipefail
+        echo "sites-bind-address: 0.0.0.0" >> ~/.auto/config/local.yaml
+        auto stop --delete-cluster < /dev/null
+        auto start < /dev/null
+        ip=$(hostname -I | awk '{print $1}')
+        code=000
+        for _ in $(seq 1 90); do
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+            --cacert "$(mkcert -CAROOT)/rootCA.pem" \
+            --resolve "portal.local:443:$ip" https://portal.local/) || true
+          [ "$code" = 200 ] && break
+          sleep 2
+        done
+        echo "portal.local on $ip: $code"
+        test "$code" = 200
+        for port in 6550 12345; do
+          if curl -s -o /dev/null --max-time 5 "http://$ip:$port/"; then
+            echo "port $port answers on $ip: it should listen on 127.0.0.1 only"
+            exit 1
+          fi
+          echo "port $port: not reachable on $ip"
+        done
+        echo "| Sites shared on $ip, API and registry not | ok |" >> "$GITHUB_STEP_SUMMARY"
+
   release:
     needs: [build, e2e]
     if: github.ref_type == 'tag'

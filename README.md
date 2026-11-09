@@ -98,8 +98,9 @@ new developer's first day is `auto install <project repo>` and `auto start`.
 
 auto is opinionated: one local cluster per machine, `.local` hostnames, and
 the system pods it ships. If you don't deploy to Kubernetes, Docker Compose is
-simpler. If your team develops against a shared remote cluster, auto isn't
-for that either.
+simpler. auto doesn't set up a cluster in the cloud for a whole team to
+develop on; teammates can still open the sites running on your machine
+([`sites-bind-address`](https://devocho.github.io/auto/reference/local-yaml/#sites-bind-address)).
 
 ## Documentation
 

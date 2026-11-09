@@ -51,11 +51,32 @@ At DevOcho this takes a new developer from a fresh laptop to a running
 platform in under ten minutes, even on the largest projects. The 2025 average
 was two minutes.
 
+## Sharing your sites
+
+To let teammates open the sites running on your machine, for a review or a
+demo, set this in your `local.yaml`, or in the project's to turn it on for
+the whole team:
+
+```yaml title="~/.auto/config/local.yaml"
+sites-bind-address: 0.0.0.0
+```
+
+Recreate the cluster once (`auto stop --delete-cluster`, then `auto start`).
+Each teammate then points the hostnames at your machine in `/etc/hosts`, for
+example `192.168.1.20 shop.local`, and to trust its HTTPS certificate,
+installs your mkcert authority as described below.
+
+Only the sites are shared: your databases, registry and Kubernetes API stay on
+your machine. Mailpit's and Floci's pages are served on the same ports, so a
+teammate who adds their hostnames can open those too: your Mailpit inbox, and
+Floci's S3, which takes any key.
+
 ## A shared dev setup
 
 Some teams run one auto environment that several people use, on a machine
-in the office or a VM. By default its ports listen only on that machine, so
-open them in its `local.yaml`, on a network you trust:
+in the office or a VM, with its databases and Kubernetes API used from other
+machines too. By default its ports listen only on that machine, so open them
+in its `local.yaml`, on a network you trust:
 
 ```yaml title="~/.auto/config/local.yaml (on the shared machine)"
 bind-address: 0.0.0.0

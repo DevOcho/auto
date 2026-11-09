@@ -106,6 +106,12 @@ https: true
 # Takes effect when the cluster is created.
 bind-address: 127.0.0.1
 
+# The sites alone (80 and 443, or 8088) can listen on another address, so
+# teammates can open them through a hosts entry while the databases, the
+# registry and the API stay on this machine. Mailpit's and Floci's pages use
+# the same ports, so they are shared too.
+# sites-bind-address: 0.0.0.0
+
 # Each repo listed here will be run as a pod in k3s
 pods:
   - repo: https://github.com/DevOcho/portal.git
