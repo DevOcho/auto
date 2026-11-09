@@ -5,7 +5,7 @@
 name = "auto"
 version = "0.9.3"
 description = "Local Kubernetes development environments for teams of microservices"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     # Newer versions break the PyInstaller build's hidden import
     "charset-normalizer<=3.4.4",
@@ -45,7 +45,7 @@ norecursedirs = [".git", ".venv", "bin", "include", "lib"]
 # The formatter keeps black's default width, which the code is laid out for;
 # the linter allows lines up to 110.
 line-length = 88
-target-version = "py310"
+target-version = "py311"
 extend-exclude = ["bin", "include", "lib"]
 
 [tool.ruff.lint]
