@@ -25,7 +25,7 @@ body:
     attributes:
       label: auto version
       description: The output of `auto --version`.
-      placeholder: auto, version 0.9.2
+      placeholder: auto, version 0.9.3
     validations:
       required: true
   - type: dropdown

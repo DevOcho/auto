@@ -27,7 +27,8 @@ case "$OS" in
     Linux)
         case "$ARCH" in
             x86_64) ASSET_SUFFIX="linux-x86_64" ;;
-            *) echo "Error: Unsupported Linux architecture: $ARCH"; exit 1 ;;
+            aarch64|arm64) ASSET_SUFFIX="linux-arm64" ;;
+            *) echo "Error: Unsupported Linux architecture: $ARCH (auto runs on x86_64 and on 64-bit ARM; a 32-bit OS needs to be replaced with a 64-bit one)"; exit 1 ;;
         esac
         ;;
     Darwin)

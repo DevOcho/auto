@@ -290,5 +290,42 @@ def add_images_to_local_config(new_images):
     _update_config_memory(new_images)
 
 
+def remove_images_from_local_config(old_images):
+    """Delete these images' `- image:` lines from local.yaml's registry list.
+
+    Only those exact lines go: comments and everything else stay as written.
+    """
+    config_path = os.path.expanduser("~/.auto/config/local.yaml")
+    if not old_images or not os.path.isfile(config_path):
+        return
+
+    with open(config_path, encoding="utf-8") as f:
+        lines = f.readlines()
+
+    registry_idx, last_valid_idx = _get_registry_bounds(lines)
+    if registry_idx == -1:
+        return
+    doomed = {f"- image: {image}" for image in old_images}
+    kept = [
+        line
+        for i, line in enumerate(lines)
+        if not (registry_idx < i < last_valid_idx and line.strip() in doomed)
+    ]
+
+    try:
+        yaml.safe_load("".join(kept))
+    except yaml.YAMLError:
+        return
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        f.writelines(kept)
+
+    CONFIG["registry"] = [
+        item
+        for item in CONFIG.get("registry") or []
+        if not (isinstance(item, dict) and item.get("image") in old_images)
+    ]
+
+
 # Populate global configuration exactly once on load
 CONFIG = load_config()

@@ -19,7 +19,7 @@ spec:
     spec:
       restartPolicy: Always
       containers:
-      - image: k3d-registry.local:12345/proxysql/proxysql:2.3.2
+      - image: k3d-registry.local:12345/proxysql/proxysql:3.0.2
         name: proxysql
         volumeMounts:
         - name: proxysql-config

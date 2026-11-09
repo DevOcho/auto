@@ -1,5 +1,6 @@
 """Container Registry and Image Management"""
 
+import concurrent.futures
 import os
 import re
 import time
@@ -7,7 +8,11 @@ import time
 import requests
 import yaml
 from autocli import progress, utils
-from autocli.config import CONFIG, add_images_to_local_config
+from autocli.config import (
+    CONFIG,
+    add_images_to_local_config,
+    remove_images_from_local_config,
+)
 from requests.exceptions import RequestException
 from rich import print as rprint
 
@@ -286,17 +291,75 @@ def _is_image_in_catalog(repo_name, tag_name, registry_catalog):
 
 
 def _cache_single_image(full_image, clean_image):
-    """Pull and push a single image to the cache registry."""
-    rprint(f"     =[green]Caching external image:[/green] {clean_image}")
+    """Pull and push a single image to the cache registry; True when it worked.
 
-    inspect_cmd = f"docker image inspect {clean_image}"
-    if not utils.run_and_wait(inspect_cmd, capture_output=True, suppress_error=True):
-        progress.pull_image(full_image, suppress_error=True)
+    Quiet, as several run at once (cache_running_images) and their progress
+    bars would draw over each other.
+    """
 
-    tag_cmd = f"docker tag {full_image} k3d-registry.local:12345/{clean_image}"
-    utils.run_and_wait(tag_cmd, capture_output=True, suppress_error=True)
+    def run(command):
+        return utils.run_and_wait(command, capture_output=True, suppress_error=True)
 
-    progress.push_image(f"k3d-registry.local:12345/{clean_image}", suppress_error=True)
+    if not run(f"docker image inspect {clean_image}") and not run(
+        f"docker pull {full_image}"
+    ):
+        return False
+    if not run(f"docker tag {full_image} k3d-registry.local:12345/{clean_image}"):
+        return False
+    return bool(run(f"docker push k3d-registry.local:12345/{clean_image}"))
+
+
+# Images caching runs at once. On a new machine there are about 7, and one at a
+# time they took 68 s.
+CACHE_WORKERS = 4
+
+# Images whose versions auto chooses: k3s's own and Envoy Gateway's. Once the
+# cluster runs a newer version of one, an older one left in registry: only
+# costs every new machine a download.
+AUTO_MANAGED_IMAGE_PREFIXES = ("rancher/", "envoyproxy/")
+
+
+def _repo_of(image):
+    """mysql for mysql:8.0; a registry's port is not a tag"""
+    name, _, tag = image.rpartition(":")
+    return name if name and "/" not in tag else image
+
+
+def _stale_managed_images(running_images):
+    """registry: entries for an older version of an image auto manages, now replaced"""
+    running = {utils.plain_image_name(image) for image in running_images}
+    running_repos = {_repo_of(image) for image in running}
+    stale = []
+    for item in CONFIG.get("registry") or []:
+        if not isinstance(item, dict) or "image" not in item:
+            continue
+        plain = utils.plain_image_name(item["image"])
+        if (
+            plain.startswith(AUTO_MANAGED_IMAGE_PREFIXES)
+            and _repo_of(plain) in running_repos
+            and plain not in running
+        ):
+            stale.append(item["image"])
+    return stale
+
+
+def _cache_images(to_cache):
+    """Cache (full_image, clean_image) pairs, several at once"""
+    rprint(f"     = Caching {len(to_cache)} images, {CACHE_WORKERS} at a time")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=CACHE_WORKERS) as pool:
+        futures = {pool.submit(_cache_single_image, f, c): c for f, c in to_cache}
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                cached = future.result()
+            except Exception:  # pylint: disable=broad-except
+                cached = False
+            if cached:
+                rprint(f"     =[green]Cached:[/green] {futures[future]}")
+            else:
+                rprint(
+                    f"     =[yellow]Could not cache[/] {futures[future]}: "
+                    "the next start downloads it again"
+                )
 
 
 def cache_running_images():
@@ -311,6 +374,14 @@ def cache_running_images():
     local_pod_names = _get_local_pod_names()
     images_to_process = _filter_external_images(found_images, local_pod_names)
 
+    stale = _stale_managed_images(found_images)
+    if stale:
+        rprint(
+            "     = Dropping older k3s and Envoy versions from registry: "
+            + ", ".join(stale)
+        )
+        remove_images_from_local_config(stale)
+
     if not images_to_process:
         return
 
@@ -323,6 +394,7 @@ def cache_running_images():
 
     new_images_for_config = set()
     registry_catalog = _get_registry_catalog()
+    to_cache = []
 
     for full_image in sorted(images_to_process):
         clean_image = full_image.split("@")[0]
@@ -335,7 +407,10 @@ def cache_running_images():
             new_images_for_config.add(clean_image)
 
         if not is_mirrored:
-            _cache_single_image(full_image, clean_image)
+            to_cache.append((full_image, clean_image))
+
+    if to_cache:
+        _cache_images(to_cache)
 
     if new_images_for_config:
         add_images_to_local_config(list(new_images_for_config))

@@ -356,8 +356,9 @@ def start_cluster(progress, task, key_file="", cert_file=""):
         # up, which leaves every pod unable to resolve outside names
         _verify_and_heal_dns()
 
-        # Verify we can actually talk to it
+        # Verify we can actually talk to it, and that it takes `kubectl apply`
         _verify_and_heal_connection()
+        utils.wait_for_api()
 
         # Clusters made by older versions of auto still run ingress-nginx
         https.require_envoy_gateway()

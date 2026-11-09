@@ -177,3 +177,36 @@ def test_a_registry_layout_auto_cant_extend_is_left_alone(tmp_path):
         result = _add_images(tmp_path, text, ["redis:7.2-alpine"])
     assert result == text
     assert "redis:7.2-alpine" in str(mock_print.call_args.args[0])
+
+
+def test_removing_images_deletes_only_their_lines(tmp_path):
+    """Stale k3s versions go; comments, other images and other keys stay as written"""
+    text = (
+        "code: /c\n"
+        "registry:\n"
+        "  # cached by auto\n"
+        "  - image: rancher/mirrored-coredns-coredns:1.10.1\n"
+        "  - image: mysql:8.0\n"
+        "  - image: rancher/mirrored-coredns-coredns:1.14.7\n"
+        "system-pods: []\n"
+    )
+    config_dir = tmp_path / ".auto" / "config"
+    config_dir.mkdir(parents=True)
+    path = config_dir / "local.yaml"
+    path.write_text(text, encoding="utf-8")
+    registry = [
+        {"image": "rancher/mirrored-coredns-coredns:1.10.1"},
+        {"image": "mysql:8.0"},
+        {"image": "rancher/mirrored-coredns-coredns:1.14.7"},
+    ]
+    with patch(
+        "autocli.config.os.path.expanduser",
+        side_effect=lambda p: p.replace("~", str(tmp_path)),
+    ), patch.dict(config.CONFIG, {"registry": registry}):
+        config.remove_images_from_local_config(
+            ["rancher/mirrored-coredns-coredns:1.10.1"]
+        )
+        assert config.CONFIG["registry"] == registry[1:]
+    assert path.read_text(encoding="utf-8") == text.replace(
+        "  - image: rancher/mirrored-coredns-coredns:1.10.1\n", ""
+    )
