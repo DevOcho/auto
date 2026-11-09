@@ -10,6 +10,14 @@ from autocli import services
 from autocli.config import CONFIG
 
 
+@pytest.fixture(autouse=True)
+def _fresh_run():
+    """Each test is its own run of auto, and never reaches a real registry"""
+    services._handled_this_run.clear()
+    with patch("autocli.registry.load_missing_images"):
+        yield
+
+
 @patch("autocli.utils.get_full_pod_name")
 @patch("subprocess.run")
 def test_create_mysql_database(mock_run, mock_pod_name):
@@ -450,6 +458,40 @@ def test_retired_system_pod_is_not_started(_mock_required, mock_cmd):
     mock_cmd.assert_not_called()
 
 
+@patch("autocli.services.rprint")
+@patch("autocli.services._run_command_with_retry")
+@patch("autocli.utils.system_pod_requests", return_value={"search": ["shop"]})
+@patch("autocli.utils.get_required_system_pods", return_value={"redis", "search"})
+def test_undefined_system_pod_is_named_with_the_pod_asking(
+    _mock_required, _mock_requests, _mock_cmd, mock_rprint
+):
+    """shop asks for search, which local.yaml doesn't define: say so."""
+    redis = {"pod": {"name": "redis", "commands": ["kubectl apply -f redis.yaml"]}}
+    with patch.dict(CONFIG, {"system-pods": [redis]}), patch(
+        "autocli.services._expose_system_pod_port", return_value=True
+    ):
+        services.install_system_pods()
+    printed = " ".join(str(c.args[0]) for c in mock_rprint.call_args_list)
+    assert "search won't start" in printed
+    assert "shop asks for it" in printed
+    assert "redis won't start" not in printed
+
+
+@patch("autocli.services.rprint")
+@patch("autocli.services._run_command_with_retry")
+@patch("autocli.utils.get_required_system_pods", return_value={"minio"})
+def test_minio_and_floci_without_entries_are_not_called_undefined(
+    _mock_required, _mock_cmd, mock_rprint
+):
+    """minio is served by floci-aws, which starts with or without an entry."""
+    with patch.dict(CONFIG, {"system-pods": []}), patch(
+        "autocli.services.wait_for_floci", return_value=True
+    ):
+        services.install_system_pods()
+    printed = " ".join(str(c.args[0]) for c in mock_rprint.call_args_list)
+    assert "won't start" not in printed
+
+
 def test_sites_and_api_are_published_on_the_bind_address():
     """With HTTPS, 80 and 443; without, 8088; the API on 6550; all on bind-address."""
     with patch.dict(CONFIG, {"bind-address": "127.0.0.1", "https": True}):
@@ -461,3 +503,57 @@ def test_sites_and_api_are_published_on_the_bind_address():
         assert services.load_balancer_args() == (
             '--api-port 0.0.0.0:6550 -p "0.0.0.0:8088:80@loadbalancer"'
         )
+
+
+@patch("autocli.services._run_command_with_retry")
+@patch("autocli.utils.manifest_images", return_value={"mysql:8.0"})
+def test_starting_a_system_pod_loads_its_missing_images_first(_mock_images, mock_cmd):
+    """Its images may have been skipped while it was off"""
+    order = MagicMock()
+    with patch("autocli.registry.load_missing_images", order.load):
+        mock_cmd.side_effect = order.apply
+        services._start_system_pod("mysql", ["kubectl apply -f mysql.yaml"])
+    assert [c[0] for c in order.mock_calls] == ["load", "apply"]
+    order.load.assert_called_once_with({"mysql:8.0"})
+
+
+@patch("autocli.services.rprint")
+@patch("autocli.services._run_command_with_retry")
+@patch("autocli.utils.get_required_system_pods", return_value={"mysql", "redis"})
+def test_databases_start_early_and_are_not_started_twice(
+    _mock_required, mock_cmd, _mock_rprint
+):
+    """The early pass starts mysql; the pass after Envoy Gateway starts the rest"""
+    mysql = {"pod": {"name": "mysql", "commands": ["kubectl apply -f mysql.yaml"]}}
+    redis = {"pod": {"name": "redis", "commands": ["kubectl apply -f redis.yaml"]}}
+    with patch.dict(CONFIG, {"system-pods": [mysql, redis]}), patch(
+        "autocli.services._expose_system_pod_port", return_value=True
+    ):
+        services.install_system_pods(only=services.EARLY_SYSTEM_PODS)
+        assert [c.args[0] for c in mock_cmd.call_args_list] == [
+            "kubectl apply -f mysql.yaml"
+        ]
+        services.install_system_pods()
+    assert [c.args[0] for c in mock_cmd.call_args_list] == [
+        "kubectl apply -f mysql.yaml",
+        "kubectl apply -f redis.yaml",
+    ]
+
+
+@patch("autocli.utils.is_port_exposed_on_k3d", return_value=False)
+@patch("autocli.utils.is_port_in_use", return_value=True)
+@patch("autocli.services.rprint")
+@patch("autocli.services._run_command_with_retry")
+@patch("autocli.utils.get_required_system_pods", return_value={"mysql"})
+def test_a_database_skipped_early_is_warned_about_once(_req, mock_cmd, mock_rprint, *_):
+    """Port 3306 is taken: one warning, not one per pass"""
+    mysql = {"pod": {"name": "mysql", "commands": ["kubectl apply -f mysql.yaml"]}}
+    with patch.dict(CONFIG, {"system-pods": [mysql], "skipped-system-pods": []}):
+        services.install_system_pods(only=services.EARLY_SYSTEM_PODS)
+        services.install_system_pods()
+        assert CONFIG["skipped-system-pods"] == ["mysql"]
+    warnings = [
+        c for c in mock_rprint.call_args_list if "already in use" in str(c.args[0])
+    ]
+    assert len(warnings) == 1
+    mock_cmd.assert_not_called()

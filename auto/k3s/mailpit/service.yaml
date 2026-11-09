@@ -17,4 +17,11 @@ spec:
     protocol: TCP
     port: 80
     targetPort: 8025
+  # The web UI on its own port too, which the route uses. A pod that ships its
+  # own Service named mailpit replaces this one, usually with only 1025 and
+  # 8025; the route still finds 8025 whichever Service is there.
+  - name: web
+    protocol: TCP
+    port: 8025
+    targetPort: 8025
   type: ClusterIP

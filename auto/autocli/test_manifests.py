@@ -97,3 +97,20 @@ def test_minio_alias_reaches_floci():
         9000: 4566,
         80: 4566,
     }
+
+
+def test_mailpit_route_survives_a_pod_replacing_its_service():
+    """A pod can ship its own Service named mailpit, with the web UI on 8025 only.
+
+    The route has to name a port that both Services have, or Envoy answers 500.
+    """
+    route = _docs("mailpit", "ingress.yaml")[0]
+    port = route["spec"]["rules"][0]["backendRefs"][0]["port"]
+    ours = {
+        p["port"]: p["targetPort"]
+        for p in _docs("mailpit", "service.yaml")[0]["spec"]["ports"]
+    }
+    a_pods_own = {1025: 1025, 8025: 8025}
+    assert ours[port] == 8025
+    assert a_pods_own[port] == 8025
+    assert ours[80] == 8025  # anything already using mailpit:80 keeps working

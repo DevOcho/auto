@@ -267,9 +267,12 @@ def bootstrap_cluster(pod, dry_run, offline):
             lambda: https.finish_ingress(use_https),
         )
 
+        # The sites work now; STEP 8 only speeds up the next start
+        _print_access_hints(pods, use_https)
+
         # STEP 8: Auto-detect external images and cache them
         _run_bootstrap_step(
-            "Detecting and caching external images...",
+            "Caching new images so the next start is faster (the URLs above already work)...",
             "External Images Cached",
             not dry_run,
             registry.cache_running_images,
@@ -277,8 +280,6 @@ def bootstrap_cluster(pod, dry_run, offline):
             task=task,
             advance=17,
         )
-
-        _print_access_hints(pods, use_https)
 
 
 def _verify_and_heal_connection():
@@ -402,6 +403,8 @@ def start_cluster(progress, task, key_file="", cert_file=""):
     print("     = Cluster Started.  Waiting for Pods to finish starting...")
     progress.update(task, advance=6)
 
+    # Databases first (MySQL's first boot is the longest wait); see EARLY_SYSTEM_PODS
+    services.install_system_pods(only=services.EARLY_SYSTEM_PODS)
     # Install Envoy Gateway; it finishes starting while the pods load (STEP 7.5)
     if https.install_envoy_gateway(use_https, key_file, cert_file):
         progress.update(task, advance=10)

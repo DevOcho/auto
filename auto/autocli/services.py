@@ -7,7 +7,7 @@ import subprocess
 import time
 from subprocess import CalledProcessError
 
-from autocli import runner, utils
+from autocli import registry, runner, utils
 from autocli.config import CONFIG
 from rich import print as rprint
 
@@ -162,21 +162,33 @@ def cluster_port_args():
     return " ".join(flags)
 
 
-def install_system_pods():
-    """Install all of the system pods in the cluster"""
+# Started first on a new cluster, before Envoy Gateway is installed: databases
+# take longest to come up (MySQL's first boot runs about 20 s), and their
+# manifests hold no routes, so they don't need the Gateway API types Envoy
+# Gateway brings. mailpit's and floci's manifests do.
+EARLY_SYSTEM_PODS = ("mysql", "postgres")
+
+# System pods this run of auto has started or skipped already, so the pass
+# after Envoy Gateway doesn't start them again or repeat their warnings.
+_handled_this_run = set()
+
+
+def install_system_pods(only=None):
+    """Install the system pods this start needs; with `only`, just those of them"""
 
     # We need to know which ones to start (both configured explicitly or requested implicitly)
     required_pods = utils.get_required_system_pods(CONFIG)
     port_mappings = PORT_MAPPINGS
-    started = set()
 
     wants_minio = "minio" in required_pods
     if wants_minio:
         required_pods.add(S3_POD)
-        rprint(
-            f"  -- [yellow]minio is served by {S3_POD} now[/]: MinIO no longer publishes its image. "
-            f"minio:9000 keeps working; ask for {S3_POD} instead of minio when you can."
-        )
+        if only is None:
+            rprint(
+                f"  -- [yellow]minio is served by {S3_POD} now[/]: MinIO no longer publishes "
+                f"its image. minio:9000 keeps working; ask for {S3_POD} instead of minio "
+                "when you can."
+            )
 
     # Let's start the ones that we find that are "active" or requested
     for sys_pod in CONFIG.get("system-pods", []):
@@ -185,6 +197,10 @@ def install_system_pods():
         # Proceed only if this pod was identified as required
         if pod_name not in required_pods or pod_name in REPLACED_SYSTEM_PODS:
             continue
+
+        if (only is not None and pod_name not in only) or pod_name in _handled_this_run:
+            continue
+        _handled_this_run.add(pod_name)
 
         if pod_name in RETIRED_SYSTEM_PODS:
             rprint(
@@ -200,10 +216,15 @@ def install_system_pods():
                 continue
 
         _start_system_pod(pod_name, sys_pod["pod"]["commands"])
-        started.add(pod_name)
+
+    if only is not None:
+        return
+
+    _warn_about_undefined_system_pods(required_pods)
 
     # A local.yaml written before floci-aws shipped has no entry for it
-    if S3_POD in required_pods and S3_POD not in started:
+    if S3_POD in required_pods and S3_POD not in _handled_this_run:
+        _handled_this_run.add(S3_POD)
         _start_system_pod(S3_POD, FLOCI_COMMANDS)
 
     if wants_minio:
@@ -213,9 +234,37 @@ def install_system_pods():
     # loading the system pods never blocks on it.
 
 
+def _warn_about_undefined_system_pods(required_pods):
+    """Name each system pod a pod asks for that local.yaml has no entry for
+
+    Without this it is silently never started, and the pod that needs it fails
+    later in a way that doesn't point here.
+    """
+    defined = {sys_pod["pod"]["name"] for sys_pod in CONFIG.get("system-pods", [])}
+    # minio is served by floci-aws, which starts even without an entry
+    undefined = required_pods - defined - set(REPLACED_SYSTEM_PODS) - {S3_POD}
+    if not undefined:
+        return
+    requests = utils.system_pod_requests(CONFIG)
+    for name in sorted(undefined):
+        askers = requests.get(name, [])
+        who = (
+            f"{' and '.join(askers)} {'asks' if len(askers) == 1 else 'ask'}"
+            if askers
+            else "A pod asks"
+        )
+        rprint(
+            f"  -- [yellow]{name} won't start[/]: {who} for it, but "
+            "~/.auto/config/local.yaml has no system pod by that name"
+        )
+
+
 def _start_system_pod(pod_name, commands):
     """Apply a system pod's manifests"""
     rprint("  -- Starting: " + pod_name)
+    # populate_registry skips the images of system pods that are off, and this
+    # one may have just been turned on, or asked for by `auto start <pod>`.
+    registry.load_missing_images(utils.manifest_images(commands))
     for command in commands:
         if not _is_retired(command):
             _run_command_with_retry(command)

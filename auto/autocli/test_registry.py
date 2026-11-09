@@ -178,11 +178,95 @@ def test_external_image_is_reported_loaded_only_when_it_was(
     assert push.called == bool(tag_ok)
 
 
-def test_retired_image_is_skipped_with_a_note(capsys):
-    """An old local.yaml's minio/minio entry can't be pulled; say so once, quietly"""
-    images = [
-        {"image": "minio/minio:RELEASE.2025-09-07T16-13-09Z"},
-        {"image": "floci/floci:2.1.0"},
-    ]
+@pytest.mark.parametrize(
+    "image, repo",
+    [
+        ("minio/minio:RELEASE.2025-09-07T16-13-09Z", "minio/minio"),
+        (
+            "registry.k8s.io/ingress-nginx/controller:v1.15.1",
+            "registry.k8s.io/ingress-nginx/controller",
+        ),
+        (
+            "registry.k8s.io/ingress-nginx/kube-webhook-certgen:v1.6.4",
+            "registry.k8s.io/ingress-nginx/kube-webhook-certgen",
+        ),
+        ("matomo:5.3.1-fpm-alpine", "matomo"),
+    ],
+)
+def test_retired_image_is_skipped_with_a_note(capsys, image, repo):
+    """An old local.yaml lists images 0.9 never uses; skip each with a note"""
+    images = [{"image": image}, {"image": "floci/floci:2.1.0"}]
     assert registry._filter_images_to_load(images, loaded_repos=[]) == [images[1]]
-    assert "Skipping minio/minio" in capsys.readouterr().out
+    assert f"Skipping {repo}" in capsys.readouterr().out
+
+
+def _system_pod(name, image, active=False, tmp_path=None):
+    manifest = tmp_path / f"{name}.yaml"
+    manifest.write_text(
+        f"kind: Deployment\nspec:\n  template:\n    spec:\n      containers:\n"
+        f"      - name: {name}\n        image: k3d-registry.local:12345/{image}\n",
+        encoding="utf-8",
+    )
+    return {
+        "pod": {
+            "name": name,
+            "active": active,
+            "commands": [f"kubectl apply -f {manifest}"],
+        }
+    }
+
+
+@pytest.mark.parametrize("required", [set(), {"mysql"}, {"minio"}])
+def test_images_of_system_pods_that_are_off_wait(tmp_path, capsys, required):
+    """A new machine needn't download a database nobody runs; it loads when one starts"""
+    system_pods = [
+        _system_pod("mysql", "mysql:8.0", tmp_path=tmp_path),
+        _system_pod("floci-aws", "floci/floci:2.1.0", tmp_path=tmp_path),
+    ]
+    images = [
+        {"image": "mysql:8.0"},
+        {"image": "floci/floci:2.1.0"},
+        {"image": "gitea/gitea:1.22"},
+    ]
+    loaded = []
+    with patch.dict(
+        registry.CONFIG, {"registry": images, "system-pods": system_pods, "pods": []}
+    ), patch(
+        "autocli.utils.get_required_system_pods", return_value=set(required)
+    ), patch(
+        "autocli.registry._get_registry_catalog", return_value=[]
+    ), patch(
+        "autocli.registry._load_single_image",
+        side_effect=lambda i: loaded.append(i["image"]),
+    ), patch(
+        "autocli.registry._build_and_load_pods"
+    ):
+        registry.populate_registry()
+    expected = {"gitea/gitea:1.22"}  # no system pod's image: always loaded
+    if "mysql" in required:
+        expected.add("mysql:8.0")
+    if "minio" in required:  # served by floci-aws
+        expected.add("floci/floci:2.1.0")
+    assert set(loaded) == expected
+    waiting = {"mysql:8.0", "floci/floci:2.1.0"} - expected
+    out = capsys.readouterr().out
+    assert ("Not downloading yet" in out) == bool(waiting)
+    assert all(image in out for image in waiting)
+
+
+def test_load_missing_images_loads_only_what_the_registry_lacks():
+    """Starting a system pod loads its images if they were skipped earlier"""
+    loaded = []
+    with patch("autocli.registry._get_registry_catalog", return_value=["mysql"]), patch(
+        "autocli.registry._load_single_image",
+        side_effect=lambda i: loaded.append(i["image"]),
+    ):
+        registry.load_missing_images({"mysql:8.0", "postgres:18.1-trixie"})
+    assert loaded == ["postgres:18.1-trixie"]
+
+
+def test_load_missing_images_with_nothing_to_load_asks_nothing():
+    """A system pod with no images of its own doesn't query the registry"""
+    with patch("autocli.registry._get_registry_catalog") as catalog:
+        registry.load_missing_images(set())
+    catalog.assert_not_called()

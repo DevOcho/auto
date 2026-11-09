@@ -14,6 +14,22 @@ def _fatal_error(msg, exit_code=1):
     sys.exit(exit_code)
 
 
+# Click prints these and exits before any command runs
+INFO_FLAGS = {"--help", "-h", "--version"}
+
+
+def _needs_code_folder(argv=None):
+    """False when auto only prints help or its version, or completes a word
+
+    CONFIG loads when autocli is imported, before Click reads the command line,
+    so without this `auto --version` asked to create the code folder.
+    """
+    if "_AUTO_COMPLETE" in os.environ:
+        return False
+    args = sys.argv[1:] if argv is None else argv
+    return bool(args) and not any(arg in INFO_FLAGS for arg in args)
+
+
 def load_config():
     """Load the global auto config"""
     config = {}
@@ -47,10 +63,16 @@ def load_config():
         expanded_path = os.path.expandvars(expanded_path)
         config["code"] = expanded_path
 
-        if not os.path.exists(config["code"]):
+        if not os.path.exists(config["code"]) and _needs_code_folder():
             rprint(
                 f"\n[yellow]Warning: Code folder '{config['code']}' does not exist.[/]"
             )
+            # No terminal to answer the question (a script, CI): say what to do
+            # instead of failing with a traceback from the prompt.
+            if not sys.stdin.isatty():
+                _fatal_error(
+                    f"Create {config['code']}, or set code: in {config_path} to your code folder."
+                )
             if Confirm.ask("Do you want us to create it for you?"):
                 try:
                     os.makedirs(config["code"])
@@ -204,6 +226,20 @@ def _update_config_memory(new_images):
             CONFIG["registry"].append({"image": img})
 
 
+def _registry_item_indent(lines, registry_idx, last_valid_idx):
+    """The indent the registry's `- image:` lines already use, so new ones match.
+
+    YAML allows a list under a key at either indent, and a file written by a
+    YAML library or reformatted by an editor often has none. A new line at a
+    different indent from its neighbours makes the whole file unreadable.
+    """
+    first_item = registry_idx + 1
+    for line in lines[first_item:last_valid_idx]:
+        if line.strip().startswith("- image:"):
+            return line[: len(line) - len(line.lstrip())]
+    return "  "
+
+
 def add_images_to_local_config(new_images):
     """Safely append new images to the registry list in local.yaml without deleting comments."""
     if not new_images:
@@ -219,17 +255,34 @@ def add_images_to_local_config(new_images):
     registry_idx, last_valid_idx = _get_registry_bounds(lines)
 
     if registry_idx != -1:
+        # `registry: []` holds its (empty) list on the key's own line
+        if lines[registry_idx].split("#")[0].strip() == "registry: []":
+            lines[registry_idx] = "registry:\n"
+        indent = _registry_item_indent(lines, registry_idx, last_valid_idx)
         new_lines = []
         existing_registry_lines = lines[registry_idx:last_valid_idx]
         for img in new_images:
             if not any(img in ln for ln in existing_registry_lines):
-                new_lines.append(f"  - image: {img}\n")
+                new_lines.append(f"{indent}- image: {img}\n")
 
         lines = lines[:last_valid_idx] + new_lines + lines[last_valid_idx:]
     else:
         lines.append("\nregistry:\n")
         for img in new_images:
             lines.append(f"  - image: {img}\n")
+
+    # Never write a local.yaml that can't be read back: every command would
+    # fail on it. Leave the file as it is and say what to add instead.
+    try:
+        yaml.safe_load("".join(lines))
+    except yaml.YAMLError:
+        rprint(
+            f"  -- [yellow]Could not add new images to {config_path}[/]: auto doesn't "
+            "recognise the layout of its registry: list. Add them there by hand: "
+            + ", ".join(new_images)
+        )
+        _update_config_memory(new_images)
+        return
 
     with open(config_path, "w", encoding="utf-8") as f:
         f.writelines(lines)

@@ -89,9 +89,11 @@ registry:
 ```
 
 auto adds every third-party image it finds running after each `auto start`, so
-you rarely edit this by hand. The cluster's nodes also look up the Docker Hub
-images they pull for themselves (k3s's own pods and Envoy Gateway) in this
-registry first, through a `docker.io` mirror in `~/.auto/k3s/registries.yaml`.
+you rarely edit this by hand. An image that only a system pod that is off uses
+isn't downloaded until that system pod starts. The cluster's nodes also look up
+the Docker Hub images they pull for themselves (k3s's own pods and Envoy
+Gateway) in this registry first, through a `docker.io` mirror in
+`~/.auto/k3s/registries.yaml`.
 
 ## `system-pods`
 

@@ -14,4 +14,5 @@ spec:
   rules:
   - backendRefs:
     - name: mailpit
-      port: 80
+      # Mailpit's own web port rather than 80: see service.yaml.
+      port: 8025

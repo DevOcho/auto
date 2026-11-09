@@ -1,5 +1,6 @@
 """Tests for auto.autocli.utils and auto.autocli.config"""
 
+import os
 import subprocess
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -7,14 +8,16 @@ import pytest
 from autocli import config, utils
 
 
+@patch("autocli.config.sys.stdin.isatty", return_value=True)
+@patch("autocli.config._needs_code_folder", return_value=True)
 @patch("autocli.config.Confirm.ask")
 @patch("os.makedirs")
 @patch("os.path.exists")
 @patch("os.path.isfile")
 @patch("builtins.open", new_callable=mock_open, read_data="code: /tmp/code")
 @patch("yaml.safe_load")
-def test_load_config(
-    mock_yaml, _mock_file, mock_isfile, mock_exists, mock_makedirs, mock_confirm
+def test_load_config(  # pylint: disable=unused-argument
+    mock_yaml, _mock_file, mock_isfile, mock_exists, mock_makedirs, mock_confirm, *_
 ):
     """Test loading configuration safely routes from config.py"""
     mock_yaml.return_value = {"code": "/tmp/code"}
@@ -307,3 +310,81 @@ def test_container_made_with_another_address_is_reported(bind, published, warns)
             "k3d-registry.local", "The image registry", "recreate it"
         )
     assert mock_print.called is warns
+
+
+def test_system_pod_requests_name_the_pods_asking(tmp_path):
+    """Each requested system pod maps to the pods whose .auto/config.yaml ask for it"""
+    for repo, pods in {"shop": ["mysql", "floci-aws"], "blog": ["mysql"]}.items():
+        (tmp_path / repo / ".auto").mkdir(parents=True)
+        (tmp_path / repo / ".auto" / "config.yaml").write_text(
+            "system-pods:\n" + "".join(f"  - name: {p}\n" for p in pods),
+            encoding="utf-8",
+        )
+    cfg = {
+        "code": str(tmp_path),
+        "pods": [
+            {"repo": "git@example.com:acme/shop.git"},
+            {"repo": "git@example.com:acme/blog.git"},
+        ],
+        "system-pods": [
+            {"pod": {"name": "redis", "active": True}},
+            {"pod": {"name": "mailpit"}},
+        ],
+    }
+    assert utils.system_pod_requests(cfg) == {
+        "mysql": ["shop", "blog"],
+        "floci-aws": ["shop"],
+    }
+    assert utils.get_required_system_pods(cfg) == {"mysql", "floci-aws", "redis"}
+
+
+@pytest.mark.parametrize(
+    "image, plain",
+    [
+        ("k3d-registry.local:12345/mysql:8.0", "mysql:8.0"),
+        ("docker.io/library/postgres:18.1-trixie", "postgres:18.1-trixie"),
+        (
+            "docker.io/envoyproxy/envoy:distroless-v1.39.5",
+            "envoyproxy/envoy:distroless-v1.39.5",
+        ),
+        ("floci/floci:2.1.0@sha256:abc", "floci/floci:2.1.0"),
+        (
+            "mcr.microsoft.com/mssql/server:2022-latest",
+            "mcr.microsoft.com/mssql/server:2022-latest",
+        ),
+    ],
+)
+def test_plain_image_name_matches_how_registry_lists_it(image, plain):
+    """local.yaml's registry: names images without the local registry or docker.io"""
+    assert utils.plain_image_name(image) == plain
+
+
+def test_manifest_images_reads_every_container_the_commands_apply(tmp_path):
+    """Containers and init containers, across documents; routes and missing files add none"""
+    (tmp_path / "deployment.yaml").write_text(
+        "apiVersion: apps/v1\nkind: Deployment\nspec:\n  template:\n    spec:\n"
+        "      initContainers:\n      - name: init\n        image: busybox:1.36\n"
+        "      containers:\n      - name: db\n        image: k3d-registry.local:12345/mysql:8.0\n"
+        "---\napiVersion: v1\nkind: Service\nmetadata:\n  name: db\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "route.yaml").write_text(
+        "apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:\n  name: db\n",
+        encoding="utf-8",
+    )
+    commands = [
+        f"kubectl apply -f {tmp_path}/deployment.yaml",
+        f"kubectl apply -f {tmp_path}/route.yaml",
+        f"kubectl apply -f {tmp_path}/missing.yaml",
+        "kubectl create namespace db",
+    ]
+    assert utils.manifest_images(commands) == {"busybox:1.36", "mysql:8.0"}
+
+
+def test_auto_s_own_system_pod_manifests_name_their_images():
+    """The shipped manifests are what populate_registry reads"""
+    k3s = os.path.join(os.path.dirname(__file__), "..", "k3s")
+    mysql = [f"kubectl apply -f {k3s}/mysql/deployment.yaml"]
+    floci = [f"kubectl apply -f {k3s}/floci/deployment.yaml"]
+    assert utils.manifest_images(mysql) == {"mysql:8.0"}
+    assert utils.manifest_images(floci) == {"floci/floci:2.1.0"}
