@@ -20,9 +20,11 @@ design and not vulnerabilities:
 
 The cluster's ports (80 and 443, the database ports, the registry on 12345
 and the Kubernetes API on 6550) listen on `127.0.0.1` only. Setting
-`bind-address: 0.0.0.0` in `local.yaml` opens them to your network, for a
-shared dev setup; then anyone who can reach the machine can reach them, and
-on Linux Docker's published ports bypass ufw. auto releases before 0.9.0
+`sites-bind-address: 0.0.0.0` in `local.yaml` opens only the sites (80 and
+443) to your network, including Mailpit's and Floci's pages; setting
+`bind-address: 0.0.0.0` opens all of them, for a shared dev setup. Then
+anyone who can reach the machine can reach those ports, and on Linux Docker's
+published ports bypass ufw. auto releases before 0.9.0
 published them on every interface; recreate the cluster and registry made by
 one, as the [0.9.0 release notes](https://devocho.github.io/auto/releases/0.9.0/)
 describe.

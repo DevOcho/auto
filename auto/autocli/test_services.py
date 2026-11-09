@@ -563,3 +563,22 @@ def test_a_database_skipped_early_is_warned_about_once(_req, mock_cmd, mock_rpri
     ]
     assert len(warnings) == 1
     mock_cmd.assert_not_called()
+
+
+def test_shared_sites_keep_the_api_and_databases_on_this_machine():
+    """sites-bind-address: 0.0.0.0 opens the sites, not the API or the databases"""
+    config = {
+        "bind-address": "127.0.0.1",
+        "sites-bind-address": "0.0.0.0",
+        "https": True,
+    }
+    with (
+        patch.dict(CONFIG, config),
+        patch("autocli.utils.get_required_system_pods", return_value={"mysql"}),
+        patch("autocli.utils.is_port_in_use", return_value=False),
+    ):
+        assert services.load_balancer_args() == (
+            '--api-port 127.0.0.1:6550 -p "0.0.0.0:80:80@loadbalancer" '
+            '-p "0.0.0.0:443:443@loadbalancer"'
+        )
+        assert services.cluster_port_args() == '-p "127.0.0.1:3306:30036@loadbalancer"'

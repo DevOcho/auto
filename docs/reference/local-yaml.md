@@ -8,6 +8,7 @@ through a [project repo](../guides/teams.md).
 code: ${HOME}/source/devocho
 https: true
 bind-address: 127.0.0.1
+sites-bind-address: 0.0.0.0   # optional: let teammates open your sites
 agents: 1
 pods:
   - repo: https://github.com/DevOcho/portal.git
@@ -41,8 +42,9 @@ trusted certificate. Needs mkcert. See [HTTPS](../guides/https.md).
 
 ## `bind-address`
 
-The address the cluster's ports listen on: the sites (80 and 443, or 8088),
-the database ports, the image registry (12345) and the Kubernetes API (6550).
+The address the cluster's ports listen on: the sites (80 and 443, or 8088,
+unless [`sites-bind-address`](#sites-bind-address) is set), the database
+ports, the image registry (12345) and the Kubernetes API (6550).
 
 `127.0.0.1` (the default): this machine only.
 
@@ -65,6 +67,27 @@ auto start
 
 `auto start` warns when an existing cluster or registry listens somewhere
 else.
+
+## `sites-bind-address`
+
+The address the sites alone listen on: 80 and 443, or 8088 without HTTPS.
+When unset, they follow `bind-address`.
+
+```yaml
+sites-bind-address: 0.0.0.0
+```
+
+lets teammates open the sites running on your machine, through a hosts entry
+pointing at it, while the databases, the registry and the Kubernetes API stay
+on this machine. See [sharing your sites](../guides/teams.md#sharing-your-sites).
+
+Mailpit's and Floci's pages are served on the same ports, so anyone who adds
+their hostnames can open those too: the Mailpit inbox, and Floci's S3, which
+takes any key. Use it on a network you trust.
+
+Like `bind-address`, it takes effect when the cluster is created, and
+`auto start` warns when an existing cluster's sites listen somewhere else:
+recreate it with `auto stop --delete-cluster`, then `auto start`.
 
 ## `pods`
 

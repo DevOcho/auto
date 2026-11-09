@@ -411,3 +411,72 @@ def test_wait_for_api_waits_until_apply_would_work(ready_after, expected):
     assert all("/openapi/v3" in cmd for cmd in calls)
     assert nap.call_count == min(ready_after, 10)
     assert say.called == (ready_after > 0)
+
+
+@pytest.mark.parametrize(
+    "config, sites",
+    [
+        ({}, "127.0.0.1"),
+        ({"bind-address": "0.0.0.0"}, "0.0.0.0"),
+        ({"sites-bind-address": "0.0.0.0"}, "0.0.0.0"),
+        ({"bind-address": "0.0.0.0", "sites-bind-address": "127.0.0.1"}, "127.0.0.1"),
+    ],
+)
+def test_sites_follow_bind_address_unless_set_on_their_own(config, sites):
+    """A team can share its sites without sharing the databases, registry and API"""
+    with patch.dict(utils.CONFIG, config):
+        for key in ("bind-address", "sites-bind-address"):
+            if key not in config:
+                utils.CONFIG.pop(key, None)
+        assert utils.sites_bind_address() == sites
+
+
+def test_sites_bind_address_must_be_an_ipv4_address():
+    """A typo stops auto with a message naming the setting"""
+    with (
+        patch.dict(utils.CONFIG, {"sites-bind-address": "office"}),
+        patch("autocli.utils.rprint") as say,
+        pytest.raises(SystemExit),
+    ):
+        utils.sites_bind_address()
+    assert "sites-bind-address" in " ".join(str(c.args[0]) for c in say.call_args_list)
+
+
+LB_PORTS = "80/tcp -> {sites}:80\n443/tcp -> {sites}:443\n6443/tcp -> {api}:6550\n30036/tcp -> {api}:3306"
+
+
+@pytest.mark.parametrize(
+    "sites_setting, made_with, warns_about",
+    [
+        ("0.0.0.0", {"sites": "0.0.0.0", "api": "127.0.0.1"}, set()),
+        ("127.0.0.1", {"sites": "127.0.0.1", "api": "127.0.0.1"}, set()),
+        # made by 0.9.3, now asked to share the sites: recreate
+        ("0.0.0.0", {"sites": "127.0.0.1", "api": "127.0.0.1"}, {"sites-bind-address"}),
+        # the API and databases were shared, but only the sites should be
+        ("0.0.0.0", {"sites": "0.0.0.0", "api": "0.0.0.0"}, {"bind-address"}),
+    ],
+)
+def test_each_cluster_port_is_checked_against_its_own_setting(
+    sites_setting, made_with, warns_about
+):
+    """Site ports follow sites-bind-address; the API and database ports bind-address"""
+    with (
+        patch.dict(
+            utils.CONFIG,
+            {"bind-address": "127.0.0.1", "sites-bind-address": sites_setting},
+        ),
+        patch(
+            "autocli.utils.run_and_return", return_value=LB_PORTS.format(**made_with)
+        ),
+        patch("autocli.utils.rprint") as say,
+    ):
+        utils.warn_if_bound_elsewhere(
+            "k3d-k3s-default-serverlb",
+            "The cluster",
+            "recreate it",
+            site_ports=("80", "443"),
+        )
+    printed = " ".join(str(c.args[0]) for c in say.call_args_list)
+    assert {s for s in ("(sites-bind-address)", "(bind-address)") if s in printed} == {
+        f"({s})" for s in warns_about
+    }

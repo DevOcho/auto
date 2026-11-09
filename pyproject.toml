@@ -3,7 +3,7 @@
 # Its version must match VERSION in auto/autocli/commands.py (a test checks).
 [project]
 name = "auto"
-version = "0.9.3"
+version = "0.9.4"
 description = "Local Kubernetes development environments for teams of microservices"
 requires-python = ">=3.11"
 dependencies = [

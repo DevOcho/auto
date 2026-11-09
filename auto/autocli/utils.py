@@ -580,39 +580,76 @@ def system_pod_requests(config):
 DEFAULT_BIND_ADDRESS = "127.0.0.1"
 
 
-def bind_address() -> str:
-    """The host address the cluster's ports and the registry are published on.
-
-    `bind-address` in local.yaml, 127.0.0.1 unless set. A team sharing one dev
-    setup on a network it trusts sets 0.0.0.0 (or one interface's address).
-    """
-    value = str(CONFIG.get("bind-address", DEFAULT_BIND_ADDRESS)).strip()
+def _address_setting(key: str, default: str) -> str:
+    """An IPv4 address from local.yaml, or default when it isn't set"""
+    value = str(CONFIG.get(key, default)).strip()
     try:
         ipaddress.IPv4Address(value)
     except ValueError:
         declare_error(
-            f"bind-address in ~/.auto/config/local.yaml is '{value}'.\n"
-            "   It has to be an IPv4 address: 127.0.0.1 (this machine only, the default)\n"
+            f"{key} in ~/.auto/config/local.yaml is '{value}'.\n"
+            "   It has to be an IPv4 address: 127.0.0.1 (this machine only)\n"
             "   or 0.0.0.0 (every network interface)."
         )
     return value
 
 
-def warn_if_bound_elsewhere(container: str, what: str, fix: str) -> None:
-    """Say so when a container publishes ports on another address than bind-address.
+def bind_address() -> str:
+    """The host address the cluster's ports and the registry are published on.
+
+    `bind-address` in local.yaml, 127.0.0.1 unless set. A team sharing one dev
+    setup on a network it trusts sets 0.0.0.0 (or one interface's address).
+    The sites can be shared on their own: see sites_bind_address().
+    """
+    return _address_setting("bind-address", DEFAULT_BIND_ADDRESS)
+
+
+def sites_bind_address() -> str:
+    """The host address the sites (80 and 443, or 8088) are published on.
+
+    `sites-bind-address` in local.yaml, or bind-address when unset. A team
+    whose developers open each other's sites by a hosts entry sets 0.0.0.0
+    here, which keeps the databases, the registry and the API on this machine.
+    """
+    return _address_setting("sites-bind-address", bind_address())
+
+
+def warn_if_bound_elsewhere(container: str, what: str, fix: str, site_ports=()) -> None:
+    """Say so when a container publishes ports on another address than configured.
 
     Ports are fixed when the container is made, so a registry or cluster made
     by an older auto, or before bind-address changed, keeps its old address
-    until it is recreated.
+    until it is recreated. site_ports are the container's ports for the sites,
+    which follow sites-bind-address instead of bind-address.
     """
-    wanted = bind_address()
-    allowed = {wanted, "[::]"} if wanted == "0.0.0.0" else {wanted}
-    published = run_and_return(f"docker port {container}")
-    hosts = {word.rsplit(":", 1)[0] for word in published.split() if ":" in word}
-    if hosts and not hosts <= allowed:
+    settings = {
+        "bind-address": bind_address(),
+        "sites-bind-address": sites_bind_address(),
+    }
+    wrong = {}  # setting -> addresses found instead of its value
+    for line in run_and_return(f"docker port {container}").splitlines():
+        port, _, host = line.partition("->")
+        if not host:
+            continue
+        setting = (
+            "sites-bind-address"
+            if port.split("/")[0].strip() in site_ports
+            else "bind-address"
+        )
+        wanted = settings[setting]
+        allowed = {wanted, "[::]"} if wanted == "0.0.0.0" else {wanted}
+        address = host.strip().rsplit(":", 1)[0]
+        if address not in allowed:
+            wrong.setdefault(setting, set()).add(address)
+    for setting, addresses in wrong.items():
+        subject = (
+            f"{what}'s sites listen"
+            if setting == "sites-bind-address"
+            else f"{what} listens"
+        )
         rprint(
-            f"  -- [yellow]{what} listens on {', '.join(sorted(hosts))}, not {wanted} "
-            f"(bind-address).[/yellow]\n"
+            f"  -- [yellow]{subject} on {', '.join(sorted(addresses))}, not "
+            f"{settings[setting]} ({setting}).[/yellow]\n"
             f"  [yellow]   It was made before that was set. To recreate it: {fix}[/yellow]"
         )
 
