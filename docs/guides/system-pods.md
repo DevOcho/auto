@@ -99,7 +99,8 @@ image. A pod that still asks for `minio` gets `floci-aws`, with its buckets,
 and MinIO's old addresses keep working: `http://minio:9000` from pods,
 `http://minio.local/` from your machine, and the `minio` / `minio123` keys.
 Switch the pod to `floci-aws` when convenient; MinIO's console and `mc admin`
-commands have no equivalent.
+commands have no equivalent. MinIO's files don't move over by themselves; the
+[0.9.0 upgrade steps](../releases/0.9.0.md#upgrading) show how to copy them.
 
 ## Ports already in use
 
