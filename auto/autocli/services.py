@@ -1,5 +1,6 @@
 """System Pods and Database Services Management"""
 
+import shlex
 import time
 
 from autocli import utils
@@ -199,10 +200,10 @@ def connect_to_minio() -> None:
     utils.connect_to_minio()
 
 
-def seed_pod(pod):
-    """Run the seeddb.py script inside a pod's container"""
+def seed_pod(pod, seed_args=()):
+    """Run the pod's seed-command inside its container, with any extra arguments"""
     config = utils.get_pod_config(pod)
-    seed_command = config["seed-command"]
+    seed_command = " ".join([config["seed-command"], *map(shlex.quote, seed_args)])
     utils.run_command_inside_pod(pod, seed_command)
     rprint(f"  -- {pod} database seeded")
 
