@@ -61,6 +61,20 @@ def test_images_command(mock_list):
     mock_list.assert_called()
 
 
+@patch("autocli.services.seed_pod")
+@patch("autocli.services.init_pod_db")
+def test_seed_passes_extra_args(mock_init, mock_seed):
+    """Unknown options after the pod name go to the pod's seed-command"""
+    runner = CliRunner()
+    result = runner.invoke(
+        commands.seed, ["my-pod", "--admin-setup", "--level", "lighter"]
+    )
+
+    assert result.exit_code == 0
+    mock_init.assert_called_once_with("my-pod")
+    mock_seed.assert_called_once_with("my-pod", ("--admin-setup", "--level", "lighter"))
+
+
 # ---------------------------------------------------------------------------
 # `auto update`
 # ---------------------------------------------------------------------------

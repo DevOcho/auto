@@ -96,6 +96,9 @@ its `seed-command`. Both run in a short-lived copy of the pod's Deployment, so
 they work even when the pod itself won't start. See
 [seed data](../guides/add-your-app.md#6-seed-data).
 
+Any extra arguments after the pod name are passed to the `seed-command` as-is,
+e.g. `auto seed my-pod --admin-setup`.
+
 ### `auto init <pod>`
 
 Run only the pod's `init-command`: the database as it is before seed data and

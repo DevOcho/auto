@@ -200,6 +200,21 @@ def test_seed_pod_uses_ephemeral_pod(mock_get_config, mock_run):
     assert kwargs["action_label"] == "seed"
 
 
+@patch("autocli.runner.run_one_shot_pod_command", return_value=0)
+@patch("autocli.utils.get_pod_config")
+def test_seed_pod_passes_extra_args(mock_get_config, mock_run):
+    """Extra seed arguments are appended to the one-shot pod's command."""
+    mock_get_config.return_value = {"seed-command": "seed.py"}
+    services.seed_pod("api", ("--admin-setup", "--level", "lighter"))
+
+    assert mock_run.call_args.kwargs["command_args"] == [
+        "/mnt/code/api/seed.py",
+        "--admin-setup",
+        "--level",
+        "lighter",
+    ]
+
+
 @patch("autocli.utils.get_full_pod_name")
 @patch("subprocess.run")
 def test_connect_to_mailpit_forwards_the_ui_port(mock_run, mock_pod_name):

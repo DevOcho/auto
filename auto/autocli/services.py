@@ -441,13 +441,16 @@ def connect_to_mailpit() -> None:
     _connect_to_mailpit()
 
 
-def seed_pod(pod):
-    """Run the seed script in an ephemeral pod that mirrors the deployment"""
+def seed_pod(pod, seed_args=()):
+    """Run the seed script in an ephemeral pod that mirrors the deployment.
+
+    Extra arguments are passed through to the seed-command as-is.
+    """
     config = utils.get_pod_config(pod)
     seed_command = config["seed-command"]
     rc = runner.run_one_shot_pod_command(
         pod,
-        command_args=[f"/mnt/code/{pod}/{seed_command}"],
+        command_args=[f"/mnt/code/{pod}/{seed_command}", *seed_args],
         action_label="seed",
     )
     if rc == 0:

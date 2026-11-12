@@ -178,16 +178,21 @@ def restart(self, pod):  # noqa: ARG001
     core.restart_pod(pod)
 
 
-@auto.command()
+@auto.command(context_settings={"ignore_unknown_options": True})
 @click.pass_context
 @click.argument("pod", required=True, shell_complete=get_pod_names)
-def seed(self, pod):  # noqa: ARG001
-    """Seed a pod's databases"""
+@click.argument("seed_args", nargs=-1, type=click.UNPROCESSED)
+def seed(self, pod, seed_args):  # noqa: ARG001
+    """Seed a pod's databases
+
+    Any extra arguments are passed to the pod's seed-command as-is, e.g.
+    `auto seed my-pod --admin-setup`.
+    """
     rprint(f"[steel_blue]Initializing[/] {pod}[steel_blue] pod")
     services.init_pod_db(pod)
     rprint()
     rprint(f"[steel_blue]Seeding [/]{pod}[steel_blue] pod")
-    services.seed_pod(pod)
+    services.seed_pod(pod, seed_args)
 
 
 @auto.command()
