@@ -5,7 +5,7 @@ metadata:
   name: mysql
 spec:
   type: NodePort
-  externalTrafficPolicy: Local
+  externalTrafficPolicy: Cluster
   ports:
   - port: 3306         # Port for internal cluster communication (other pods connect to this)
     targetPort: 3306   # Port on the MySQL pod that is receiving traffic

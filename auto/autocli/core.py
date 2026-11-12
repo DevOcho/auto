@@ -36,19 +36,97 @@ def _setup_https_certificates(pods):
     return key_file, cert_file
 
 
+def _update_tls_secrets(key_file, cert_file):
+    """Update TLS secrets in the running cluster and restart ingress to pick them up"""
+    rprint("[deep_sky_blue1]Updating TLS secrets in cluster...[/]")
+    for ns in ["default", "ingress-nginx"]:
+        cmd = (
+            f"kubectl create secret tls local-tls --key {key_file} --cert {cert_file} "
+            f"-n {ns} --dry-run=client -o yaml | kubectl apply -f -"
+        )
+        utils.run_and_wait(cmd, capture_output=True)
+    utils.run_and_wait(
+        "kubectl rollout restart deployment ingress-nginx-controller -n ingress-nginx",
+        capture_output=True,
+    )
+    rprint(" :white_heavy_check_mark:[green] TLS secrets updated")
+
+
+def _discover_ingress_hosts():
+    """Read the hostnames every deployed Ingress actually declares.
+
+    The cluster is the source of truth for SSL coverage: pods define their own
+    hostnames in their Helm charts (a single pod can expose several, e.g. both
+    'app.local' and a customer 'portal.app.local'), which auto cannot guess from
+    the repo name alone. We collect spec.rules[].host and spec.tls[].hosts[]
+    across all namespaces and return the de-duplicated, sorted list.
+    """
+    cmd = (
+        "kubectl get ingress --all-namespaces -o jsonpath="
+        '\'{range .items[*]}{range .spec.rules[*]}{.host}{"\\n"}{end}'
+        '{range .spec.tls[*].hosts[*]}{@}{"\\n"}{end}{end}\''
+    )
+    output = utils.run_and_return(cmd)
+    hosts = {line.strip() for line in output.split() if line.strip()}
+    return sorted(hosts)
+
+
+def _warn_missing_host_entries(hosts):
+    """Warn about ingress hosts that won't resolve until added to /etc/hosts.
+
+    Each ingress host must point at 127.0.0.1 locally; auto does not edit
+    /etc/hosts for the user, so surface exactly which lines are missing rather
+    than letting the browser fail with an opaque resolution error.
+    """
+    current = utils.run_and_return("cat /etc/hosts")
+    missing = [host for host in hosts if host not in current]
+    if not missing:
+        return
+    rprint("  -- [yellow]These hosts are not in /etc/hosts yet[/]:")
+    for host in missing:
+        rprint(f"       127.0.0.1      {host}")
+
+
+def _refresh_https_for_ingresses():
+    """Re-issue the local cert to cover every deployed ingress hostname.
+
+    Runs after application pods are installed -- that's when their ingresses
+    exist. The initial cert is generated from a guessed '<podname>.local', which
+    misses extra hosts a pod's chart may expose, and the '*.local' wildcard does
+    not match multi-label subdomains like 'portal.app.local'. So we read the real
+    hosts from the cluster and put them in the cert's SAN list explicitly, then
+    refresh the in-cluster TLS secret.
+    """
+    hosts = _discover_ingress_hosts()
+    if not hosts:
+        return
+
+    if len(hosts) > 1:
+        rprint(f"  -- Detected {len(hosts)} ingress hosts; issuing one cert for all")
+
+    cert_path = os.path.expanduser("~") + "/.auto/certs"
+    key_file, cert_file = utils.create_local_certs(cert_path, additional_domains=hosts)
+    _update_tls_secrets(key_file, cert_file)
+    _warn_missing_host_entries(hosts)
+
+
 def _print_access_hints(pods, use_https):
     """Helper to print access hints at the end of start"""
     print()
     rprint("[italic]Hint: Some items may still be starting in k3s.")
     rprint("[italic]You can access your pod(s) via the following URLs:")
 
-    protocol = "https" if use_https else "http"
-    port_suffix = "" if use_https else ":8088"
+    if use_https:
+        # HTTPS serves on 443 and covers every hostname the deployed ingresses
+        # declare -- not just '<podname>.local' -- so list the real ones.
+        for host in _discover_ingress_hosts():
+            rprint(f"[italic]  https://{host}/")
+        return
 
     for repo in pods:
         pod_name = repo["repo"].split("/")[-1:][0].replace(".git", "")
         if utils.check_host_entry(pod_name):
-            rprint(f"[italic]  {protocol}://{pod_name}.local{port_suffix}/")
+            rprint(f"[italic]  http://{pod_name}.local:8088/")
 
 
 def _run_bootstrap_step(msg, success_msg, execute, func=None, **kwargs):
@@ -72,6 +150,44 @@ def _install_system_sequence(new_cluster):
         services.create_databases()
 
 
+def _find_pod_entry(pod_name):
+    """Find a pod's repo entry in CONFIG['pods'] by name"""
+    for entry in CONFIG.get("pods", []):
+        if isinstance(entry, dict) and "repo" in entry:
+            entry_name = entry["repo"].split("/")[-1:][0].replace(".git", "")
+            if entry_name == pod_name:
+                return entry
+    return None
+
+
+def _apply_code_pv_pvc():
+    """Apply the shared code PersistentVolume and PersistentVolumeClaim"""
+    user_path = os.path.expanduser("~")
+    utils.run_and_wait(f"kubectl apply -f {user_path}/.auto/k3s/pv.yaml")
+    utils.run_and_wait(f"kubectl apply -f {user_path}/.auto/k3s/pvc.yaml")
+
+
+def _prepare_single_pod(pod, offline):
+    """Pull the repo, build+push the image, and apply PV/PVC for a single pod start"""
+    pod_entry = _find_pod_entry(pod)
+    if not pod_entry:
+        utils.declare_error(
+            f"Pod '{pod}' not found in ~/.auto/config/local.yaml. "
+            "Add the repo entry there first, then run 'auto start' again."
+        )
+        return
+
+    if not offline:
+        rprint(f"[deep_sky_blue1]Pulling code for[/] {pod}")
+        utils.ensure_host_known(pod_entry["repo"])
+        utils.pull_repo(pod_entry, CONFIG["code"])
+
+        registry.start_registry()
+        registry.tag_pod_docker_image(pod)
+
+    _apply_code_pv_pvc()
+
+
 def bootstrap_cluster(pod, dry_run, offline):
     """Orchestrates the entire start sequence seamlessly."""
     pods = CONFIG.get("pods", [])
@@ -83,7 +199,37 @@ def bootstrap_cluster(pod, dry_run, offline):
 
     if pod:
         rprint(f"[steel_blue]Starting[/] {pod}")
+        if not dry_run:
+            verify_dependencies()
+            # Single-pod start assumes the cluster is already up; fail loudly
+            # rather than letting downstream kubectl/helm calls error obscurely.
+            status, _ = utils.get_cluster_status()
+            if status != "Running":
+                utils.declare_error(
+                    "Cluster is not running. Run 'auto start' (no pod) first to "
+                    "bootstrap the cluster, then 'auto start <pod>' to add a pod.",
+                    exit_auto=True,
+                )
+                return
+            _prepare_single_pod(pod, offline)
+            # Bring up any system pods this pod needs and create its databases
+            # and buckets BEFORE the pod starts. This mirrors the full-start
+            # order (system pods + databases happen ahead of the application
+            # pods) so the pod doesn't crash-loop connecting to a database or
+            # reading a bucket that doesn't exist yet. install_system_pods is
+            # idempotent and only acts on pods that are actually required.
+            services.install_system_pods()
+            services.create_databases_for_pod(pod)
         start_pod(pod)
+        if not dry_run:
+            # The pod's ingress now exists; re-issue the cert so any hostnames it
+            # adds (e.g. a second 'portal.<pod>.local') are covered too.
+            if use_https:
+                _refresh_https_for_ingresses()
+            # Cache any external images this pod pulled (sidecars, init
+            # containers, third-party images) into the local registry and
+            # local.yaml, matching what the full-start path does at the end.
+            registry.cache_running_images()
         return
 
     with Progress(transient=False) as progress:
@@ -162,6 +308,15 @@ def bootstrap_cluster(pod, dry_run, offline):
             progress=progress,
             task=task,
             advance=20,
+        )
+
+        # STEP 7.5: Now that ingresses exist, re-issue the cert to cover every
+        # hostname they actually declare (handles pods that expose more than one).
+        _run_bootstrap_step(
+            "Securing ingress hosts (HTTPS)...",
+            "HTTPS Ingress Hosts Secured",
+            not dry_run and use_https,
+            _refresh_https_for_ingresses,
         )
 
         # STEP 8: Auto-detect external images and cache them
@@ -298,6 +453,7 @@ def start_cluster(progress, task, key_file="", cert_file=""):
         rprint("  -- [bold green]HTTPS Enabled[/]: Binding ports 80/443")
 
     code_dir = CONFIG["code"]
+    extra_args = CONFIG.get("extra-args", "")
     # I'm opening port 8088 outside the cluster for access to the sites
     # Ports for databases are dynamically opened when needed by pods
     bash_command = (
@@ -307,6 +463,7 @@ def start_cluster(progress, task, key_file="", cert_file=""):
         f"--registry-config ~/.auto/k3s/registries.yaml "
         f"{load_bal_config} "
         f'--k3s-arg "--disable=traefik@server:0" '
+        f"{extra_args} "
         # f"--network k3d-vpn-net "
         f"--agents 1"
     )
@@ -621,11 +778,7 @@ def install_pods_in_cluster() -> None:
     """Install Pods into the cluster"""
 
     # Let's setup the code directory PV and PVC in k3s
-    user_path = os.path.expanduser("~")
-    command = f"kubectl apply -f {user_path}/.auto/k3s/pv.yaml"
-    utils.run_and_wait(command)
-    command = f"kubectl apply -f {user_path}/.auto/k3s/pvc.yaml"
-    utils.run_and_wait(command)
+    _apply_code_pv_pvc()
 
     # Now let's start all the pods
     rprint("  -- Pods:")
@@ -813,16 +966,28 @@ def install_config_from_repo(repo):
 
 
 def migrate_with_smalls(pod):
-    """Run the database migrations in a pod with smalls"""
+    """Run database migrations in an ephemeral pod that mirrors the deployment.
 
-    # Run the command inside the pod
-    command = "./smalls.py migrate"
-    utils.run_command_inside_pod(pod, command)
+    Avoids the chicken-and-egg case where the app container won't reach
+    Running because it depends on schema state — the migrator pod has its
+    own lifecycle and exits when smalls.py finishes.
+    """
+    return utils.run_one_shot_pod_command(
+        pod,
+        command_args=[f"/mnt/code/{pod}/smalls.py", "migrate"],
+        action_label="migrate",
+        # SMALLS_ENV=PROD disables smalls.py's interactive "continue?" prompt
+        # on migration failure, which would hang in a non-TTY pod.
+        extra_env=[{"name": "SMALLS_ENV", "value": "PROD"}],
+    )
 
 
 def rollback_with_smalls(pod, number):
-    """Run the database rollback in a pod with smalls"""
+    """Run database rollback in the running app pod via kubectl exec.
 
-    # Run the command inside the pod
+    Rollback is left on exec because smalls.py prompts for confirmation
+    (click.confirm), which needs a TTY. Rollbacks are also rare and
+    typically run against a known-healthy system.
+    """
     command = f"./smalls.py rollback {number}"
     utils.run_command_inside_pod(pod, command)

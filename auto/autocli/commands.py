@@ -4,6 +4,7 @@
   * `--offline`     This disables steps that require internet so you can work without Internet
 """
 
+import json
 import os
 
 import click
@@ -11,6 +12,9 @@ from autocli import core, registry, services, utils
 from autocli.config import CONFIG
 from rich import print as rprint
 from rich.progress import Progress
+
+VERSION = "0.7.3"
+
 
 # Global settings for click
 CONTEXT_SETTINGS = {
@@ -53,7 +57,7 @@ def get_namespaces(ctx, param, incomplete):  # pylint: disable=unused-argument
 
 
 @click.group(context_settings=CONTEXT_SETTINGS)
-@click.version_option(version="0.6.9")
+@click.version_option(version=VERSION)
 def auto():
     """Commandline utility to assist with creating/deleting clusters and
     starting/stopping pods."""
@@ -268,3 +272,47 @@ def install(self, git_repo):  # pylint: disable=unused-argument
 def status(self, namespace, all_namespaces, watch):  # pylint: disable=unused-argument
     """Show the status of the cluster and pods"""
     core.show_status(namespace, all_namespaces, watch)
+
+
+@auto.command()
+@click.pass_context
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Force update even if already at the latest version.",
+)
+def update(self, force):  # pylint: disable=unused-argument
+    """Update auto CLI to the latest version"""
+    latest_version_json = utils.run_and_return(
+        "curl -s https://api.github.com/repos/devocho/auto/releases/latest"
+    )
+    if latest_version_json:
+        try:
+            latest_version_data = json.loads(latest_version_json)
+            latest_version = latest_version_data["tag_name"].lstrip("v")
+            if VERSION == latest_version and not force:
+                rprint(f"[green]Current version ({VERSION}) is already the latest.[/]")
+                rprint(
+                    """
+⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⣶⡋⠉⠙⠒⢤⡀⠀⠀⠀⠀⠀⢠⠖⠉⠉⠙⠢⡄⠀
+⠀⠀⠀⠀⠀⠀⢀⣼⣟⡒⠒⠀⠀⠀⠀⠀⠙⣆⠀⠀⠀⢠⠃⠀⠀⠀⠀⠀⠹⡄
+⠀⠀⠀⠀⠀⠀⣼⠷⠖⠀⠀⠀⠀⠀⠀⠀⠀⠘⡆⠀⠀⡇⠀⠀⠀⠀⠀⠀⠀⢷
+⠀⠀⠀⠀⠀⠀⣷⡒⠀⠀⢐⣒⣒⡒⠀⣐⣒⣒⣧⠀ ⡇⠀⠀⢠⢤⢠⡠⠀⢸⠀
+⠀⠀⠀⠀⠀⢰⣛⣟⣂⠀⠘⠤⠬⠃⠰⠑⠥⠊⣿⠀ ⡇⠀⠀⠓⠃⠋⠂⠀⢸⠀
+⠀⠀⠀⠀⠀⢸⣿⡿⠤⠀⢸⠁⠀⠀⢀⡆⠀⠀⣿⠀⠀⡇⠀⠀⠀⠀⠀⠀⠀⣸
+⠀⠀⠀⠀⠀⠈⠿⣯⡭⠀⠸⡀⠀⢀⣀⠀⠀⠀⡟⠀⠀⢸⠀⠀⠀⠀⠀⠀⢠⠏
+⠀⠀⠀⠀⠀⠀⠀⠈⢯⡥⠄⢱⠀⠀⠀⠀⠀⡼⠁⠀⠀⠀⠳⢄⣀⣀⣀⡴⠃⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⢱⡦⣄⣀⣀⣀⣠⠞⠁⠀⠀⠀⠀⠀⠀⠈⠉⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⢀⣤⣾⠛⠃⠀⠀⠀⢹⠳⡶⣤⡤⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⣠⢴⣿⣿⣿⡟⡷⢄⣀⣀⣀⡼⠳⡹⣿⣷⠞⣳⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⢰⡯⠭⠹⡟⠿⠧⠷⣄⣀⣟⠛⣦⠔⠋⠛⠛⠋⠙⡆⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⢸⣿⠭⠉⠀⢠⣤⠀⠀⠀⠘⡷⣵⢻⠀⠀⠀⠀⣼⠀⣇⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⡇⣿⠍⠁⠀⢸⣗⠂⠀⠀⠀⣧⣿⣼⠀⠀⠀⠀⣯⠀⢸⠀⠀⠀⠀⠀⠀⠀
+    """
+                )
+                return
+            rprint(f"[steel_blue]Updating from {VERSION} to {latest_version}...[/]")
+        except Exception:  # pylint: disable=broad-except
+            pass
+    os.system("curl -fsSL https://www.devocho.com/auto.sh | bash")

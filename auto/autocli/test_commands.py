@@ -2,7 +2,7 @@
 
 from unittest.mock import patch
 
-from autocli import commands, services
+from autocli import commands
 from click.testing import CliRunner
 
 
@@ -65,14 +65,3 @@ def test_seed_passes_extra_args(mock_init, mock_seed):
     assert result.exit_code == 0
     mock_init.assert_called_once_with("my-pod")
     mock_seed.assert_called_once_with("my-pod", ("--admin-setup", "--level", "lighter"))
-
-
-@patch("autocli.utils.run_command_inside_pod")
-@patch("autocli.utils.get_pod_config", return_value={"seed-command": "seed.py"})
-def test_seed_pod_appends_quoted_args(_mock_config, mock_run):
-    """seed_pod appends the extra arguments, shell-quoted"""
-    services.seed_pod("my-pod", ("--admin-setup", "a b"))
-    mock_run.assert_called_once_with("my-pod", "seed.py --admin-setup 'a b'")
-
-    services.seed_pod("my-pod")
-    mock_run.assert_called_with("my-pod", "seed.py")

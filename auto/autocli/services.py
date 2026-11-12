@@ -1,6 +1,6 @@
 """System Pods and Database Services Management"""
 
-import shlex
+import concurrent.futures
 import time
 
 from autocli import utils
@@ -156,18 +156,35 @@ def _verify_db_system_ready(db_name, friendly_name, socket_check_func):
     return True
 
 
+def _verify_required_dbs_ready(needs):
+    """Verify only the system DB pods referenced by `needs` are ready.
+
+    `needs` is a set of system-pod names (e.g. {'mysql', 'postgres'}). Returns
+    True if all required DB pods are ready (or none were required).
+    """
+    checks = {
+        "mysql": ("MySQL", utils.wait_for_mysql_socket),
+        "postgres": ("Postgres", utils.wait_for_postgres_socket),
+    }
+    targets = {name: checks[name] for name in needs if name in checks}
+
+    if not targets:
+        return True
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(targets)) as executor:
+        futures = {
+            name: executor.submit(_verify_db_system_ready, name, friendly, sock_fn)
+            for name, (friendly, sock_fn) in targets.items()
+        }
+        return all(future.result() for future in futures.values())
+
+
 def create_databases():
     """Create the databases"""
     rprint("  -- Creating Databases and Buckets")
 
-    # Verify MySQL is ready
-    if not _verify_db_system_ready("mysql", "MySQL", utils.wait_for_mysql_socket):
-        return
-
-    # Verify Postgres is ready
-    if not _verify_db_system_ready(
-        "postgres", "Postgres", utils.wait_for_postgres_socket
-    ):
+    # Check MySQL and Postgres readiness in parallel so both pods warm up simultaneously
+    if not _verify_required_dbs_ready({"mysql", "postgres"}):
         return
 
     # Create the databases requested in each of the pods
@@ -179,6 +196,28 @@ def create_databases():
 
         pod_config = utils.get_pod_config(pod_name)
         _process_pod_databases(pod_config)
+
+
+def create_databases_for_pod(pod_name):
+    """Create databases and buckets declared by a single pod's .auto/config.yaml.
+
+    Used by the single-pod `auto start <pod>` path so that newly added
+    databases or MinIO buckets are picked up without a full cluster bootstrap.
+    All underlying create_* helpers are idempotent, so existing resources
+    are left untouched.
+    """
+    pod_config = utils.get_pod_config(pod_name)
+    if not pod_config.get("system-pods"):
+        return
+
+    needs = {sp.get("name") for sp in pod_config["system-pods"] if sp.get("name")}
+
+    rprint("  -- Creating Databases and Buckets")
+
+    if not _verify_required_dbs_ready(needs):
+        return
+
+    _process_pod_databases(pod_config)
 
 
 def connect_to_mysql() -> None:
@@ -201,16 +240,29 @@ def connect_to_minio() -> None:
 
 
 def seed_pod(pod, seed_args=()):
-    """Run the pod's seed-command inside its container, with any extra arguments"""
+    """Run the seed script in an ephemeral pod that mirrors the deployment.
+
+    Extra arguments are passed through to the seed-command as-is.
+    """
     config = utils.get_pod_config(pod)
-    seed_command = " ".join([config["seed-command"], *map(shlex.quote, seed_args)])
-    utils.run_command_inside_pod(pod, seed_command)
-    rprint(f"  -- {pod} database seeded")
+    seed_command = config["seed-command"]
+    rc = utils.run_one_shot_pod_command(
+        pod,
+        command_args=[f"/mnt/code/{pod}/{seed_command}", *seed_args],
+        action_label="seed",
+    )
+    if rc == 0:
+        rprint(f"  -- {pod} database seeded")
 
 
 def init_pod_db(pod):
-    """Run the initdb.py script inside a pod's container"""
+    """Run the initdb script in an ephemeral pod that mirrors the deployment"""
     config = utils.get_pod_config(pod)
     init_command = config["init-command"]
-    utils.run_command_inside_pod(pod, init_command)
-    rprint(f"  -- {pod} database initialized")
+    rc = utils.run_one_shot_pod_command(
+        pod,
+        command_args=[f"/mnt/code/{pod}/{init_command}"],
+        action_label="init",
+    )
+    if rc == 0:
+        rprint(f"  -- {pod} database initialized")

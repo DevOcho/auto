@@ -5,7 +5,7 @@ metadata:
   name: redis
 spec:
   type: NodePort
-  externalTrafficPolicy: Local
+  externalTrafficPolicy: Cluster
   ports:
   - port: 6379         # Port for internal cluster communication (other pods connect to this)
     targetPort: 6379   # Port on the Redis pod that is receiving traffic

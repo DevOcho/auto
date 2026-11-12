@@ -67,7 +67,7 @@ metadata:
   name: mssql
 spec:
   type: NodePort
-  externalTrafficPolicy: Local
+  externalTrafficPolicy: Cluster
   ports:
   - port: 1433
     targetPort: 1433

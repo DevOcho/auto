@@ -3,6 +3,7 @@
 import subprocess
 from unittest.mock import MagicMock, mock_open, patch
 
+import yaml
 from autocli import config, utils
 
 
@@ -161,3 +162,111 @@ def test_get_pod_config(mock_yaml, _mock_file, mock_isfile):
         with patch.dict("autocli.config.CONFIG", {"code": "/code"}):
             utils.get_pod_config("mypod")
             mock_err.assert_called()
+
+
+# --- one-shot pod helper --------------------------------------------------
+
+
+def _fake_deployment(image="reg/api:1", env=None, volume_mounts=None, volumes=None):
+    return {
+        "spec": {
+            "template": {
+                "spec": {
+                    "containers": [
+                        {
+                            "name": "api",
+                            "image": image,
+                            "env": env or [],
+                            "volumeMounts": volume_mounts or [],
+                            "workingDir": "/mnt/code/api",
+                        }
+                    ],
+                    "volumes": volumes or [],
+                }
+            }
+        }
+    }
+
+
+@patch("autocli.utils.run_and_wait", return_value=1)
+@patch("autocli.utils.os.system", return_value=0)
+@patch("autocli.utils.subprocess.run")
+@patch("autocli.utils.get_deployment_spec")
+def test_run_one_shot_pod_command_builds_manifest(
+    mock_get_dep, mock_subproc, _mock_system, _mock_run_wait
+):
+    """The generated Pod manifest mirrors the deployment's container spec."""
+    mock_get_dep.return_value = _fake_deployment(
+        image="reg/api:1",
+        env=[{"name": "DB_HOST", "value": "postgres"}],
+        volume_mounts=[{"name": "code-pvc", "mountPath": "/mnt/code"}],
+        volumes=[{"name": "code-pvc", "persistentVolumeClaim": {"claimName": "code"}}],
+    )
+
+    # apply succeeds; phase query returns Succeeded
+    apply_result = MagicMock(returncode=0, stderr="")
+    phase_result = MagicMock(stdout="Succeeded", returncode=0)
+    mock_subproc.side_effect = [apply_result, phase_result]
+
+    rc = utils.run_one_shot_pod_command(
+        "api",
+        command_args=["/mnt/code/api/smalls.py", "migrate"],
+        action_label="migrate",
+        extra_env=[{"name": "SMALLS_ENV", "value": "PROD"}],
+    )
+
+    assert rc == 0
+
+    # First subprocess.run is `kubectl apply -f -` with the manifest on stdin
+    apply_call = mock_subproc.call_args_list[0]
+    assert apply_call.args[0] == "kubectl apply -f -"
+    manifest_yaml = apply_call.kwargs["input"]
+
+    manifest = yaml.safe_load(manifest_yaml)
+    assert manifest["kind"] == "Pod"
+    assert manifest["metadata"]["name"].startswith("api-migrate-")
+    assert manifest["metadata"]["labels"]["auto.devocho/role"] == "migrate"
+    spec = manifest["spec"]
+    assert spec["restartPolicy"] == "Never"
+    container = spec["containers"][0]
+    assert container["image"] == "reg/api:1"
+    assert container["command"] == ["/mnt/code/api/smalls.py", "migrate"]
+    assert container["workingDir"] == "/mnt/code/api"
+    # Both deployment env and extra_env are present
+    env_pairs = {(e["name"], e.get("value")) for e in container["env"]}
+    assert ("DB_HOST", "postgres") in env_pairs
+    assert ("SMALLS_ENV", "PROD") in env_pairs
+    assert container["volumeMounts"][0]["mountPath"] == "/mnt/code"
+    assert spec["volumes"][0]["name"] == "code-pvc"
+
+
+@patch("autocli.utils.declare_error")
+@patch("autocli.utils.get_deployment_spec", return_value=None)
+def test_run_one_shot_pod_command_errors_when_deployment_missing(_mock_get, mock_err):
+    """Missing deployment short-circuits with a clear declare_error call."""
+    rc = utils.run_one_shot_pod_command(
+        "api", command_args=["x"], action_label="migrate"
+    )
+    assert rc == 1
+    mock_err.assert_called_once()
+    msg = mock_err.call_args.args[0]
+    assert "Deployment 'api' not found" in msg
+
+
+@patch("autocli.utils.run_and_wait", return_value=1)
+@patch("autocli.utils.os.system", return_value=0)
+@patch("autocli.utils.subprocess.run")
+@patch("autocli.utils.get_deployment_spec")
+def test_run_one_shot_pod_command_failed_phase_returns_nonzero(
+    mock_get_dep, mock_subproc, _mock_system, _mock_run_wait
+):
+    """A non-Succeeded terminal phase returns 1."""
+    mock_get_dep.return_value = _fake_deployment()
+    apply_result = MagicMock(returncode=0, stderr="")
+    phase_result = MagicMock(stdout="Failed", returncode=0)
+    mock_subproc.side_effect = [apply_result, phase_result]
+
+    rc = utils.run_one_shot_pod_command(
+        "api", command_args=["x"], action_label="migrate"
+    )
+    assert rc == 1

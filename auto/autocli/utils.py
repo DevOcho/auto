@@ -1,6 +1,9 @@
 """Utils for the auto commands"""
 
+# pylint: disable=too-many-lines
+
 import configparser
+import json
 import os
 import re
 import shlex
@@ -8,6 +11,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import uuid
 from subprocess import CalledProcessError
 from time import sleep
 
@@ -294,16 +298,12 @@ def create_postgres_database(database, retries=0):
     pod_name = get_full_pod_name("postgres").strip("\n")
 
     if pod_name:
-        cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
-
-        # Make this command safe to run
-        cmd = shlex.quote(cmd)
-        args = shlex.split(cmd)
+        cmd = f"kubectl exec {pod_name} -- {container_cmd}"
 
         try:
             # Run the command silently
             subprocess.run(
-                args,
+                cmd,
                 shell=True,
                 check=True,
                 stdout=subprocess.DEVNULL,
@@ -384,7 +384,7 @@ def connect_to_minio() -> None:
     pod_name = get_full_pod_name("minio").strip("\n")
 
     # The command we are going to run
-    cmd = f"kubectl port-forward {pod_name} 9000 9090"
+    cmd = f"kubectl port-forward {pod_name} 9090:9090"
 
     # Make this command safe to run
     cmd = shlex.quote(cmd)
@@ -397,28 +397,27 @@ def connect_to_minio() -> None:
 def create_mysql_database(database, retries=0):
     """Create a database inside mysql"""
 
-    container_cmd = f'mysql -uroot -ppassword --execute="create database {database}"'
+    # IF NOT EXISTS prevents a failed retry loop when the database already exists
+    container_cmd = (
+        f'mysql -uroot -ppassword --execute="CREATE DATABASE IF NOT EXISTS {database}"'
+    )
     pod_name = get_full_pod_name("mysql").strip("\n")
 
     if pod_name:
-        cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
-
-        # Make this command safe to run
-        cmd = shlex.quote(cmd)
-        args = shlex.split(cmd)
+        cmd = f"kubectl exec {pod_name} -- {container_cmd}"
 
         try:
             # Run the command silently.
             # We capture output to suppress "ERROR 2002" messages during startup.
             subprocess.run(
-                args,
+                cmd,
                 shell=True,
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
         except CalledProcessError:
-            if retries < 10:  # Increased retries to 10 (approx 30s) for slower startups
+            if retries < 10:  # Allow up to 30s for slower startups
                 sleep(3)
                 create_mysql_database(database, retries=retries + 1)
             else:
@@ -436,29 +435,23 @@ def create_mysql_database(database, retries=0):
 def create_minio_bucket(bucket):
     """Create a bucket in MinIO"""
 
-    container_cmds = [
-        f"mc mb --quiet myminio/{bucket}",
-        f"mc anonymous --quiet set none myminio/{bucket}",  # disable file list
-        f"mc anonymous --quiet set download myminio/{bucket}/*",  # enable full path access
-    ]
     pod_name = get_full_pod_name("minio").strip("\n")
 
     if pod_name:
-        for cmd in container_cmds:
-            cmd = f"kubectl exec -it {pod_name} -- {cmd}"
-
-            # Make this command safe to run
-            cmd = shlex.quote(cmd)
-            args = shlex.split(cmd)
-
-            # Run the command and return the output
-            subprocess.run(
-                args,
-                shell=True,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.STDOUT,
-            )
+        # Batch all three mc commands into a single exec call to avoid subprocess overhead per bucket
+        combined = (
+            f"mc mb --quiet myminio/{bucket} ; "  # disable file list
+            f"mc anonymous --quiet set none myminio/{bucket} && "  # enable full path access
+            f"mc anonymous --quiet set download myminio/{bucket}/*"
+        )
+        cmd = f"kubectl exec {pod_name} -- sh -c {shlex.quote(combined)}"
+        subprocess.run(
+            cmd,
+            shell=True,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+        )
 
 
 def check_docker():
@@ -946,3 +939,175 @@ def create_local_certs(cert_path, additional_domains=None):
         print(e.stderr.decode())
 
     return key_file, cert_file
+
+
+def get_deployment_spec(name, namespace="default"):
+    """Fetch a deployment's spec as a dict, or None if it doesn't exist"""
+    cmd = (
+        f"kubectl get deployment {shlex.quote(name)} "
+        f"-n {shlex.quote(namespace)} -o json"
+    )
+    try:
+        result = subprocess.run(
+            cmd, shell=True, capture_output=True, check=True, text=True
+        )
+        return json.loads(result.stdout)
+    except (CalledProcessError, json.JSONDecodeError):
+        return None
+
+
+def _build_runner_pod_manifest(
+    pod_name,
+    runner_name,
+    action_label,
+    command_args,
+    deployment,
+    extra_env,
+    namespace,
+):  # pylint: disable=too-many-arguments
+    """Build a Pod manifest mirroring deployment's first container, with overrides"""
+    spec_template = deployment["spec"]["template"]["spec"]
+    container = spec_template["containers"][0]
+
+    env_list = list(container.get("env", []))
+    if extra_env:
+        env_list.extend(extra_env)
+
+    pod_spec = {
+        "restartPolicy": "Never",
+        "containers": [
+            {
+                "name": action_label,
+                "image": container["image"],
+                "command": list(command_args),
+                "workingDir": container.get("workingDir", f"/mnt/code/{pod_name}"),
+                "env": env_list,
+                "envFrom": container.get("envFrom", []),
+                "volumeMounts": container.get("volumeMounts", []),
+            }
+        ],
+        "volumes": spec_template.get("volumes", []),
+    }
+    if "serviceAccountName" in spec_template:
+        pod_spec["serviceAccountName"] = spec_template["serviceAccountName"]
+    if "imagePullSecrets" in spec_template:
+        pod_spec["imagePullSecrets"] = spec_template["imagePullSecrets"]
+
+    return {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+            "name": runner_name,
+            "namespace": namespace,
+            "labels": {
+                "app.kubernetes.io/managed-by": "auto",
+                "auto.devocho/role": action_label,
+                "auto.devocho/target": pod_name,
+            },
+        },
+        "spec": pod_spec,
+    }
+
+
+def run_one_shot_pod_command(
+    pod_name,
+    command_args,
+    action_label,
+    extra_env=None,
+    namespace="default",
+):
+    """Run command_args in an ephemeral pod that mirrors pod_name's deployment.
+
+    Spawns a fresh Pod using the same image, env, envFrom, volumeMounts, and
+    volumes as the application Deployment, but overrides the command. This
+    avoids depending on the application container being healthy — the right
+    behavior for migrations, db init, and seed scripts that should run even
+    if the app pod is CrashLooping.
+
+    Returns 0 on Pod phase Succeeded, 1 otherwise.
+    """
+    deployment = get_deployment_spec(pod_name, namespace)
+    if not deployment:
+        declare_error(
+            f"Deployment '{pod_name}' not found in namespace '{namespace}'. "
+            f"Run 'auto start {pod_name}' first to install it."
+        )
+        return 1
+
+    # Unique pod name so concurrent runs and old failed migrators don't collide
+    runner_name = f"{pod_name}-{action_label}-{uuid.uuid4().hex[:8]}"
+    pod_manifest = _build_runner_pod_manifest(
+        pod_name,
+        runner_name,
+        action_label,
+        command_args,
+        deployment,
+        extra_env,
+        namespace,
+    )
+    manifest_yaml = yaml.safe_dump(pod_manifest)
+
+    try:
+        rprint(f"  -- Spawning {action_label} pod for {pod_name}")
+        result = subprocess.run(
+            "kubectl apply -f -",
+            shell=True,
+            input=manifest_yaml,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            rprint(f"[red]Failed to create {action_label} pod[/red]")
+            print(result.stderr)
+            return 1
+
+        # Short timeout — if the migrator can't even schedule, something
+        # structural is wrong (missing image, bad envFrom secret, etc.)
+        sched_cmd = (
+            f"kubectl wait --for=condition=PodScheduled "
+            f"pod/{runner_name} -n {namespace} --timeout=60s"
+        )
+        if not run_and_wait(sched_cmd, capture_output=True, suppress_error=True):
+            rprint(
+                f"[red]{action_label} pod failed to schedule "
+                f"— describe output:[/red]"
+            )
+            run_and_wait(
+                f"kubectl describe pod/{runner_name} -n {namespace}",
+                capture_output=False,
+            )
+            return 1
+
+        # Stream logs until the container exits. os.system avoids buffering
+        # so the user sees output in real time.
+        rprint(f"  -- Streaming {action_label} output for {pod_name}")
+        os.system(f"kubectl logs -f pod/{runner_name} -n {namespace}")
+
+        # Pod has exited (or user Ctrl-C'd). Check the actual phase rather
+        # than trusting the log stream's exit code.
+        phase_cmd = (
+            f"kubectl get pod/{runner_name} -n {namespace} "
+            "-o jsonpath='{.status.phase}'"
+        )
+        phase_result = subprocess.run(
+            phase_cmd, shell=True, capture_output=True, text=True, check=False
+        )
+        phase = phase_result.stdout.strip().strip("'")
+
+        if phase == "Succeeded":
+            rprint(f"  -- [green]{action_label} for {pod_name} completed[/green]")
+            return 0
+
+        rprint(
+            f"  -- [red]{action_label} for {pod_name} ended in phase "
+            f"{phase or 'unknown'}[/red]"
+        )
+        return 1
+    finally:
+        # Always clean up so a leaked migrator doesn't block a retry
+        run_and_wait(
+            f"kubectl delete pod/{runner_name} -n {namespace} " f"--ignore-not-found",
+            capture_output=True,
+            suppress_error=True,
+        )
