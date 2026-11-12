@@ -14,6 +14,22 @@ def _fatal_error(msg, exit_code=1):
     sys.exit(exit_code)
 
 
+# Click prints these and exits before any command runs
+INFO_FLAGS = {"--help", "-h", "--version"}
+
+
+def _needs_code_folder(argv=None):
+    """False when auto only prints help or its version, or completes a word
+
+    CONFIG loads when autocli is imported, before Click reads the command line,
+    so without this `auto --version` asked to create the code folder.
+    """
+    if "_AUTO_COMPLETE" in os.environ:
+        return False
+    args = sys.argv[1:] if argv is None else argv
+    return bool(args) and not any(arg in INFO_FLAGS for arg in args)
+
+
 def load_config():
     """Load the global auto config"""
     config = {}
@@ -25,18 +41,38 @@ def load_config():
         )
         create_initial_config()
 
-    with open(config_path, encoding="utf-8") as yaml_file:
-        config = yaml.safe_load(yaml_file)
+    # A malformed local.yaml is a hand-editing mistake, not a bug, so report it
+    # the way every other CLI error is reported. Without this the YAMLError
+    # escapes as a traceback from the module-level CONFIG assignment below,
+    # which breaks every command -- even `auto --help`.
+    try:
+        with open(config_path, encoding="utf-8") as yaml_file:
+            config = yaml.safe_load(yaml_file)
+    except yaml.YAMLError as error:
+        _fatal_error(
+            f"Could not read {config_path}\n"
+            f"[yellow]The file is not valid YAML:[/yellow]\n{error}"
+        )
+
+    # safe_load returns None for an empty file, and every caller expects a dict
+    if config is None:
+        config = {}
 
     if "code" in config:
         expanded_path = os.path.expanduser(config["code"])
         expanded_path = os.path.expandvars(expanded_path)
         config["code"] = expanded_path
 
-        if not os.path.exists(config["code"]):
+        if not os.path.exists(config["code"]) and _needs_code_folder():
             rprint(
                 f"\n[yellow]Warning: Code folder '{config['code']}' does not exist.[/]"
             )
+            # No terminal to answer the question (a script, CI): say what to do
+            # instead of failing with a traceback from the prompt.
+            if not sys.stdin.isatty():
+                _fatal_error(
+                    f"Create {config['code']}, or set code: in {config_path} to your code folder."
+                )
             if Confirm.ask("Do you want us to create it for you?"):
                 try:
                     os.makedirs(config["code"])
@@ -51,6 +87,9 @@ def load_config():
 
 def create_initial_config():
     """Create a default config file if none is present"""
+    # NOTE: keep this valid YAML -- load_config() reads it straight back in.
+    # `key:` must be followed by a space or a newline; `commands:[` is a plain
+    # scalar, not a list, and makes the whole file unparsable.
     default_config = """
 ---
 # The code folder is where you want us to download all of your pod code repositories
@@ -59,6 +98,19 @@ code: ${HOME}/source/devocho
 # HTTPS in local
 # Set to `false` if you don't want this.  If it's false we will use port 8088 for local pod access.
 https: true
+
+# Which address the cluster's ports listen on: the sites, the databases, the
+# image registry and the Kubernetes API. 127.0.0.1 keeps them on this machine.
+# A team sharing one dev setup can set 0.0.0.0 to open them to the network --
+# only on a network you trust, since the databases use fixed passwords.
+# Takes effect when the cluster is created.
+bind-address: 127.0.0.1
+
+# The sites alone (80 and 443, or 8088) can listen on another address, so
+# teammates can open them through a hosts entry while the databases, the
+# registry and the API stay on this machine. Mailpit's and Floci's pages use
+# the same ports, so they are shared too.
+# sites-bind-address: 0.0.0.0
 
 # Each repo listed here will be run as a pod in k3s
 pods:
@@ -70,50 +122,60 @@ system-pods:
   - pod:
       name: mysql
       active: false
-      commands:[
-          "kubectl apply -f ~/.auto/k3s/mysql/pv.yaml",
-          "kubectl apply -f ~/.auto/k3s/mysql/pvc.yaml",
-          "kubectl apply -f ~/.auto/k3s/mysql/deployment.yaml",
-          "kubectl apply -f ~/.auto/k3s/mysql/service.yaml",
-          "kubectl apply -f ~/.auto/k3s/mysql/ingress.yaml",
-        ]
+      commands:
+        - "kubectl apply -f ~/.auto/k3s/mysql/pv.yaml"
+        - "kubectl apply -f ~/.auto/k3s/mysql/pvc.yaml"
+        - "kubectl apply -f ~/.auto/k3s/mysql/deployment.yaml"
+        - "kubectl apply -f ~/.auto/k3s/mysql/service.yaml"
       databases:
         - name: portal
   - pod:
       name: postgres
       active: false
-      commands:[
-          "kubectl apply -f ~/.auto/k3s/postgres/configmap.yaml",
-          "kubectl apply -f ~/.auto/k3s/postgres/pv.yaml",
-          "kubectl apply -f ~/.auto/k3s/postgres/pvc.yaml",
-          "kubectl apply -f ~/.auto/k3s/postgres/deployment.yaml",
-          "kubectl apply -f ~/.auto/k3s/postgres/service.yaml",
-          "kubectl apply -f ~/.auto/k3s/postgres/ingress.yaml",
-        ]
-      databases:
-        - name: portal
-  - pod:
-      name: minio
-      active: false
-      commands:[
-          "kubectl apply -f ~/.auto/k3s/minio/pv.yaml",
-          "kubectl apply -f ~/.auto/k3s/minio/pvc.yaml",
-          "kubectl apply -f ~/.auto/k3s/minio/deployment.yaml",
-          "kubectl apply -f ~/.auto/k3s/minio/service.yaml",
-          "kubectl apply -f ~/.auto/k3s/minio/ingress.yaml",
-        ]
+      commands:
+        - "kubectl apply -f ~/.auto/k3s/postgres/configmap.yaml"
+        - "kubectl apply -f ~/.auto/k3s/postgres/pv.yaml"
+        - "kubectl apply -f ~/.auto/k3s/postgres/pvc.yaml"
+        - "kubectl apply -f ~/.auto/k3s/postgres/deployment.yaml"
+        - "kubectl apply -f ~/.auto/k3s/postgres/service.yaml"
       databases:
         - name: portal
   - pod:
       name: redis
       active: false
-      commands:[
-          "kubectl apply -f ~/.auto/k3s/redis/pv.yaml",
-          "kubectl apply -f ~/.auto/k3s/redis/pvc.yaml",
-          "kubectl apply -f ~/.auto/k3s/redis/deployment.yaml",
-          "kubectl apply -f ~/.auto/k3s/redis/service.yaml",
-          "kubectl apply -f ~/.auto/k3s/redis/ingress.yaml",
-        ]
+      commands:
+        - "kubectl apply -f ~/.auto/k3s/redis/pv.yaml"
+        - "kubectl apply -f ~/.auto/k3s/redis/pvc.yaml"
+        - "kubectl apply -f ~/.auto/k3s/redis/deployment.yaml"
+        - "kubectl apply -f ~/.auto/k3s/redis/service.yaml"
+  # Local SMTP catch-all.  Pods send mail to `mailpit` on port 1025 and
+  # read it in the browser at http://mailpit.local/
+  - pod:
+      name: mailpit
+      active: false
+      commands:
+        - "kubectl apply -f ~/.auto/k3s/mailpit/deployment.yaml"
+        - "kubectl apply -f ~/.auto/k3s/mailpit/service.yaml"
+        - "kubectl apply -f ~/.auto/k3s/mailpit/ingress.yaml"
+  # S3 (in place of MinIO) and the rest of AWS, emulated.  Pods reach it at
+  # `floci-aws:4566`; the dashboard is at http://floci-ui.local/
+  - pod:
+      name: floci-aws
+      active: false
+      commands:
+        - "kubectl apply -f ~/.auto/k3s/floci/serviceaccount.yaml"
+        - "kubectl apply -f ~/.auto/k3s/floci/role.yaml"
+        - "kubectl apply -f ~/.auto/k3s/floci/rolebinding.yaml"
+        - "kubectl apply -f ~/.auto/k3s/floci/deployment.yaml"
+        - "kubectl apply -f ~/.auto/k3s/floci/service.yaml"
+        - "kubectl apply -f ~/.auto/k3s/floci/ingress.yaml"
+  - pod:
+      name: floci-ui
+      active: false
+      commands:
+        - "kubectl apply -f ~/.auto/k3s/floci/ui-deployment.yaml"
+        - "kubectl apply -f ~/.auto/k3s/floci/ui-service.yaml"
+        - "kubectl apply -f ~/.auto/k3s/floci/ui-ingress.yaml"
 """
     config_dir = os.path.expanduser("~") + "/.auto/config"
     config_file = config_dir + "/local.yaml"
@@ -170,6 +232,20 @@ def _update_config_memory(new_images):
             CONFIG["registry"].append({"image": img})
 
 
+def _registry_item_indent(lines, registry_idx, last_valid_idx):
+    """The indent the registry's `- image:` lines already use, so new ones match.
+
+    YAML allows a list under a key at either indent, and a file written by a
+    YAML library or reformatted by an editor often has none. A new line at a
+    different indent from its neighbours makes the whole file unreadable.
+    """
+    first_item = registry_idx + 1
+    for line in lines[first_item:last_valid_idx]:
+        if line.strip().startswith("- image:"):
+            return line[: len(line) - len(line.lstrip())]
+    return "  "
+
+
 def add_images_to_local_config(new_images):
     """Safely append new images to the registry list in local.yaml without deleting comments."""
     if not new_images:
@@ -185,11 +261,15 @@ def add_images_to_local_config(new_images):
     registry_idx, last_valid_idx = _get_registry_bounds(lines)
 
     if registry_idx != -1:
+        # `registry: []` holds its (empty) list on the key's own line
+        if lines[registry_idx].split("#")[0].strip() == "registry: []":
+            lines[registry_idx] = "registry:\n"
+        indent = _registry_item_indent(lines, registry_idx, last_valid_idx)
         new_lines = []
         existing_registry_lines = lines[registry_idx:last_valid_idx]
         for img in new_images:
             if not any(img in ln for ln in existing_registry_lines):
-                new_lines.append(f"  - image: {img}\n")
+                new_lines.append(f"{indent}- image: {img}\n")
 
         lines = lines[:last_valid_idx] + new_lines + lines[last_valid_idx:]
     else:
@@ -197,10 +277,60 @@ def add_images_to_local_config(new_images):
         for img in new_images:
             lines.append(f"  - image: {img}\n")
 
+    # Never write a local.yaml that can't be read back: every command would
+    # fail on it. Leave the file as it is and say what to add instead.
+    try:
+        yaml.safe_load("".join(lines))
+    except yaml.YAMLError:
+        rprint(
+            f"  -- [yellow]Could not add new images to {config_path}[/]: auto doesn't "
+            "recognise the layout of its registry: list. Add them there by hand: "
+            + ", ".join(new_images)
+        )
+        _update_config_memory(new_images)
+        return
+
     with open(config_path, "w", encoding="utf-8") as f:
         f.writelines(lines)
 
     _update_config_memory(new_images)
+
+
+def remove_images_from_local_config(old_images):
+    """Delete these images' `- image:` lines from local.yaml's registry list.
+
+    Only those exact lines go: comments and everything else stay as written.
+    """
+    config_path = os.path.expanduser("~/.auto/config/local.yaml")
+    if not old_images or not os.path.isfile(config_path):
+        return
+
+    with open(config_path, encoding="utf-8") as f:
+        lines = f.readlines()
+
+    registry_idx, last_valid_idx = _get_registry_bounds(lines)
+    if registry_idx == -1:
+        return
+    doomed = {f"- image: {image}" for image in old_images}
+    kept = [
+        line
+        for i, line in enumerate(lines)
+        if not (registry_idx < i < last_valid_idx and line.strip() in doomed)
+    ]
+
+    try:
+        yaml.safe_load("".join(kept))
+    except yaml.YAMLError:
+        return
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        f.writelines(kept)
+
+    CONFIG["registry"] = [
+        item
+        for item in CONFIG.get("registry") or []
+        if not (isinstance(item, dict) and item.get("image") in old_images)
+    ]
 
 
 # Populate global configuration exactly once on load

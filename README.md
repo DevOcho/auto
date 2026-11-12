@@ -1,322 +1,139 @@
-# `auto`
+<div align="center">
 
-Easily manage your k3s/k3d local development environment using k8s YAML
-configs or helm charts.
+# auto
 
-`auto` sets up a local k3s environment utilizing k3d (k3s in docker).  It then
-uses config files to create your environment.  At DevOcho we have the goal
-of a sub 10 minute start up for a developer joining a project.  `auto` helps us
-achieve that goal.  We explain our process a bit more at the bottom of
-the README.  One amazing benefit of this less than 10 minute start, is that
-if anything obscure breaks, the developer is typically able to recover the
-entire local development environment in less than 10 minutes.  This is a huge boost to
-productivity.
+**One command from `git clone` to your whole platform running on a local
+Kubernetes cluster.**
 
-Features:
- - Kubernetes local development environment
- - Nginx ingress
- - HTTPS support for local development
- - Quick access to databases installed in the cluster (i.e. mysql, postgres, minio, etc.)
- - Shell autocompletion for commands and pod names
+[![CI](https://github.com/DevOcho/auto/actions/workflows/ci.yml/badge.svg)](https://github.com/DevOcho/auto/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/DevOcho/auto)](https://github.com/DevOcho/auto/releases)
+[![Docs](https://img.shields.io/badge/docs-devocho.github.io%2Fauto-c80036)](https://devocho.github.io/auto/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-Made with love by [DevOcho - Custom Software](https://www.devocho.com)
+[Documentation](https://devocho.github.io/auto/) ·
+[Try it](#try-it-in-five-minutes) ·
+[Why auto?](#why-auto) ·
+[Release notes](https://github.com/DevOcho/auto/releases)
 
-## Install `auto`
+</div>
 
-`auto` runs on Linux, macOS (Apple Silicon), and Windows via WSL2.
+![A first `auto start` on a new machine: it builds portal's image, creates the cluster and serves https://portal.local/ in about three minutes, shown here sped up](docs/assets/demo.gif)
 
-### Dependencies
-You will need one of the supported systems with the following pre-installed:
-- Bash or Zsh (`auto` uses POSIX shell commands; macOS defaults to Zsh, most Linux distros default to Bash)
-- Git
-- Python 3
-- Docker (both the daemon running and the bash command available as a non-root user)
-- K3D (k3d.io)
-- kubectl
+Your product is a handful of services, two databases, a storage bucket and an
+email provider. Getting a new developer running takes a day of setup notes,
+and every laptop ends up a little different.
 
-Optional dependencies:
-- Helm (if you plan to use helm charts for deployments)
-- mkcert (if you plan to use HTTPS/SSL locally)
-- libnss3-tools (required by mkcert on Linux)
-- [smalls](https://github.com/DevOcho/smalls) if working with Python and Peewee
+auto puts that setup in config files that live in your repos. You list your
+services' git repositories in one file, and `auto start`:
 
-### Install Commands
+- creates a [k3s](https://k3s.io) cluster in Docker, with a local image registry,
+- clones each repo and builds its image,
+- starts the MySQL, Postgres, Redis and Mailpit instances your services ask
+  for, plus S3 and other AWS services through [Floci](https://floci.io), and
+  creates their databases and buckets,
+- deploys each service with its own Helm chart or Kubernetes YAML,
+- serves each one over trusted HTTPS on a `.local` hostname, through
+  [Envoy Gateway](https://gateway.envoyproxy.io/).
 
-You can install it with the following commands:
+A fresh cluster is up in about two minutes, and a stopped one resumes in
+about 35 seconds. When something breaks, deleting the cluster and starting
+again is a normal, fast thing to do.
+
+## Try it in five minutes
+
+You need Docker, [k3d](https://k3d.io), kubectl and git, plus
+[mkcert](https://github.com/FiloSottile/mkcert) and certutil for HTTPS
+(certutil is in `libnss3-tools` on Debian and Ubuntu). auto runs on Linux
+(x86-64 and ARM), macOS (Apple Silicon) and Windows through WSL2.
 
 ```bash
 curl -fsSL https://www.devocho.com/auto.sh | bash
-```
-
-NOTE: `auto` is installed for a user and not installed system wide.
-
-The installer detects your default shell (`$SHELL`) and updates the matching rc
-file — `~/.bashrc` for Bash or `~/.zshrc` for Zsh (the default on macOS) — to
-add itself to your path. For that change to take effect you will need to run
-`source ~/.bashrc` (or `source ~/.zshrc`) in each open terminal or restart your
-terminals.
-
-This is what we add to your shell rc file:
-
-```bash
-# Adding auto to the path
-export PATH="$PATH:$HOME/.auto"
-```
-
-If you are using a shell other than Bash or Zsh, you will want to add the
-`~/.auto` folder to your path manually.
-
-On macOS, the installer also clears the `com.apple.quarantine` attribute that
-Gatekeeper applies to downloaded binaries, so `auto` runs on first invocation
-without a "cannot verify developer" warning.
-
-You can verify `auto` is installed with the following command:
-
-```bash
-auto --version
-```
-
-## Shell Autocompletion
-
-`auto` supports tab completion for Bash, Zsh, and Fish. This allows you to tab-complete commands, options, and even pod names (e.g., `auto start my<tab>` -> `auto start my-pod`).
-
-To see the installation instructions for your shell, run:
-
-```bash
-auto autocomplete --shell bash  # or zsh, fish
-```
-
-For automatic installation, you can use the `--install` flag:
-
-```bash
-auto autocomplete --shell bash --install
-source ~/.bashrc
-```
-
-## Quickstart
-
-Once you've installed `auto` you can get up and running with the following steps:
-
-### Edit the `~/.auto/config/local.yaml` file
-
-The install process installed a config folder for you.  Inside the config
-folder is the `local.yaml` file.  The `local.yaml` file tells `auto` about
-your desired local environment.
-
-#### The local code folder
-
-You need to edit the `code` folder in the `~/.auto/config/local.yaml` file to
-be a location that you want your project code to go.  By default this is
-`~/source`.  If this isn't where you want things then you need to change it.
-This is what I have set for mine:
-
-```bash
-# The code folder is where we will download all of your pod code repositories
-code: /home/rogue/source/devocho
-```
-
-#### Enabling HTTPS
-
-If you want your local cluster to run with SSL/HTTPS enabled, add the following line to your config:
-
-```yaml
-# Enable https in local development?
-https: true
-```
-
-*Note: This requires `mkcert` to be installed on your system.*
-
-#### Adding Your Pods
-
-`auto` checks the `[pods]` section to see which pods you want to run in
-your local k3s cluster.  We assume each pod is in it's own separate git
-repository.
-
-Below is an example to show you how to setup a pod:
-
-```yaml
-pods:
-  - repo: git@github.com:DevOcho/portal.git
-    branch: main
-```
-
-### Setting up your application to run in `auto`
-
-`auto` assumes a microservices environment (but doesn't specifically require
-it).  With that assumption, we need each pod to contain the config files needed
-to run it.  Since each pod is it's own unique git code repository.  We will look
-for the following files/folders in your repo:
-
-```
-/Dockerfile
-/.auto/config.yaml (explained below)
-/.auto/k8s   (if using k8s yaml)
-/.auto/helm  (if using helm charts)
-```
-
-In your pod you will need an `.auto` folder that contains a `config.yaml`
-file that tells auto how you want it to run.  Here is an example of a
-web application pod using a helm chart:
-
-```yaml
----
-# Portal information
-name: portal
-desc: Reference Portal
-version: 0.0.2
-
-# k8s/k3s commands
-command: helm install
-command-args: --set ingress.enabled=true
-
-# Database commands
-seed-command: seed_db.py
-init-command: init_db.py
-
-# Configuration for the system-pods
-system-pods:
-
-  # We need a MySQL database
-  - name: mysql
-    databases:
-      - name: www
-
-  # We need a MinIO bucket
-  - name: minio
-    buckets:
-       - name: www
-```
-
-You can see the repository for this example "portal" pod here:
-[https://github.com/DevOcho/portal] (https://github.com/DevOcho/portal)
-
-Once you have the config files ready, you can start the cluster and pods with the following command:
-
-```bash
+export PATH="$PATH:$HOME/.auto"   # new terminals get this from your shell's rc file
+echo "127.0.0.1 k3d-registry.local portal.local" | sudo tee -a /etc/hosts
 auto start
 ```
 
-If you prefer to use yaml vs helm, you can change your command to something like the following:
+Then open <https://portal.local>. The default config runs
+[portal](https://github.com/DevOcho/portal), a small example service. Next,
+[add your own](https://devocho.github.io/auto/guides/add-your-app/).
+
+## How it works
+
+One file on your machine lists the services:
 
 ```yaml
-# k8s/k3s commands
-command: kubectl apply
-command-args: -f '.auto/deployment.yaml'
+# ~/.auto/config/local.yaml
+pods:
+  - repo: git@github.com:your-org/api.git
+  - repo: git@github.com:your-org/web.git
 ```
 
-Where your entire yaml is in that file.  This command is run blindly so be careful.  With much
-power comes much responsibility.
+Each service's repo says how to run it, so its own team keeps it current:
 
-## HTTPS Support
+```yaml
+# api/.auto/config.yaml
+name: api
+version: 1.4.0
+command: helm install          # or: kubectl apply -f .auto/deployment.yaml
+seed-command: scripts/seed.py  # run by `auto seed api`
+system-pods:
+  - name: postgres
+    databases:
+      - name: api
+  - name: mailpit
+```
 
-When `https: true` is set in your `local.yaml`, `auto` will automatically:
-1. Generate a local Certificate Authority (CA) using `mkcert`.
-2. Generate SSL certificates for `localhost`, `*.local`, and your specific pod names (e.g., `portal.local`).
-3. Configure the Nginx Ingress Controller in the cluster to use these certificates.
-4. Expose port `443` on the load balancer.
+Your code folder is mounted into the cluster, so a pod can run your working
+copy with a reloading dev server: save a file and the change is live, with no
+image rebuild. A team keeps the shared `local.yaml` in a project repo, and a
+new developer's first day is `auto install <project repo>` and `auto start`.
 
-**Prerequisites:**
-You must install `mkcert` and `certutil` (often found in `libnss3-tools`) for this to work.
-*   **Ubuntu/Debian:** `sudo apt install libnss3-tools` and follow mkcert installation instructions.
-*   **Fedora:** `sudo dnf install nss-tools`
-*   **Arch:** `sudo pacman -S nss`
-*   **macOS:** `brew install mkcert nss`
+## Why auto?
 
-On the first run, `auto start` may prompt you for your `sudo` password to install the local CA into your system's trust store.
+| If you use | It gives you | What auto adds |
+| --- | --- | --- |
+| Docker Compose | Containers on your machine | Kubernetes. Your Helm charts and manifests run locally, not for the first time in staging. |
+| kind, k3d or minikube | An empty cluster | Everything after that: the registry, HTTPS, databases, cloning and building every repo. auto uses k3d underneath. |
+| Tilt, Skaffold or DevSpace | A rebuild-and-redeploy loop for the code you're editing | The environment around it: the cluster, shared databases and many repos from one config. They work together; point Tilt at auto's cluster. |
 
-## Usage
+auto is opinionated: one local cluster per machine, `.local` hostnames, and
+the system pods it ships. If you don't deploy to Kubernetes, Docker Compose is
+simpler. auto doesn't set up a cluster in the cloud for a whole team to
+develop on; teammates can still open the sites running on your machine
+([`sites-bind-address`](https://devocho.github.io/auto/reference/local-yaml/#sites-bind-address)).
 
-You can get basic help by running `auto --help`.
-Thanks for your interest!
+## Documentation
 
-`<pod>` is the short name of the pod.  For example, the portal above might be
-fully named "portal-596d876cff-pc99c".  When you see `<pod>` you can just use
-"portal" and auto will look up the full name for you.
+Everything is at **[devocho.github.io/auto](https://devocho.github.io/auto/)**:
 
-Here are the most common commands:
+- [Install](https://devocho.github.io/auto/getting-started/install/) and
+  [your first cluster](https://devocho.github.io/auto/getting-started/first-cluster/)
+- [Add your app](https://devocho.github.io/auto/guides/add-your-app/) and
+  [expose it with a route](https://devocho.github.io/auto/guides/routes/)
+- [Databases and system pods](https://devocho.github.io/auto/guides/system-pods/),
+  [Mailpit](https://devocho.github.io/auto/guides/mailpit/),
+  [HTTPS](https://devocho.github.io/auto/guides/https/)
+- [Share a setup with your team](https://devocho.github.io/auto/guides/teams/)
+- [Moving from ingress-nginx](https://devocho.github.io/auto/guides/from-ingress-nginx/)
+- Reference: [commands](https://devocho.github.io/auto/reference/commands/),
+  [`local.yaml`](https://devocho.github.io/auto/reference/local-yaml/),
+  [`.auto/config.yaml`](https://devocho.github.io/auto/reference/pod-config/)
+- [Troubleshooting](https://devocho.github.io/auto/troubleshooting/)
 
-### `auto start`
+## Upgrading from 0.8
 
-Start the cluster and all pods.
+0.9 replaces ingress-nginx, which was retired in March 2026, with Envoy
+Gateway, and needs a newer Kubernetes. Every existing cluster has to be
+recreated once, which resets its local databases. Back them up first; the
+[0.9.0 release notes](https://devocho.github.io/auto/releases/0.9.0/) have the
+commands, and the way back to 0.8.3.
 
-### `auto stop`
+## Contributing
 
-Stop the cluster.
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md)
+for the development setup and how changes are tested.
 
-Optionally you can `--delete-cluster` to remove the entire cluster from
-your machine.
+## License
 
-### `auto restart <pod>`
-
-This will remove and recreate the pod in the cluster.  This is nice if you are
-working on the config or Dockerfile.
-
-### `auto autocomplete`
-
-Setup shell integration for tab completion.
-
-### `auto images` (or `auto container-list`)
-
-Scans the running cluster and outputs a YAML list of container images. You can copy this output into the `registry:` section of your `local.yaml` to speed up cluster startup by pre-loading images.
-
-### `auto mysql`
-
-Start a MySQL shell to the service MySQL pod in your cluster.  Nice for creating
-databases or quick debugging.
-
-### `auto init <pod>`
-
-This is a convenience method for running an initialize script in your pod that
-can reset the database back to it's initial configuration (before seed data
-and before migrations).
-
-### `auto seed <pod>`
-
-This is a convenience method for running a database seed script in your pod
-that will provide test data. Any extra arguments after the pod name are passed
-to the seed-command as-is, e.g. `auto seed my-pod --admin-setup`.
-
-### `auto migrate <pod>`
-
-If you use the DevOcho `smalls` migration script in your application, this
-will run it inside a pod as a convenience method.
-
-### `auto rollback <pod> <number>`
-
-If you use the DevOcho `smalls` migration script in your application, this
-will run the rollback feature inside a pod as a convenience method.
-
-Example: ```auto rollback training 0123```
-
-The above example will rollback the database to the 0123 migration.
-
-### `auto tag <pod>`
-
-This will build the local pod image, tag it, and upload it to the local
-repository.
-
-## Sharing the auto configs with your team
-
-One frequent question we get is how do you share the auto configs with
-your team?  We typically have multiple teams working on projects so
-having multiple repos solved several problems for us but where do you
-put the "global" auto config?
-
-We do that with a specific repository for all of the
-microservices in a project.  We call it the "project repo" and it
-contains the config files for auto, a simple make process, and also
-contains the docs that explain the project as a whole with overviews of the
-different microservices.
-
-When a new software developer is joining the group, they will simply do
-the following:
-
-1. Install Auto
-2. Clone the "parent" repository with the auto config
-3. Run `make && make install` which loads the config in the ~/.auto/config folder
-4. Run `auto start`
-
-Auto will automatically clone all the git repositories, download docker images
-and populate the local registry.  It typically takes less than 10 minutes (average
-in 2025 was 2 minutes) for the developer to have everything they need on even
-the largest projects.
+[MIT](LICENSE). Made with love by [DevOcho](https://www.devocho.com), who use
+it every day to build their clients' platforms.

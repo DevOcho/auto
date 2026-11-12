@@ -1,25 +1,23 @@
 """Utils for the auto commands"""
 
-# pylint: disable=too-many-lines
-
 import configparser
-import json
+import ipaddress
 import os
 import re
 import shlex
-import shutil
 import socket
 import subprocess
 import sys
-import uuid
+from collections import deque
 from subprocess import CalledProcessError
 from time import sleep
 
 import yaml
-from autocli.config import CONFIG
 from rich import print as rprint
 from rich.table import Table
 from rich.text import Text
+
+from autocli.config import CONFIG
 
 
 def ensure_host_known(git_url):
@@ -96,9 +94,11 @@ def declare_error(error_msg: str, exit_auto: bool = True) -> None:
 
     rprint(f"\n [red]:x: Error[/red]: {error_msg}")
 
-    # If they want us to exit then let's stop everything
+    # If they want us to exit then let's stop everything.  Exit non-zero: a bare
+    # sys.exit() exits 0, which told scripts (and `script -qec`) that a failed
+    # run had succeeded.
     if exit_auto:
-        sys.exit()
+        sys.exit(1)
 
 
 def run_and_wait(
@@ -171,6 +171,60 @@ def run_and_wait(
         return 0
 
 
+def run_and_stream(cmd: str, on_line=None, cwd=None, suppress_error=False) -> int:
+    """Run a Bash command, handing each line of output to a callback as it arrives
+
+    ``run_and_wait()`` buffers everything with capture_output until the process
+    exits, which makes a multi-minute ``docker build`` look like a frozen
+    terminal. This variant streams line by line so callers can render progress
+    while the command is still working.
+
+    stderr is merged into stdout because buildkit writes its progress there
+    while docker push/pull write theirs to stdout, and callers want one
+    ordered stream of both.
+
+    Returns 1 on success and 0 on failure, matching run_and_wait's contract.
+    """
+
+    # Hold on to the last few lines so a failure can still show the user why,
+    # even though we streamed (and discarded) everything that came before.
+    tail = deque(maxlen=20)
+
+    try:
+        with subprocess.Popen(
+            cmd,
+            shell=True,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            errors="replace",
+        ) as proc:
+            for raw_line in proc.stdout:
+                line = raw_line.rstrip("\n")
+                tail.append(line)
+                if on_line:
+                    on_line(line)
+            returncode = proc.wait()
+
+    except OSError as error:
+        if not suppress_error:
+            rprint(f"\n[red]Command failed:[/red] {cmd}")
+            print(str(error))
+        return 0
+
+    if returncode != 0:
+        if not suppress_error:
+            rprint(f"\n[red]Command failed:[/red] {cmd}")
+            # Use standard print to avoid rich parsing error contents as tags
+            for line in tail:
+                print(line)
+        return 0
+
+    return 1
+
+
 def run_and_return(cmd: str) -> str:
     """Run a Bash command and return the output as a string"""
 
@@ -180,6 +234,23 @@ def run_and_return(cmd: str) -> str:
         return output.stdout.decode("utf-8").strip()
     except CalledProcessError:
         return ""
+
+
+def run_silent(cmd, merge_stderr=False):
+    """Run a shell command discarding its output, raising on failure.
+
+    The shared "fire it and don't care about output, but blow up if it fails"
+    pattern used by the database/object-store helpers (which retry on the
+    resulting CalledProcessError). ``merge_stderr=True`` routes stderr into the
+    (discarded) stdout, matching callers that previously set stderr=STDOUT.
+    """
+    subprocess.run(
+        cmd,
+        shell=True,
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.STDOUT if merge_stderr else subprocess.DEVNULL,
+    )
 
 
 def run_async(cmd: str) -> bytes:
@@ -223,6 +294,29 @@ def verify_cluster_connection(retries=10) -> bool:
     return False
 
 
+def wait_for_api(max_wait_time=90) -> bool:
+    """Wait until the Kubernetes API serves the schema `kubectl apply` validates against.
+
+    Right after `k3d cluster start`, `kubectl cluster-info` already answers
+    while `kubectl apply` still fails ("failed to download openapi"), so the
+    first system pod's commands retried every 2 s: one resume took 48 s
+    instead of about 20.
+    """
+    probe = "kubectl get --raw /openapi/v3"
+    for waited in range(max_wait_time):
+        if (
+            subprocess.run(
+                probe, shell=True, capture_output=True, check=False
+            ).returncode
+            == 0
+        ):
+            return True
+        if waited == 0:
+            rprint("     = Waiting for the Kubernetes API...")
+        sleep(1)
+    return False
+
+
 def wait_for_pod_status(podname: str, status: str, max_wait_time=60) -> bool:
     """Check for a pod to be complete and then return"""
 
@@ -256,79 +350,16 @@ def wait_for_pod_status(podname: str, status: str, max_wait_time=60) -> bool:
     return bool(pod_complete)
 
 
-def wait_for_mysql_socket(retries=30) -> bool:
-    """Wait for MySQL socket to be available inside the pod"""
-    pod_name = get_full_pod_name("mysql").strip("\n")
-    if not pod_name:
-        return False
-
-    for _ in range(retries):
-        # We use a real query to test connectivity, not just admin ping
-        cmd = f'kubectl exec {pod_name} -- mysql -uroot -ppassword -e "SELECT 1"'
-        try:
-            subprocess.run(cmd, capture_output=True, shell=True, check=True)
-            return True
-        except CalledProcessError:
-            sleep(1)
-    return False
-
-
-def wait_for_postgres_socket(retries=30) -> bool:
-    """Wait for Postgres socket to be available inside the pod"""
-    pod_name = get_full_pod_name("postgres").strip("\n")
-    if not pod_name:
-        return False
-
-    for _ in range(retries):
-        # We use a real query to test connectivity
-        cmd = f'kubectl exec {pod_name} -- psql -U root -d postgres -c "SELECT 1"'
-        try:
-            subprocess.run(cmd, capture_output=True, shell=True, check=True)
-            return True
-        except CalledProcessError:
-            sleep(1)
-    return False
-
-
-def create_postgres_database(database, retries=0):
-    """Create a database inside postgres"""
-    # We use a quick bash command to see if the DB exists, and create it if it doesn't.
-    # This prevents Postgres from throwing errors on subsequent "auto start" runs.
-    container_cmd = f'sh -c "psql -U root -lqt | grep -qw {database} || createdb -U root {database}"'
-    pod_name = get_full_pod_name("postgres").strip("\n")
-
-    if pod_name:
-        cmd = f"kubectl exec {pod_name} -- {container_cmd}"
-
-        try:
-            # Run the command silently
-            subprocess.run(
-                cmd,
-                shell=True,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except CalledProcessError:
-            if retries < 10:  # Allow up to 30s for slower startups
-                sleep(3)
-                create_postgres_database(database, retries=retries + 1)
-            else:
-                rprint(f"  [red]FAILED: Could not create database[/] {database}")
-
-    else:
-        # If pod_name not found, wait and retry
-        if retries < 10:
-            sleep(3)
-            create_postgres_database(database, retries=retries + 1)
-        else:
-            rprint(f"  [red]FAILED: Could not create database[/] {database}")
-
-
-def get_full_pod_name(pod) -> str:
+def get_full_pod_name(pod, only_running=True) -> str:
     """Get the full name of the pod for a k3s pod by application name"""
 
-    cmd = f"kubectl get pods | grep {pod} " + "| grep Running | awk 'NR==1{{print $1}}'"
+    if only_running:
+        cmd = (
+            f"kubectl get pods | grep {pod} "
+            + "| grep Running | awk 'NR==1{{print $1}}'"
+        )
+    else:
+        cmd = f"kubectl get pods | grep {pod} " + "| awk 'NR==1{{print $1}}'"
 
     # Make this command safe to run
     cmd = shlex.quote(cmd)
@@ -341,244 +372,19 @@ def get_full_pod_name(pod) -> str:
     return pod_name.stdout.decode().strip("\n")
 
 
-def connect_to_db() -> None:
-    """Get the full name of the pod for a k3s pod by application name"""
+def get_pod_instances(pod) -> list:
+    """Names of the pods that belong to the deployment or statefulset `pod`
 
-    # The command we will send to the mysql pod
-    container_cmd = "mysql -uroot -ppassword"
+    Only whole generated names match -- `api-<hash>-<id>` from a deployment,
+    `api-0` from a statefulset -- so `api` doesn't also catch `api-gateway-...`.
+    """
 
-    # Determine which pod to exec against and build the command
-    pod_name = get_full_pod_name("mysql").strip("\n")
-    cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
-
-    # Make this command safe to run
-    cmd = shlex.quote(cmd)
-    args = shlex.split(cmd)
-
-    # Run the command and return the output
-    subprocess.run(args, shell=True, check=True)
-
-
-def connect_to_db_postgres() -> None:
-    """Get the full name of the pod for a k3s pod by application name"""
-
-    # The command we will send to the mysql pod
-    container_cmd = "psql -U root postgres"
-
-    # Determine which pod to exec against and build the command
-    pod_name = get_full_pod_name("postgres").strip("\n")
-    cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
-
-    # Make this command safe to run
-    cmd = shlex.quote(cmd)
-    args = shlex.split(cmd)
-
-    # Run the command and return the output
-    subprocess.run(args, shell=True, check=True)
-
-
-def connect_to_minio() -> None:
-    """This opens the port-forward to MinIO to allow dev access"""
-
-    # Determine which pod to exec against and build the command
-    pod_name = get_full_pod_name("minio").strip("\n")
-
-    # The command we are going to run
-    cmd = f"kubectl port-forward {pod_name} 9090:9090"
-
-    # Make this command safe to run
-    cmd = shlex.quote(cmd)
-    args = shlex.split(cmd)
-
-    # Run the command and return the output
-    subprocess.run(args, shell=True, check=True)
-
-
-def create_mysql_database(database, retries=0):
-    """Create a database inside mysql"""
-
-    # IF NOT EXISTS prevents a failed retry loop when the database already exists
-    container_cmd = (
-        f'mysql -uroot -ppassword --execute="CREATE DATABASE IF NOT EXISTS {database}"'
+    output = run_and_return(
+        "kubectl get pods --no-headers -o custom-columns=:metadata.name"
     )
-    pod_name = get_full_pod_name("mysql").strip("\n")
-
-    if pod_name:
-        cmd = f"kubectl exec {pod_name} -- {container_cmd}"
-
-        try:
-            # Run the command silently.
-            # We capture output to suppress "ERROR 2002" messages during startup.
-            subprocess.run(
-                cmd,
-                shell=True,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except CalledProcessError:
-            if retries < 10:  # Allow up to 30s for slower startups
-                sleep(3)
-                create_mysql_database(database, retries=retries + 1)
-            else:
-                rprint(f"  [red]FAILED: Could not create database[/] {database}")
-
-    else:
-        # If pod_name not found, wait and retry
-        if retries < 10:
-            sleep(3)
-            create_mysql_database(database, retries=retries + 1)
-        else:
-            rprint(f"  [red]FAILED: Could not create database[/] {database}")
-
-
-def create_minio_bucket(bucket):
-    """Create a bucket in MinIO"""
-
-    pod_name = get_full_pod_name("minio").strip("\n")
-
-    if pod_name:
-        # Batch all three mc commands into a single exec call to avoid subprocess overhead per bucket
-        combined = (
-            f"mc mb --quiet myminio/{bucket} ; "  # disable file list
-            f"mc anonymous --quiet set none myminio/{bucket} && "  # enable full path access
-            f"mc anonymous --quiet set download myminio/{bucket}/*"
-        )
-        cmd = f"kubectl exec {pod_name} -- sh -c {shlex.quote(combined)}"
-        subprocess.run(
-            cmd,
-            shell=True,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.STDOUT,
-        )
-
-
-def check_docker():
-    """Make sure docker exists and the service is running"""
-
-    # Error count
-    errors = 0
-
-    # Verify docker is installed
-    bash_command = """which docker"""
-    if not run_and_wait(bash_command, check_result="docker"):
-        declare_error(
-            """Docker is missing!
-               [yellow]We didn't see docker on your system.  You'll need docker installed to continue""",
-            exit_auto=False,
-        )
-
-        errors += 1
-
-    # Verify docker is running
-    bash_command = """ps aux"""
-    if not run_and_wait(bash_command, check_result="dockerd"):
-        declare_error(
-            """Docker Daemon doesn't appear to be running.
-        Please run the following command:
-          `sudo service docker start`""",
-            exit_auto=False,
-        )
-        errors += 1
-
-    # Verify the `docker` command is available to this user
-    bash_command = """docker ps"""
-    if not run_and_wait(bash_command, check_result="CONTAINER ID"):
-        declare_error(
-            """The `docker` command doesn't appear to be working!
-             Perhaps you need to run the post install steps:
-               https://docs.docker.com/engine/install/linux-postinstall/
-          """,
-            exit_auto=False,
-        )
-        errors += 1
-
-    return errors
-
-
-def check_k8s():
-    """Look for the things necessary to run k3s via k3d"""
-
-    # Error count
-    errors = 0
-
-    # check for the k3d command
-    bash_command = """k3d cluster list"""
-    if not run_and_wait(bash_command, check_result="LOADBALANCER"):
-        declare_error(
-            """The `k3d` command doesn't appear to be installed!
-             Please visit https://k3d.io for installation instructions.
-          """,
-            exit_auto=False,
-        )
-        errors += 1
-
-    # check for the kubectl command
-    bash_command = """kubectl get --help"""
-    if not run_and_wait(bash_command, check_result="Display one or many resources"):
-        declare_error(
-            """The `kubectl` command doesn't appear to be installed!
-             Please install it to continue.
-          """,
-            exit_auto=False,
-        )
-        errors += 1
-
-    return errors
-
-
-def check_helm():
-    """Look for the things necessary to run helm"""
-
-    # Error count
-    errors = 0
-
-    # check for the helm command
-    bash_command = """helm version"""
-    if not run_and_wait(bash_command, check_result="clean"):
-        declare_error(
-            """The `helm` command doesn't appear to be installed!
-             Please visit https://helm.sh/docs/intro/install/ for installation instructions.
-          """,
-            exit_auto=False,
-        )
-        errors += 1
-
-    return errors
-
-
-def check_registry_host_entry():
-    """Check that appropriate host entries are made"""
-
-    # Error count
-    errors = 0
-
-    # check for the k3d-registry.local host entry
-    if not check_host_entry("k3d-registry", exit_auto=False):
-        errors += 1
-
-    return errors
-
-
-def check_host_entry(host, exit_auto: bool = True):
-    """Check that a host entry for the pod has been made"""
-
-    # check for the k3d-registry.local host entry
-    bash_command = """cat /etc/hosts"""
-    if not run_and_wait(bash_command, check_result=host):
-        declare_error(
-            f"""No registry entry in /etc/hosts !
-       Please add the following to your /etc/hosts file
-       127.0.0.1      {host}.local
-          """,
-            exit_auto=exit_auto,
-        )
-
-        return False
-
-    # We found the entry so tell them everything is ok
-    return True
+    name = re.escape(pod)
+    pattern = re.compile(rf"^{name}-[a-z0-9]{{6,10}}-[a-z0-9]{{5}}$|^{name}-\d+$")
+    return [line for line in output.splitlines() if pattern.match(line.strip())]
 
 
 def pull_repo(repo, code_folder):
@@ -605,10 +411,25 @@ def pull_repo(repo, code_folder):
             os.chdir(cwd)
             return
 
-        # `git pull` the repo
-        cmd = f"git pull {repo['repo']}"
+        # Fetch then fast-forward only — never discards local commits.
+        # On divergence (incl. remote force-push), --ff-only fails cleanly
+        # with zero working-tree mutation instead of resetting.
+        #
+        # Name the branch explicitly: a bare `git fetch <url>` puts the remote's
+        # default branch in FETCH_HEAD, so a pod pinned to another branch (say
+        # `development`) would try to fast-forward onto `main` and always fail.
+        # install_config_from_repo passes a repo with no branch key, so fall
+        # back to the default branch when none is configured.
+        branch = repo.get("branch", "")
+        run_and_wait(f"git fetch {repo['repo']} {branch}".strip(), capture_output=True)
+        cmd = "git merge --ff-only FETCH_HEAD"
         if not run_and_wait(cmd):
-            rprint(f"[yellow]       :warning: Skipping {repo['repo']}")
+            rprint(
+                f"[yellow]       :warning: {repo['repo']} is out of sync with the remote "
+                "(local commits, or a diverged branch) — left untouched"
+            )
+            os.chdir(cwd)
+            return
 
     else:
         try:
@@ -659,38 +480,6 @@ def get_pod_config(pod):
     return config
 
 
-def setup_minio(retries=5):
-    """Setup the credentials and configure and deploy nginx"""
-
-    container_cmds = [
-        "mc alias -q set myminio http://minio.default.svc.cluster.local:9000 minio minio123"
-    ]
-    pod_name = get_full_pod_name("minio").strip("\n")
-
-    if pod_name:
-        # Let's run the commands in the container to setup the access creds
-        for container_cmd in container_cmds:
-            full_cmd = f"kubectl exec -it {pod_name} -- {container_cmd}"
-
-            # Make this command safe to run
-            full_cmd = shlex.quote(full_cmd)
-            cmd_with_args = shlex.split(full_cmd)
-
-            # Run the command and return the output
-            subprocess.run(
-                cmd_with_args,
-                shell=True,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.STDOUT,
-            )
-
-    else:
-        if retries > 1:
-            sleep(3)
-            setup_minio(retries - 1)
-
-
 def get_required_system_pods(config):
     """Determine which system pods need to be started based on global and pod configs"""
     required_pods = set()
@@ -702,6 +491,62 @@ def get_required_system_pods(config):
                 required_pods.add(sys_pod["pod"]["name"])
 
     # 2. Extract implied system pod requirements by crawling inside pulled application repositories
+    required_pods.update(system_pod_requests(config))
+
+    return required_pods
+
+
+# How auto's own manifests name the local registry, and Docker Hub's defaults.
+# `registry:` in local.yaml names images without them.
+IMAGE_PREFIXES = ("k3d-registry.local:12345/", "docker.io/library/", "docker.io/")
+
+
+def plain_image_name(image):
+    """mysql:8.0 for k3d-registry.local:12345/mysql:8.0 or docker.io/library/mysql:8.0"""
+    image = image.split("@")[0]
+    for prefix in IMAGE_PREFIXES:
+        if image.startswith(prefix):
+            return image.removeprefix(prefix)
+    return image
+
+
+def manifest_images(commands):
+    """The container images in the manifests a system pod's commands apply"""
+    images = set()
+    for command in commands:
+        try:
+            words = shlex.split(command)
+        except ValueError:
+            continue
+        for flag, word in zip(words, words[1:]):
+            path = os.path.expanduser(word)
+            if flag != "-f" or not os.path.isfile(path):
+                continue
+            try:
+                with open(path, encoding="utf-8") as manifest:
+                    docs = list(yaml.safe_load_all(manifest))
+            except (OSError, yaml.YAMLError):
+                continue
+            _collect_images(docs, images)
+    return images
+
+
+def _collect_images(node, images):
+    """Add every `image:` value under node to images"""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "image" and isinstance(value, str):
+                images.add(plain_image_name(value))
+            else:
+                _collect_images(value, images)
+    elif isinstance(node, list):
+        for item in node:
+            _collect_images(item, images)
+
+
+def system_pod_requests(config):
+    """Map each system pod the pods' .auto/config.yaml ask for to the pods asking"""
+    requests = {}
     code_dir = config.get("code", "")
     for pod in config.get("pods", []):
         if isinstance(pod, dict):
@@ -719,12 +564,94 @@ def get_required_system_pods(config):
                     pod_config = yaml.safe_load(pod_yaml)
                     if pod_config and "system-pods" in pod_config:
                         for req_sys_pod in pod_config["system-pods"]:
-                            required_pods.add(req_sys_pod["name"])
+                            requests.setdefault(req_sys_pod["name"], []).append(
+                                pod_name
+                            )
             except (OSError, yaml.YAMLError):
                 # Pass gracefully if we hit a permission/read issue or badly formatted yaml
                 pass
 
-    return required_pods
+    return requests
+
+
+# Where the cluster's ports and the registry listen on this machine. Localhost
+# by default: the databases have fixed local passwords, and the registry and
+# the Kubernetes API take anyone who can reach them.
+DEFAULT_BIND_ADDRESS = "127.0.0.1"
+
+
+def _address_setting(key: str, default: str) -> str:
+    """An IPv4 address from local.yaml, or default when it isn't set"""
+    value = str(CONFIG.get(key, default)).strip()
+    try:
+        ipaddress.IPv4Address(value)
+    except ValueError:
+        declare_error(
+            f"{key} in ~/.auto/config/local.yaml is '{value}'.\n"
+            "   It has to be an IPv4 address: 127.0.0.1 (this machine only)\n"
+            "   or 0.0.0.0 (every network interface)."
+        )
+    return value
+
+
+def bind_address() -> str:
+    """The host address the cluster's ports and the registry are published on.
+
+    `bind-address` in local.yaml, 127.0.0.1 unless set. A team sharing one dev
+    setup on a network it trusts sets 0.0.0.0 (or one interface's address).
+    The sites can be shared on their own: see sites_bind_address().
+    """
+    return _address_setting("bind-address", DEFAULT_BIND_ADDRESS)
+
+
+def sites_bind_address() -> str:
+    """The host address the sites (80 and 443, or 8088) are published on.
+
+    `sites-bind-address` in local.yaml, or bind-address when unset. A team
+    whose developers open each other's sites by a hosts entry sets 0.0.0.0
+    here, which keeps the databases, the registry and the API on this machine.
+    """
+    return _address_setting("sites-bind-address", bind_address())
+
+
+def warn_if_bound_elsewhere(container: str, what: str, fix: str, site_ports=()) -> None:
+    """Say so when a container publishes ports on another address than configured.
+
+    Ports are fixed when the container is made, so a registry or cluster made
+    by an older auto, or before bind-address changed, keeps its old address
+    until it is recreated. site_ports are the container's ports for the sites,
+    which follow sites-bind-address instead of bind-address.
+    """
+    settings = {
+        "bind-address": bind_address(),
+        "sites-bind-address": sites_bind_address(),
+    }
+    wrong = {}  # setting -> addresses found instead of its value
+    for line in run_and_return(f"docker port {container}").splitlines():
+        port, _, host = line.partition("->")
+        if not host:
+            continue
+        setting = (
+            "sites-bind-address"
+            if port.split("/")[0].strip() in site_ports
+            else "bind-address"
+        )
+        wanted = settings[setting]
+        allowed = {wanted, "[::]"} if wanted == "0.0.0.0" else {wanted}
+        address = host.strip().rsplit(":", 1)[0]
+        if address not in allowed:
+            wrong.setdefault(setting, set()).add(address)
+    for setting, addresses in wrong.items():
+        subject = (
+            f"{what}'s sites listen"
+            if setting == "sites-bind-address"
+            else f"{what} listens"
+        )
+        rprint(
+            f"  -- [yellow]{subject} on {', '.join(sorted(addresses))}, not "
+            f"{settings[setting]} ({setting}).[/yellow]\n"
+            f"  [yellow]   It was made before that was set. To recreate it: {fix}[/yellow]"
+        )
 
 
 def is_port_in_use(port: int) -> bool:
@@ -765,9 +692,10 @@ def get_cluster_status():
     style = "red"
 
     # Check if k3d is even installed and lists the cluster
-    if run_and_wait("k3d cluster list", check_result="NAME"):
+    # suppress_error=True prevents Docker daemon errors when cluster is simply stopped
+    if run_and_wait("k3d cluster list", check_result="NAME", suppress_error=True):
         # Check if running (1/1 servers running)
-        if run_and_wait("k3d cluster list", check_result="1/1"):
+        if run_and_wait("k3d cluster list", check_result="1/1", suppress_error=True):
             status = "Running"
             style = "green"
     return status, style
@@ -781,6 +709,62 @@ def get_registry_status():
         status = "Running"
         style = "green"
     return status, style
+
+
+# Every auto setup already depends on resolving this (pod repos are cloned from
+# it), so it makes a fair test of whether outside DNS works at all
+DNS_PROBE_HOST = "github.com"
+
+
+def nodes_without_dns():
+    """List the cluster's nodes that can't resolve names outside the cluster
+
+    Docker gives each container a snapshot of the host's DNS servers when it
+    starts and never refreshes it.  k3d creates its nodes in Docker's default
+    bridge network mode, so that snapshot is a fixed list of upstream servers
+    rather than a forward to systemd-resolved, and it goes stale whenever the
+    host's network changes.  The common case is a reboot: Docker restarts the
+    nodes before Wi-Fi is up, they capture no servers at all, and every pod
+    gets SERVFAIL for outside names until the nodes are restarted.
+
+    Returns None when the host itself can't resolve the probe name -- it's
+    offline, so restarting the nodes wouldn't help.
+    """
+
+    try:
+        socket.gethostbyname(DNS_PROBE_HOST)
+    except OSError:
+        return None
+
+    nodes_cmd = (
+        "docker ps --filter label=k3d.cluster=k3s-default "
+        """--format '{{.Names}} {{.Label "k3d.role"}}'"""
+    )
+
+    broken = []
+    for line in run_and_return(nodes_cmd).splitlines():
+        name, _, role = line.partition(" ")
+
+        # The load balancer and registry don't run pods, so their DNS is moot
+        if role not in ("server", "agent"):
+            continue
+
+        # The node's resolver is the same path CoreDNS forwards outside names to
+        lookup = f"docker exec {name} nslookup {DNS_PROBE_HOST}"
+        if not run_and_wait(lookup, suppress_error=True):
+            broken.append(name)
+
+    return broken
+
+
+def get_cluster_dns_status():
+    """Helper to check whether pods can resolve names outside the cluster"""
+    broken = nodes_without_dns()
+    if broken is None:
+        return "Unknown (host is offline)", "yellow"
+    if broken:
+        return "Broken - run 'auto start' to fix", "red"
+    return "Working", "green"
 
 
 def build_pod_table(namespace, all_namespaces):
@@ -866,248 +850,26 @@ def build_pod_table(namespace, all_namespaces):
     return table
 
 
-def check_certutil():
-    """Check if libnss3-tools is installed"""
-    if not shutil.which("certutil"):
-        declare_error(
-            "certutil is not installed (required for mkcert).\n"
-            "  Please install it:\n"
-            "  - Ubuntu/Debian: sudo apt install libnss3-tools\n"
-            "  - Fedora: sudo dnf install nss-tools\n"
-            "  - Arch: sudo pacman -S nss"
-        )
+def get_pod_status(pod):
+    """Extracts the Status column of a specific pod, in any phase
+    (Pending, Running, Succeeded, Failed, Unknown) or any other error
+    states
 
-
-def check_mkcert():
-    """Check if mkcert is installed"""
-    if not shutil.which("mkcert"):
-        declare_error(
-            "mkcert is not installed. Please install it to use HTTPS.\n"
-            "    See: https://github.com/FiloSottile/mkcert"
-            "Or set `HTTPS: false` in `~/.auto/config/local.yaml`"
-        )
-    # Also check for certutil so we don't fail partially
-    check_certutil()
-
-
-def create_local_certs(cert_path, additional_domains=None):
-    """Create local certificates using mkcert"""
-
-    if additional_domains is None:
-        additional_domains = []
-
-    # Create the directory if it doesn't exist
-    if not os.path.isdir(cert_path):
-        os.makedirs(cert_path)
-
-    key_file = os.path.join(cert_path, "key.pem")
-    cert_file = os.path.join(cert_path, "cert.pem")
-
-    # Install the local CA
-    # Try silently first (success if already installed or no sudo needed)
-    try:
-        subprocess.run(
-            "mkcert -install",
-            shell=True,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except CalledProcessError:
-        # If silent fail, run interactively (likely needs sudo password)
-        rprint("  -- Installing local CA (may prompt for password)")
-        os.system("mkcert -install")
-
-    # Generate the certs
-    # We suppress output here unless it fails
-    domain_args = " ".join(additional_domains)
-    cmd = (
-        f"mkcert -key-file {key_file} -cert-file {cert_file} "
-        f"'*.local' localhost 127.0.0.1 ::1 {domain_args}"
-    )
-
-    try:
-        subprocess.run(
-            cmd,
-            shell=True,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
-    except CalledProcessError as e:
-        rprint("[red]Error generating certificates:[/red]")
-        print(e.stderr.decode())
-
-    return key_file, cert_file
-
-
-def get_deployment_spec(name, namespace="default"):
-    """Fetch a deployment's spec as a dict, or None if it doesn't exist"""
-    cmd = (
-        f"kubectl get deployment {shlex.quote(name)} "
-        f"-n {shlex.quote(namespace)} -o json"
-    )
-    try:
-        result = subprocess.run(
-            cmd, shell=True, capture_output=True, check=True, text=True
-        )
-        return json.loads(result.stdout)
-    except (CalledProcessError, json.JSONDecodeError):
+    Args:
+        pod (str): The FULL name of the pod to check
+    Returns:
+        status (str): Pod status (Running | Error | CrashLoopBackOff | etc)
+    Raises:
+        None: Returns None if the pod is not found or if there is an error running the command
+    """
+    if not pod:
         return None
 
+    cmd = f"kubectl get pod {pod} --no-headers | awk '{{print $3}}'"
+    # Run the command and return the raw STATUS column kubectl shows
+    status = run_and_return(cmd)
 
-def _build_runner_pod_manifest(
-    pod_name,
-    runner_name,
-    action_label,
-    command_args,
-    deployment,
-    extra_env,
-    namespace,
-):  # pylint: disable=too-many-arguments
-    """Build a Pod manifest mirroring deployment's first container, with overrides"""
-    spec_template = deployment["spec"]["template"]["spec"]
-    container = spec_template["containers"][0]
-
-    env_list = list(container.get("env", []))
-    if extra_env:
-        env_list.extend(extra_env)
-
-    pod_spec = {
-        "restartPolicy": "Never",
-        "containers": [
-            {
-                "name": action_label,
-                "image": container["image"],
-                "command": list(command_args),
-                "workingDir": container.get("workingDir", f"/mnt/code/{pod_name}"),
-                "env": env_list,
-                "envFrom": container.get("envFrom", []),
-                "volumeMounts": container.get("volumeMounts", []),
-            }
-        ],
-        "volumes": spec_template.get("volumes", []),
-    }
-    if "serviceAccountName" in spec_template:
-        pod_spec["serviceAccountName"] = spec_template["serviceAccountName"]
-    if "imagePullSecrets" in spec_template:
-        pod_spec["imagePullSecrets"] = spec_template["imagePullSecrets"]
-
-    return {
-        "apiVersion": "v1",
-        "kind": "Pod",
-        "metadata": {
-            "name": runner_name,
-            "namespace": namespace,
-            "labels": {
-                "app.kubernetes.io/managed-by": "auto",
-                "auto.devocho/role": action_label,
-                "auto.devocho/target": pod_name,
-            },
-        },
-        "spec": pod_spec,
-    }
-
-
-def run_one_shot_pod_command(
-    pod_name,
-    command_args,
-    action_label,
-    extra_env=None,
-    namespace="default",
-):
-    """Run command_args in an ephemeral pod that mirrors pod_name's deployment.
-
-    Spawns a fresh Pod using the same image, env, envFrom, volumeMounts, and
-    volumes as the application Deployment, but overrides the command. This
-    avoids depending on the application container being healthy — the right
-    behavior for migrations, db init, and seed scripts that should run even
-    if the app pod is CrashLooping.
-
-    Returns 0 on Pod phase Succeeded, 1 otherwise.
-    """
-    deployment = get_deployment_spec(pod_name, namespace)
-    if not deployment:
-        declare_error(
-            f"Deployment '{pod_name}' not found in namespace '{namespace}'. "
-            f"Run 'auto start {pod_name}' first to install it."
-        )
-        return 1
-
-    # Unique pod name so concurrent runs and old failed migrators don't collide
-    runner_name = f"{pod_name}-{action_label}-{uuid.uuid4().hex[:8]}"
-    pod_manifest = _build_runner_pod_manifest(
-        pod_name,
-        runner_name,
-        action_label,
-        command_args,
-        deployment,
-        extra_env,
-        namespace,
-    )
-    manifest_yaml = yaml.safe_dump(pod_manifest)
-
-    try:
-        rprint(f"  -- Spawning {action_label} pod for {pod_name}")
-        result = subprocess.run(
-            "kubectl apply -f -",
-            shell=True,
-            input=manifest_yaml,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            rprint(f"[red]Failed to create {action_label} pod[/red]")
-            print(result.stderr)
-            return 1
-
-        # Short timeout — if the migrator can't even schedule, something
-        # structural is wrong (missing image, bad envFrom secret, etc.)
-        sched_cmd = (
-            f"kubectl wait --for=condition=PodScheduled "
-            f"pod/{runner_name} -n {namespace} --timeout=60s"
-        )
-        if not run_and_wait(sched_cmd, capture_output=True, suppress_error=True):
-            rprint(
-                f"[red]{action_label} pod failed to schedule "
-                f"— describe output:[/red]"
-            )
-            run_and_wait(
-                f"kubectl describe pod/{runner_name} -n {namespace}",
-                capture_output=False,
-            )
-            return 1
-
-        # Stream logs until the container exits. os.system avoids buffering
-        # so the user sees output in real time.
-        rprint(f"  -- Streaming {action_label} output for {pod_name}")
-        os.system(f"kubectl logs -f pod/{runner_name} -n {namespace}")
-
-        # Pod has exited (or user Ctrl-C'd). Check the actual phase rather
-        # than trusting the log stream's exit code.
-        phase_cmd = (
-            f"kubectl get pod/{runner_name} -n {namespace} "
-            "-o jsonpath='{.status.phase}'"
-        )
-        phase_result = subprocess.run(
-            phase_cmd, shell=True, capture_output=True, text=True, check=False
-        )
-        phase = phase_result.stdout.strip().strip("'")
-
-        if phase == "Succeeded":
-            rprint(f"  -- [green]{action_label} for {pod_name} completed[/green]")
-            return 0
-
-        rprint(
-            f"  -- [red]{action_label} for {pod_name} ended in phase "
-            f"{phase or 'unknown'}[/red]"
-        )
-        return 1
-    finally:
-        # Always clean up so a leaked migrator doesn't block a retry
-        run_and_wait(
-            f"kubectl delete pod/{runner_name} -n {namespace} " f"--ignore-not-found",
-            capture_output=True,
-            suppress_error=True,
-        )
+    if not status:
+        return None
+    # Take the first line of output and strip whitespace to get the status
+    return status.splitlines()[0].strip()

@@ -2,112 +2,24 @@
 
 import os
 import re
+import select
 import shutil
 import subprocess
 import sys
+import termios
 import time
+import tty
 from pathlib import Path
 
 import yaml
-from autocli import registry, services, utils
-from autocli.config import CONFIG
 from rich import print as rprint
 from rich.console import Console, Group
 from rich.live import Live
 from rich.progress import Progress
 from rich.text import Text
 
-
-def _setup_https_certificates(pods):
-    """Helper to setup HTTPS certificates interactively"""
-    rprint("[deep_sky_blue1]Setting up HTTPS certificates...[/]")
-    utils.check_mkcert()
-
-    pod_domains = []
-    for repo in pods:
-        p_name = repo["repo"].split("/")[-1:][0].replace(".git", "")
-        pod_domains.append(f"{p_name}.local")
-
-    cert_path = os.path.expanduser("~") + "/.auto/certs"
-    key_file, cert_file = utils.create_local_certs(
-        cert_path, additional_domains=pod_domains
-    )
-    rprint(" :white_heavy_check_mark:[green] Certificates Ready")
-    return key_file, cert_file
-
-
-def _update_tls_secrets(key_file, cert_file):
-    """Update TLS secrets in the running cluster and restart ingress to pick them up"""
-    rprint("[deep_sky_blue1]Updating TLS secrets in cluster...[/]")
-    for ns in ["default", "ingress-nginx"]:
-        cmd = (
-            f"kubectl create secret tls local-tls --key {key_file} --cert {cert_file} "
-            f"-n {ns} --dry-run=client -o yaml | kubectl apply -f -"
-        )
-        utils.run_and_wait(cmd, capture_output=True)
-    utils.run_and_wait(
-        "kubectl rollout restart deployment ingress-nginx-controller -n ingress-nginx",
-        capture_output=True,
-    )
-    rprint(" :white_heavy_check_mark:[green] TLS secrets updated")
-
-
-def _discover_ingress_hosts():
-    """Read the hostnames every deployed Ingress actually declares.
-
-    The cluster is the source of truth for SSL coverage: pods define their own
-    hostnames in their Helm charts (a single pod can expose several, e.g. both
-    'app.local' and a customer 'portal.app.local'), which auto cannot guess from
-    the repo name alone. We collect spec.rules[].host and spec.tls[].hosts[]
-    across all namespaces and return the de-duplicated, sorted list.
-    """
-    cmd = (
-        "kubectl get ingress --all-namespaces -o jsonpath="
-        '\'{range .items[*]}{range .spec.rules[*]}{.host}{"\\n"}{end}'
-        '{range .spec.tls[*].hosts[*]}{@}{"\\n"}{end}{end}\''
-    )
-    output = utils.run_and_return(cmd)
-    hosts = {line.strip() for line in output.split() if line.strip()}
-    return sorted(hosts)
-
-
-def _warn_missing_host_entries(hosts):
-    """Warn about ingress hosts that won't resolve until added to /etc/hosts.
-
-    Each ingress host must point at 127.0.0.1 locally; auto does not edit
-    /etc/hosts for the user, so surface exactly which lines are missing rather
-    than letting the browser fail with an opaque resolution error.
-    """
-    current = utils.run_and_return("cat /etc/hosts")
-    missing = [host for host in hosts if host not in current]
-    if not missing:
-        return
-    rprint("  -- [yellow]These hosts are not in /etc/hosts yet[/]:")
-    for host in missing:
-        rprint(f"       127.0.0.1      {host}")
-
-
-def _refresh_https_for_ingresses():
-    """Re-issue the local cert to cover every deployed ingress hostname.
-
-    Runs after application pods are installed -- that's when their ingresses
-    exist. The initial cert is generated from a guessed '<podname>.local', which
-    misses extra hosts a pod's chart may expose, and the '*.local' wildcard does
-    not match multi-label subdomains like 'portal.app.local'. So we read the real
-    hosts from the cluster and put them in the cert's SAN list explicitly, then
-    refresh the in-cluster TLS secret.
-    """
-    hosts = _discover_ingress_hosts()
-    if not hosts:
-        return
-
-    if len(hosts) > 1:
-        rprint(f"  -- Detected {len(hosts)} ingress hosts; issuing one cert for all")
-
-    cert_path = os.path.expanduser("~") + "/.auto/certs"
-    key_file, cert_file = utils.create_local_certs(cert_path, additional_domains=hosts)
-    _update_tls_secrets(key_file, cert_file)
-    _warn_missing_host_entries(hosts)
+from autocli import checks, https, registry, runner, services, utils
+from autocli.config import CONFIG
 
 
 def _print_access_hints(pods, use_https):
@@ -116,17 +28,60 @@ def _print_access_hints(pods, use_https):
     rprint("[italic]Hint: Some items may still be starting in k3s.")
     rprint("[italic]You can access your pod(s) via the following URLs:")
 
-    if use_https:
-        # HTTPS serves on 443 and covers every hostname the deployed ingresses
-        # declare -- not just '<podname>.local' -- so list the real ones.
-        for host in _discover_ingress_hosts():
-            rprint(f"[italic]  https://{host}/")
-        return
+    # The cluster is the source of truth for hostnames -- not just
+    # '<podname>.local'. A pod's chart can expose several (e.g. 'app.local' and
+    # 'portal.app.local'), and system pods bring their own ingress too, so
+    # mailpit.local and floci-aws.local belong in this list as much as the
+    # application pods do.
+    hosts = https.discover_ingress_hosts()
 
-    for repo in pods:
-        pod_name = repo["repo"].split("/")[-1:][0].replace(".git", "")
-        if utils.check_host_entry(pod_name):
-            rprint(f"[italic]  http://{pod_name}.local:8088/")
+    if not hosts:
+        # Nothing declared an ingress yet (a dry run, or a cluster that never
+        # came up), so fall back to the pod names we were asked to start.
+        hosts = [
+            repo["repo"].split("/")[-1:][0].replace(".git", "") + ".local"
+            for repo in pods
+        ]
+
+    # HTTPS serves on 443; plain HTTP goes through the load balancer on 8088.
+    port = "" if use_https else ":8088"
+    scheme = "https" if use_https else "http"
+    for host in hosts:
+        rprint(f"[italic]  {scheme}://{host}{port}/")
+
+    # Every one of those hostnames has to resolve to 127.0.0.1 or the browser
+    # just fails. refresh_https_for_ingresses already warned in the HTTPS case;
+    # this covers the plain-HTTP path, which used to check application pods
+    # only and never mentioned the system pods at all.
+    if not use_https:
+        https.warn_missing_host_entries(hosts)
+    https.warn_unrouted_ingresses()
+
+
+def finish_pod_start():
+    """Post-start steps every single-pod path owes the cluster.
+
+    A pod is not really "started" until these run, so `auto start <pod>` and
+    `auto restart <pod>` both go through here -- restart used to call start_pod
+    directly and silently skip them.
+
+    The cert refresh matters most: a pod's ingress can declare a hostname the
+    current certificate does not cover, and the '*.local' wildcard matches a
+    single label, so 'careers.devocho.local' needs its own SAN entry. Without
+    this the pod comes up, serves HTTPS, and the browser shows a full-page
+    warning on the new host only -- with nothing in auto's output to explain it.
+    """
+    if CONFIG.get("https", False):
+        # The pod's ingress now exists; re-issue the cert so any hostnames it
+        # adds (e.g. a second 'portal.<pod>.local') are covered too.
+        https.refresh_https_for_ingresses()
+
+    https.warn_unrouted_ingresses()
+
+    # Cache any external images this pod pulled (sidecars, init containers,
+    # third-party images) into the local registry and local.yaml, matching what
+    # the full-start path does at the end.
+    registry.cache_running_images()
 
 
 def _run_bootstrap_step(msg, success_msg, execute, func=None, **kwargs):
@@ -195,7 +150,7 @@ def bootstrap_cluster(pod, dry_run, offline):
     key_file, cert_file = "", ""
 
     if not pod and use_https and not dry_run:
-        key_file, cert_file = _setup_https_certificates(pods)
+        key_file, cert_file = https.setup_https_certificates(pods)
 
     if pod:
         rprint(f"[steel_blue]Starting[/] {pod}")
@@ -211,6 +166,7 @@ def bootstrap_cluster(pod, dry_run, offline):
                     exit_auto=True,
                 )
                 return
+            https.require_envoy_gateway()
             _prepare_single_pod(pod, offline)
             # Bring up any system pods this pod needs and create its databases
             # and buckets BEFORE the pod starts. This mirrors the full-start
@@ -222,14 +178,7 @@ def bootstrap_cluster(pod, dry_run, offline):
             services.create_databases_for_pod(pod)
         start_pod(pod)
         if not dry_run:
-            # The pod's ingress now exists; re-issue the cert so any hostnames it
-            # adds (e.g. a second 'portal.<pod>.local') are covered too.
-            if use_https:
-                _refresh_https_for_ingresses()
-            # Cache any external images this pod pulled (sidecars, init
-            # containers, third-party images) into the local registry and
-            # local.yaml, matching what the full-start path does at the end.
-            registry.cache_running_images()
+            finish_pod_start()
         return
 
     with Progress(transient=False) as progress:
@@ -310,87 +259,27 @@ def bootstrap_cluster(pod, dry_run, offline):
             advance=20,
         )
 
-        # STEP 7.5: Now that ingresses exist, re-issue the cert to cover every
-        # hostname they actually declare (handles pods that expose more than one).
+        # STEP 7.5: Envoy finished starting while the pods loaded; confirm it serves,
+        # then re-issue the cert to cover every hostname the routes declare.
         _run_bootstrap_step(
-            "Securing ingress hosts (HTTPS)...",
-            "HTTPS Ingress Hosts Secured",
-            not dry_run and use_https,
-            _refresh_https_for_ingresses,
+            "Waiting for Envoy Gateway and securing ingress hosts...",
+            "Ingress Ready",
+            not dry_run,
+            lambda: https.finish_ingress(use_https),
         )
+
+        # The sites work now; STEP 8 only speeds up the next start
+        _print_access_hints(pods, use_https)
 
         # STEP 8: Auto-detect external images and cache them
         _run_bootstrap_step(
-            "Detecting and caching external images...",
+            "Caching new images so the next start is faster (the URLs above already work)...",
             "External Images Cached",
             not dry_run,
             registry.cache_running_images,
             progress=progress,
             task=task,
             advance=17,
-        )
-
-        _print_access_hints(pods, use_https)
-
-
-def _install_nginx_ingress(use_https, key_file, cert_file):
-    """Install and configure Nginx Ingress Controller"""
-    rprint("     = Installing Nginx Ingress Controller...")
-    utils.run_and_wait(
-        "helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx",
-        capture_output=True,
-    )
-    utils.run_and_wait("helm repo update", capture_output=True)
-
-    # Build Helm command
-    helm_cmd = (
-        "helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx "
-        "--namespace ingress-nginx --create-namespace "
-        "--set controller.service.type=LoadBalancer "
-        "--set controller.watchIngressWithoutClass=true "
-        "--set controller.ingressClassResource.default=true "
-        "--set controller.admissionWebhooks.enabled=false "
-    )
-
-    # New cluster created, if HTTPS, inject secrets and config Nginx
-    if use_https and key_file and cert_file:
-        rprint("     = Configuring Cluster HTTPS (Nginx)")
-
-        # Create the namespace first (needed for secrets)
-        utils.run_and_wait(
-            "kubectl create namespace ingress-nginx", capture_output=True
-        )
-
-        # Create secrets in default and ingress-nginx namespaces
-        for ns in ["default", "ingress-nginx"]:
-            cmd = (
-                f"kubectl create secret tls local-tls --key {key_file} --cert {cert_file} "
-                f"-n {ns} --dry-run=client -o yaml | kubectl apply -f -"
-            )
-            utils.run_and_wait(cmd, capture_output=True)
-
-        # Add default cert arg
-        extra_args = "controller.extraArgs.default-ssl-certificate"
-        helm_cmd += f" --set {extra_args}=ingress-nginx/local-tls"
-
-    # Run the Helm install silently
-    if not utils.run_and_wait(helm_cmd, capture_output=True):
-        rprint("     [red]Error installing Nginx Ingress Controller[/red]")
-    else:
-        # Explicitly Patch the Deployment to FORCE the argument if Helm missed it
-        if use_https:
-            patch_cmd = (
-                "kubectl patch deployment ingress-nginx-controller -n ingress-nginx "
-                '--type=json -p=\'[{"op": "add", "path": '
-                '"/spec/template/spec/containers/0/args/-", '
-                '"value": "--default-ssl-certificate=ingress-nginx/local-tls"}]\''
-            )
-            utils.run_and_wait(patch_cmd, capture_output=True, suppress_error=True)
-
-        # Force restart Nginx pods to ensure they pick up the new certificate
-        utils.run_and_wait(
-            "kubectl rollout restart deployment ingress-nginx-controller -n ingress-nginx",
-            capture_output=True,
         )
 
 
@@ -410,22 +299,46 @@ def _verify_and_heal_connection():
             )
 
 
+def _verify_and_heal_dns():
+    """Restart the cluster if its nodes have lost outside DNS
+
+    Docker only re-reads the host's DNS servers when a node starts, so a
+    restart is the fix (see utils.nodes_without_dns for how they go stale).
+    """
+    broken = utils.nodes_without_dns()
+    if not broken:
+        return
+
+    rprint(
+        f"     [yellow]Warning: {', '.join(broken)} can't resolve outside names "
+        "(Docker kept a stale copy of the host's DNS). Restarting the cluster...[/yellow]"
+    )
+    utils.run_and_wait("k3d cluster stop")
+    if not utils.run_and_wait("k3d cluster start"):
+        utils.declare_error("Failed to restart the cluster.")
+        return
+
+    if utils.nodes_without_dns():
+        rprint(
+            "     [yellow]Warning: Pods still can't resolve outside names. "
+            "Check Docker's DNS settings.[/yellow]"
+        )
+    else:
+        rprint("     = Cluster DNS restored")
+
+
 def start_cluster(progress, task, key_file="", cert_file=""):
     """Start a K3D cluster and return if it is new (true) or existing (false)"""
 
     # HTTPS Setup
     use_https = CONFIG.get("https", False)
-    load_bal_config = '--api-port 6550 -p "8088:80@loadbalancer"'
-
-    if use_https:
-        load_bal_config = (
-            '--api-port 6550 -p "80:80@loadbalancer" -p "443:443@loadbalancer"'
-        )
+    load_bal_config = services.load_balancer_args()
 
     # 1. CHECK EXISTING CLUSTER
-    bash_command = """/usr/local/bin/k3d cluster list"""
+    bash_command = """k3d cluster list"""
     if utils.run_and_wait(bash_command, check_result="k3s-default"):
         rprint("  -- Found existing cluster")
+        services.warn_if_cluster_bound_elsewhere()
 
         # Ensure context is current
         utils.run_and_wait(
@@ -440,9 +353,16 @@ def start_cluster(progress, task, key_file="", cert_file=""):
             if not utils.run_and_wait(bash_command):
                 utils.declare_error("Failed to start existing cluster.")
 
-        # Verify we can actually talk to it
-        _verify_and_heal_connection()
+        # Docker restarts the nodes on its own at boot, often before Wi-Fi is
+        # up, which leaves every pod unable to resolve outside names
+        _verify_and_heal_dns()
 
+        # Verify we can actually talk to it, and that it takes `kubectl apply`
+        _verify_and_heal_connection()
+        utils.wait_for_api()
+
+        # Clusters made by older versions of auto still run ingress-nginx
+        https.require_envoy_gateway()
         return False
 
     # 2. CREATE NEW CLUSTER
@@ -457,15 +377,16 @@ def start_cluster(progress, task, key_file="", cert_file=""):
     # I'm opening port 8088 outside the cluster for access to the sites
     # Ports for databases are dynamically opened when needed by pods
     bash_command = (
-        f"/usr/local/bin/k3d cluster create "
+        f"k3d cluster create "
+        f"--image {https.K3S_IMAGE} "
         f"--volume {code_dir}:/mnt/code "
         f"--registry-use k3d-registry.local:12345 "
         f"--registry-config ~/.auto/k3s/registries.yaml "
-        f"{load_bal_config} "
+        f"{load_bal_config} {services.cluster_port_args()} "
         f'--k3s-arg "--disable=traefik@server:0" '
         f"{extra_args} "
         # f"--network k3d-vpn-net "
-        f"--agents 1"
+        f"--agents {CONFIG.get('agents', 1)}"
     )
 
     # Attempt creation.
@@ -484,20 +405,10 @@ def start_cluster(progress, task, key_file="", cert_file=""):
     print("     = Cluster Started.  Waiting for Pods to finish starting...")
     progress.update(task, advance=6)
 
-    # Install and Configure Nginx
-    _install_nginx_ingress(use_https, key_file, cert_file)
-
-    # Wait for the Ingress Controller to be ready
-    if utils.wait_for_pod_status("ingress-nginx-controller", "Running"):
-        progress.update(task, advance=5)
-
-    # Let's remove the completed nginx job containers
-    if utils.wait_for_pod_status("ingress-nginx-admission-create", "Complete"):
-        progress.update(task, advance=5)
-    bash_command = """kubectl delete pod -n ingress-nginx \
-                      --field-selector=status.phase==Succeeded"""
-    if utils.run_and_wait(bash_command):
-        print("     = Pods finished starting.  Removed completed setup pods.")
+    services.install_system_pods(only=services.EARLY_SYSTEM_PODS)
+    # Install Envoy Gateway; it finishes starting while the pods load (STEP 7.5)
+    if https.install_envoy_gateway(use_https, key_file, cert_file):
+        progress.update(task, advance=10)
 
     return True
 
@@ -506,7 +417,7 @@ def stop_cluster(progress, task) -> None:
     """Stop the cluster"""
 
     print("  -- Stopping cluster")
-    bash_command = """/usr/local/bin/k3d cluster stop"""
+    bash_command = """k3d cluster stop"""
     utils.run_and_wait(bash_command)
     progress.update(task, advance=50)
 
@@ -517,7 +428,7 @@ def delete_cluster(progress, task) -> None:
     rprint("  -- Deleting cluster :skull::skull:")
 
     # Explicitly target k3s-default
-    delete_cmd = "/usr/local/bin/k3d cluster delete k3s-default"
+    delete_cmd = "k3d cluster delete k3s-default"
 
     # Run delete
     utils.run_and_wait(delete_cmd)
@@ -528,7 +439,7 @@ def delete_cluster(progress, task) -> None:
         try:
             # Check k3d list
             k3d_result = subprocess.run(
-                "/usr/local/bin/k3d cluster list",
+                "k3d cluster list",
                 shell=True,
                 capture_output=True,
                 text=True,
@@ -581,6 +492,7 @@ def stop_pod(pod) -> None:
         pod_name = pod["repo"].split("/")[-1:][0].replace(".git", "")
     else:
         pod_name = pod
+    https.delete_pod_routes(os.path.join(code_dir, pod_name))
 
     # Is the pod running?
     if not utils.run_and_wait("""kubectl get pods""", check_result=pod_name):
@@ -756,8 +668,9 @@ def start_pod(pod) -> None:
         pod_config, pod_name, code_dir
     )
 
-    # Run the pod install command inside the repo directory
+    # Run the pod install command inside the repo directory, then its routes
     _execute_pod_install(command, pod_folder, pod_name, is_helm, release_name)
+    https.apply_pod_routes(pod_folder)
 
 
 def restart_pod(pod) -> None:
@@ -766,12 +679,20 @@ def restart_pod(pod) -> None:
     # How many times are we going to try this?
     max_retries = 15
 
+    # Check before stopping: an old ingress-nginx cluster can't apply its HTTPRoute
+    https.require_envoy_gateway()
+
     stop_pod(pod)
     while utils.verify_pod_is_installed(pod) and max_retries >= 1:
         rprint(f"       * [steel_blue]Portal [/]{pod} [steel_blue]still running")
         time.sleep(2)
         max_retries -= 1
     start_pod(pod)
+
+    # "restart" reads as "stop then start", so it owes the same post-start work
+    # a start does -- otherwise an ingress hostname added since the last full
+    # start comes back up uncovered by the certificate.
+    finish_pod_start()
 
 
 def install_pods_in_cluster() -> None:
@@ -789,16 +710,17 @@ def install_pods_in_cluster() -> None:
 def output_logs(pod):
     """Output the logs for a pod via kubctl"""
 
+    pod_name = utils.get_full_pod_name(pod, only_running=False)
     # Is the cluster running or stopped?
-    bash_command = """/usr/local/bin/k3d cluster list"""
-    if utils.run_and_wait(bash_command, check_result="0/1"):
-        rprint("[red]ERROR: Development cluster is not running!")
-        return
-
-    pod_name = utils.get_full_pod_name(pod)
-
+    cluster_status, _ = utils.get_cluster_status()
+    error_msg = ""
     if not pod_name:
-        utils.declare_error(f"Pod not found: {pod}")
+        error_msg += f"Pod not found: {pod}"
+    if cluster_status != "Running":
+        error_msg += "\nDevelopment cluster is not running."
+    if error_msg:
+        utils.declare_error(error_msg)
+        return
 
     # Dynamically find the Node IP (often the source of the health check)
     node_ip = utils.run_and_return(
@@ -828,6 +750,11 @@ def output_logs(pod):
     # os.system gives a direct stream without a python buffer
     os.system(f"kubectl logs -f {pod_name} | {filter_cmd}")
 
+    # Print a message for crashed or non running pod states
+    pod_status = utils.get_pod_status(pod_name)
+    if pod_status != "Running":
+        rprint(f"  -- [red]Pod status: {pod_status}.[/red]")
+
 
 def verify_dependencies():
     """Verify the system has what it needs to run auto"""
@@ -836,16 +763,21 @@ def verify_dependencies():
     errors = 0
 
     # Check for the docker daemon running and command being available
-    errors += utils.check_docker()
+    errors += checks.check_docker()
 
     # Check for k3d and kubectl
-    errors += utils.check_k8s()
+    errors += checks.check_k8s()
 
-    # Check for helm
-    errors += utils.check_helm()
+    # Check for helm — optional, so it warns but never adds to the fatal
+    # error count (pods can deploy via raw kubectl manifests instead).
+    checks.check_helm()
 
     # Check for hosts entries
-    errors += utils.check_registry_host_entry()
+    errors += checks.check_registry_host_entry()
+
+    # Check Docker can push to the local registry — advisory like helm, since
+    # a loopback registry needs no insecure-registries entry at all.
+    checks.check_docker_insecure_registry()
 
     if errors:
         rprint(f"[red]There were {errors} so we stopped the command[/red]")
@@ -853,7 +785,7 @@ def verify_dependencies():
 
     # If HTTPS is enabled, check for mkcert and certutil
     if CONFIG.get("https", False):
-        utils.check_mkcert()
+        checks.check_mkcert()
 
 
 def show_status(namespace="default", all_namespaces=False, watch=False):
@@ -865,8 +797,20 @@ def show_status(namespace="default", all_namespaces=False, watch=False):
     if watch:
         console.clear()
 
+    quit_hint = (
+        "Press Q or Ctrl+C to exit" if sys.stdin.isatty() else "Press Ctrl+C to exit"
+    )
+
     def generate_content():
         """Generate the renderable content (Group) for the status"""
+        items = status_items()
+        if watch:
+            items.append(Text(""))
+            items.append(Text(quit_hint, style="italic"))
+        return Group(*items)
+
+    def status_items():
+        """The status lines and pod table, as a list of renderables"""
         items = []
 
         # Header
@@ -889,9 +833,16 @@ def show_status(namespace="default", all_namespaces=False, watch=False):
                     style="italic",
                 )
             )
-            return Group(*items)
+            return items
 
-        # 3. Pods Table
+        # 3. Check the pods can resolve outside names. Skipped while watching:
+        # a node with a dead upstream takes seconds to answer, which would
+        # stall every redraw.
+        if not watch:
+            d_stat, d_style = utils.get_cluster_dns_status()
+            items.append(Text.assemble(" DNS:      ", (d_stat, d_style)))
+
+        # 4. Pods Table
         items.append(Text(""))  # Spacer
         table_title = (
             "Pods (All Namespaces)"
@@ -903,21 +854,77 @@ def show_status(namespace="default", all_namespaces=False, watch=False):
         # Build the table using helper
         items.append(utils.build_pod_table(namespace, all_namespaces))
 
-        return Group(*items)
+        return items
 
     # Main Execution Logic
     if watch:
-        # Use Live to update in-place without strobe
-        with Live(generate_content(), console=console, refresh_per_second=4) as live:
-            while True:
-                try:
-                    time.sleep(3)
-                    live.update(generate_content())
-                except KeyboardInterrupt:
-                    break
+        _watch_status(console, generate_content)
     else:
         # Just print once
         rprint(generate_content())
+
+
+def _watch_status(console, generate_content, interval=3):
+    """Redraw the status in place every `interval` seconds until Q or Ctrl+C"""
+
+    # Reading single keypresses needs a real terminal.  Without one (piped
+    # stdin, CI) there is nothing to read from, so fall back to Ctrl+C only.
+    interactive = sys.stdin.isatty()
+    old_settings = termios.tcgetattr(sys.stdin) if interactive else None
+
+    try:
+        # Use Live to update in-place without strobe
+        with Live(generate_content(), console=console, refresh_per_second=4) as live:
+            if interactive:
+                # cbreak hands us each key as it's pressed (no Enter needed)
+                # but leaves Ctrl+C working
+                tty.setcbreak(sys.stdin.fileno())
+            while not _quit_key_pressed(interval, interactive):
+                live.update(generate_content())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if old_settings is not None:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+        # Live hides the cursor while it runs; make sure it always comes back
+        console.show_cursor(True)
+
+
+def _quit_key_pressed(timeout, interactive):
+    """Wait up to `timeout` seconds, returning True as soon as Q is pressed"""
+
+    if not interactive:
+        time.sleep(timeout)
+        return False
+
+    deadline = time.monotonic() + timeout
+    remaining = timeout
+    while remaining > 0:
+        ready, _, _ = select.select([sys.stdin], [], [], remaining)
+        # Read straight from the fd so keys never sit in Python's buffer where
+        # select() can't see them
+        if ready and b"q" in os.read(sys.stdin.fileno(), 32).lower():
+            return True
+        remaining = deadline - time.monotonic()
+    return False
+
+
+def refresh_pod(pod) -> bool:
+    """Delete a pod's running instances so k3s recreates them
+
+    The quick way to pick up a freshly pushed image (pods pull with
+    `imagePullPolicy: Always`) without the full stop/start of `auto restart`.
+    """
+
+    pod_names = utils.get_pod_instances(pod)
+    if not pod_names:
+        rprint(f"  [red bold]-- ERROR: No pods found for {pod}. Is it running?")
+        return False
+
+    for pod_name in pod_names:
+        rprint(f"  -- Refreshing pod [bright_cyan]{pod_name}[/]")
+    utils.run_and_wait(f"kubectl delete pod {' '.join(pod_names)}")
+    return True
 
 
 def pull_and_build_pods():
@@ -972,7 +979,7 @@ def migrate_with_smalls(pod):
     Running because it depends on schema state — the migrator pod has its
     own lifecycle and exits when smalls.py finishes.
     """
-    return utils.run_one_shot_pod_command(
+    return runner.run_one_shot_pod_command(
         pod,
         command_args=[f"/mnt/code/{pod}/smalls.py", "migrate"],
         action_label="migrate",

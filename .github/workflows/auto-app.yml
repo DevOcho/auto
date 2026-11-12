@@ -4,6 +4,15 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  # A pull request that changes the build is built and started here too, so a
+  # binary that won't run is caught before a tag publishes it. Only a tag
+  # packages and publishes.
+  pull_request:
+    paths:
+      - '.github/workflows/auto-app.yml'
+      - 'auto/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
 
 permissions:
   contents: write
@@ -14,8 +23,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # A Linux binary needs a glibc at least as new as the machine it was
+          # built on, so it is built on the oldest Ubuntu we support. 24.04's
+          # glibc 2.39 runs on Ubuntu 24.04 and newer, Debian 13 and newer,
+          # Fedora and Arch. Never ubuntu-latest: 0.9.0 was built on 26.04
+          # when GitHub moved it there and needed glibc 2.42, which Ubuntu
+          # 24.04 lacks.
+          - os: ubuntu-24.04
             asset_suffix: linux-x86_64
+          # The same on ARM: Graviton and other ARM servers, ARM laptops,
+          # Raspberry Pis with a 64-bit OS, Windows on ARM through WSL2.
+          - os: ubuntu-24.04-arm
+            asset_suffix: linux-arm64
           - os: macos-latest
             asset_suffix: darwin-arm64
     runs-on: ${{ matrix.os }}
@@ -23,34 +42,29 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    # The runner's own Python 3.12 builds the binary, as before uv: it is built
+    # for this runner's Ubuntu, which sets the binary's glibc requirement.
     - name: Set up Python 3.12
       uses: actions/setup-python@v5
       with:
         python-version: "3.12"
-        cache: 'pip'
 
-    - name: Create and activate virtual environment
-      run: |
-        python -m venv venv
-        source venv/bin/activate
-        python -m pip install --upgrade pip
+    - name: Install uv
+      uses: astral-sh/setup-uv@v10.3.3
+      with:
+        version: "0.13.7"
 
     - name: Install dependencies
-      run: |
-        source venv/bin/activate
-        pip install flake8 pytest pyinstaller
-        if [ -f build_requirements.txt ]; then pip install -r build_requirements.txt; fi
+      env:
+        UV_PYTHON_PREFERENCE: only-system
+      run: uv sync --frozen --group build
 
-    - name: Lint with flake8
-      run: |
-        source venv/bin/activate
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=./venv/*
-        flake8 . --count --exit-zero --max-complexity=12 --max-line-length=127 --statistics --exclude=./venv/*
+    - name: Lint with ruff
+      run: uv run --frozen ruff check
 
     - name: Build with pyinstaller
       run: |
-        source venv/bin/activate
-        pyinstaller --collect-all pyfiglet \
+        uv run --frozen pyinstaller --collect-all pyfiglet \
                     --collect-submodules rich \
                     --collect-all autocli \
                     --hidden-import "rich._unicode_data.unicode17-0-0" \
@@ -61,7 +75,31 @@ jobs:
     - name: List dist directory
       run: ls -l dist/
 
+    # Start the binary here and, on Linux, on the oldest systems auto supports.
+    # With no config, auto offers to create its code folder: `y` answers that.
+    - name: Start the binary
+      run: |
+        mkdir -p "$RUNNER_TEMP/home"
+        echo y | HOME="$RUNNER_TEMP/home" AUTO_NO_UPDATE_CHECK=1 dist/auto --version
+        if [ "$RUNNER_OS" = Linux ]; then
+          for image in ubuntu:24.04 debian:trixie; do
+            echo "== $image"
+            echo y | docker run --rm -i -e AUTO_NO_UPDATE_CHECK=1 \
+              -v "$PWD/dist:/dist:ro" "$image" /dist/auto --version
+          done
+        fi
+
+    # Kept for a week: the e2e job below starts a cluster with it, and a pull
+    # request's binary can be tried before a release.
+    - name: Keep the binary for testing
+      uses: actions/upload-artifact@v4
+      with:
+        name: auto-test-${{ matrix.asset_suffix }}
+        path: dist/auto
+        retention-days: 7
+
     - name: Create distribution directory
+      if: github.ref_type == 'tag'
       run: |
         # Stage release files under an arch-tagged directory so the tarball is unambiguous
         STAGE=release/auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}
@@ -72,25 +110,153 @@ jobs:
         cp README.md "$STAGE/"
 
     - name: Create tar.gz archive
+      if: github.ref_type == 'tag'
       run: |
         tar -czvf auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}.tar.gz \
             -C release auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}
 
     - name: Upload artifact
+      if: github.ref_type == 'tag'
       uses: actions/upload-artifact@v4
       with:
         name: auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}
         path: auto-${{ github.ref_name }}-${{ matrix.asset_suffix }}.tar.gz
         if-no-files-found: error
 
-  release:
+  # A real `auto start` with each Linux build, on its own architecture: the
+  # default config's first start on a new machine, then a resume and a
+  # recreate, with portal answering over HTTPS each time. A release waits for
+  # it. macOS runners can't run Docker, so the Mac build only gets the start
+  # check above.
+  e2e:
+    name: auto start (${{ matrix.asset_suffix }})
     needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            asset_suffix: linux-x86_64
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            asset_suffix: linux-arm64
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      AUTO_NO_UPDATE_CHECK: "1"
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/download-artifact@v4
+      with:
+        name: auto-test-${{ matrix.asset_suffix }}
+        path: dist
+
+    - name: Install k3d, kubectl, Helm and mkcert
+      run: |
+        set -euo pipefail
+        docker version --format 'Docker {{.Server.Version}} on {{.Server.Arch}}'
+        arch=${{ matrix.arch }}
+        sudo curl -fsSL -o /usr/local/bin/k3d \
+          "https://github.com/k3d-io/k3d/releases/download/v5.9.0/k3d-linux-$arch"
+        sudo curl -fsSL -o /usr/local/bin/kubectl \
+          "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/$arch/kubectl"
+        sudo chmod +x /usr/local/bin/k3d /usr/local/bin/kubectl
+        helm=helm-v3.19.0-linux-$arch.tar.gz
+        curl -fsSLO "https://get.helm.sh/$helm" && curl -fsSLO "https://get.helm.sh/$helm.sha256sum"
+        sha256sum -c "$helm.sha256sum"
+        tar xzf "$helm" && sudo install "linux-$arch/helm" /usr/local/bin/helm
+        sudo apt-get update -qq && sudo apt-get install -y -qq mkcert libnss3-tools
+        k3d version | head -1 && kubectl version --client | head -1 && helm version --short
+
+    - name: Install auto from this build
+      run: |
+        mkdir -p ~/.auto ~/source/devocho
+        install -m 755 dist/auto ~/.auto/auto
+        cp -r auto/config auto/k3s ~/.auto/
+        echo "127.0.0.1 k3d-registry.local portal.local" | sudo tee -a /etc/hosts
+        echo "$HOME/.auto" >> "$GITHUB_PATH"
+
+    - name: Start, resume and recreate
+      run: |
+        set -euo pipefail
+        portal() {  # portal.local over HTTPS with the cluster's own certificate
+          local code=000
+          for _ in $(seq 1 90); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+              --cacert "$(mkcert -CAROOT)/rootCA.pem" https://portal.local/) || true
+            [ "$code" = 200 ] && return 0
+            sleep 2
+          done
+          echo "portal.local answered $code"; kubectl get pods -A; return 1
+        }
+        timed() {  # label, then auto's arguments
+          local label=$1; shift
+          SECONDS=0
+          auto "$@" < /dev/null
+          portal
+          echo "| $label | ${SECONDS} s |" >> "$GITHUB_STEP_SUMMARY"
+        }
+        printf '| %s | |\n| --- | --- |\n' "auto start, ${{ matrix.asset_suffix }}" >> "$GITHUB_STEP_SUMMARY"
+        timed "First start, new machine" start
+        auto stop < /dev/null
+        timed "Resume after auto stop" start
+        auto stop --delete-cluster < /dev/null
+        timed "Recreate after --delete-cluster" start
+
+    # sites-bind-address: 0.0.0.0 shares the sites, and only the sites: portal
+    # answers on the runner's own network address, while the Kubernetes API
+    # and the registry stay on 127.0.0.1.
+    - name: Share the sites
+      run: |
+        set -euo pipefail
+        echo "sites-bind-address: 0.0.0.0" >> ~/.auto/config/local.yaml
+        auto stop --delete-cluster < /dev/null
+        auto start < /dev/null
+        ip=$(hostname -I | awk '{print $1}')
+        code=000
+        for _ in $(seq 1 90); do
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+            --cacert "$(mkcert -CAROOT)/rootCA.pem" \
+            --resolve "portal.local:443:$ip" https://portal.local/) || true
+          [ "$code" = 200 ] && break
+          sleep 2
+        done
+        echo "portal.local on $ip: $code"
+        test "$code" = 200
+        for port in 6550 12345; do
+          if curl -s -o /dev/null --max-time 5 "http://$ip:$port/"; then
+            echo "port $port answers on $ip: it should listen on 127.0.0.1 only"
+            exit 1
+          fi
+          echo "port $port: not reachable on $ip"
+        done
+        echo "| Sites shared on $ip, API and registry not | ok |" >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    needs: [build, e2e]
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
+    - uses: actions/checkout@v4
+
+    # docs/releases/X.Y.Z.md becomes the release's description; a release
+    # without one gets GitHub's generated list of merged pull requests.
+    - name: Find the release notes
+      id: notes
+      run: |
+        notes="docs/releases/${GITHUB_REF_NAME#v}.md"
+        if [ -f "$notes" ]; then
+          echo "path=$notes" >> "$GITHUB_OUTPUT"
+        fi
+
+    # Only the release tarballs, not the test binaries (all named `auto`)
     - name: Download all artifacts
       uses: actions/download-artifact@v4
       with:
         path: artifacts
+        pattern: auto-v*
         merge-multiple: true
 
     - name: List downloaded artifacts
@@ -103,6 +269,8 @@ jobs:
         name: Release ${{ github.ref_name }}
         draft: false
         prerelease: false
+        body_path: ${{ steps.notes.outputs.path }}
+        generate_release_notes: ${{ steps.notes.outputs.path == '' }}
         files: |
           artifacts/*.tar.gz
       env:

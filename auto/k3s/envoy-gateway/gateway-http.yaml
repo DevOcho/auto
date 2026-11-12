@@ -1,0 +1,16 @@
+# The one Gateway every pod's HTTPRoute attaches to, without HTTPS
+# (`https: false` in local.yaml: pods are reached on port 8088).
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: auto
+  namespace: auto-gateway
+spec:
+  gatewayClassName: auto
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: All

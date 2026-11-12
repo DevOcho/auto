@@ -1,0 +1,17 @@
+/* DevOcho red as the site's primary color (palette primary = "custom"). */
+:root,
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #c80036;
+  --md-primary-fg-color--light: #eb2258;
+  --md-primary-fg-color--dark: #a0002b;
+  --md-accent-fg-color: #eb2258;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #c80036;
+  --md-primary-fg-color--light: #eb2258;
+  --md-primary-fg-color--dark: #a0002b;
+  --md-accent-fg-color: #f15881;
+  /* Links on the dark scheme need the lighter red to stay readable. */
+  --md-typeset-a-color: #f15881;
+}

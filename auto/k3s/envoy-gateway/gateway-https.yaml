@@ -1,0 +1,30 @@
+# The one Gateway every pod's HTTPRoute attaches to, with HTTPS (`https: true`
+# in local.yaml). Applied after base.yaml and after the local-tls secret.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: auto
+  namespace: auto-gateway
+spec:
+  gatewayClassName: auto
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: All  # overlay: production uses a Selector
+  # One HTTPS listener with no hostname terminates TLS for every host with the
+  # single mkcert certificate -- the same job nginx's --default-ssl-certificate
+  # did, so pods never need a `tls:` block of their own.
+  - name: https
+    protocol: HTTPS
+    port: 443
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - kind: Secret
+        name: local-tls
+    allowedRoutes:
+      namespaces:
+        from: All  # overlay: production uses a Selector

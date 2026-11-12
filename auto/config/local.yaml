@@ -1,6 +1,6 @@
 ---
 # The code folder is where you want us to download all of your pod code repositories
-code: /home/${USER}/source/devocho
+code: ${HOME}/source/devocho
 
 # Each repo listed here will be run as a pod in k3s
 # We expect them to have a .auto folder with a config.yaml file to tell us how
@@ -14,13 +14,26 @@ pods:
 # for local pod access.
 https: true
 
+# Which address the cluster's ports listen on: the sites, the databases, the
+# image registry and the Kubernetes API. 127.0.0.1 keeps them on this machine.
+# A team sharing one dev setup can set 0.0.0.0 to open them to the network --
+# only on a network you trust, since the databases use fixed passwords.
+# Takes effect when the cluster is created.
+bind-address: 127.0.0.1
+
+# The sites alone (80 and 443, or 8088) can listen on another address, so
+# teammates can open them through a hosts entry while the databases, the
+# registry and the API stay on this machine. Mailpit's and Floci's pages use
+# the same ports, so they are shared too.
+# sites-bind-address: 0.0.0.0
+
 # We will pre-load the following images into the local k3s container registry
 # This makes starting and stopping the cluster much faster
 registry:
   - image: mysql:8.0
   - image: postgres:18.1-trixie
-  - image: minio/minio:RELEASE.2025-09-07T16-13-09Z
-  - image: matomo:5.3.1-fpm-alpine
+  - image: floci/floci:2.1.0
+  - image: axllent/mailpit:v1.20
 
 # System Pods (all default to `false`)
 system-pods:
@@ -34,18 +47,6 @@ system-pods:
         - kubectl apply -f ~/.auto/k3s/mysql/pvc.yaml
         - kubectl apply -f ~/.auto/k3s/mysql/deployment.yaml
         - kubectl apply -f ~/.auto/k3s/mysql/service.yaml
-        - kubectl apply -f ~/.auto/k3s/mysql/ingress.yaml
-
-  # Minio config
-  - pod:
-      name: minio
-      active: false # set this to true if you want it to start
-      commands:
-        - kubectl apply -f ~/.auto/k3s/minio/pv.yaml
-        - kubectl apply -f ~/.auto/k3s/minio/pvc.yaml
-        - kubectl apply -f ~/.auto/k3s/minio/deployment.yaml
-        - kubectl apply -f ~/.auto/k3s/minio/service.yaml
-        - kubectl apply -f ~/.auto/k3s/minio/ingress.yaml
 
   # Postgres config
   - pod:
@@ -57,17 +58,38 @@ system-pods:
         - kubectl apply -f ~/.auto/k3s/postgres/pvc.yaml
         - kubectl apply -f ~/.auto/k3s/postgres/deployment.yaml
         - kubectl apply -f ~/.auto/k3s/postgres/service.yaml
-        - kubectl apply -f ~/.auto/k3s/postgres/ingress.yaml
 
-  # Matomo config
+  # Mailpit config (local SMTP catch-all + web inbox at http://mailpit.local/)
+  # Pods send mail to host `mailpit` on port 1025 and read it in the browser.
   - pod:
-      name: matomo
+      name: mailpit
       active: false # set this to true if you want it to start
       commands:
-        - kubectl apply -f ~/.auto/k3s/matomo/pv.yaml
-        - kubectl apply -f ~/.auto/k3s/matomo/pvc.yaml
-        - kubectl apply -f ~/.auto/k3s/matomo/db-secret.yaml
-        - kubectl apply -f ~/.auto/k3s/matomo/nginx-config.yaml
-        - kubectl apply -f ~/.auto/k3s/matomo/deployment.yaml
-        - kubectl apply -f ~/.auto/k3s/matomo/service.yaml
-        - kubectl apply -f ~/.auto/k3s/matomo/ingress.yaml
+        - kubectl apply -f ~/.auto/k3s/mailpit/deployment.yaml
+        - kubectl apply -f ~/.auto/k3s/mailpit/service.yaml
+        - kubectl apply -f ~/.auto/k3s/mailpit/ingress.yaml
+
+  # Floci config: S3 (in place of MinIO) and the rest of AWS, emulated.
+  # The API is at http://floci-aws.local/ and pods reach it at floci-aws:4566,
+  # with any access key. S3 buckets and objects are kept on disk; every other
+  # service is in memory, so it is lost when the pod restarts. A pod that
+  # still asks for `minio` gets this, and minio:9000 keeps working.
+  - pod:
+      name: floci-aws
+      active: false  # set this to true if you want it to start
+      commands:
+        - kubectl apply -f ~/.auto/k3s/floci/serviceaccount.yaml
+        - kubectl apply -f ~/.auto/k3s/floci/role.yaml
+        - kubectl apply -f ~/.auto/k3s/floci/rolebinding.yaml
+        - kubectl apply -f ~/.auto/k3s/floci/deployment.yaml
+        - kubectl apply -f ~/.auto/k3s/floci/service.yaml
+        - kubectl apply -f ~/.auto/k3s/floci/ingress.yaml
+
+  # Floci UI config (web dashboard for floci-aws at http://floci-ui.local/)
+  - pod:
+      name: floci-ui
+      active: false  # set this to true if you want it to start
+      commands:
+        - kubectl apply -f ~/.auto/k3s/floci/ui-deployment.yaml
+        - kubectl apply -f ~/.auto/k3s/floci/ui-service.yaml
+        - kubectl apply -f ~/.auto/k3s/floci/ui-ingress.yaml

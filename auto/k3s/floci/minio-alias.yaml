@@ -1,0 +1,38 @@
+# MinIO's old addresses, served by floci-aws. auto applies this whenever a pod
+# still asks for the `minio` system pod, so code written against MinIO keeps
+# working unchanged: the S3 API at minio:9000 (any access key, minio/minio123
+# included) and at http://minio.local/ from the browser.
+#
+# MinIO's own console and `mc` admin commands have no equivalent; the Floci
+# dashboard is the floci-ui system pod.
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+spec:
+  selector:
+    app: floci-aws
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: 4566
+    - name: http
+      port: 80
+      targetPort: 4566
+---
+# Gateway API route (served by Envoy Gateway)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: minio
+  namespace: default
+spec:
+  parentRefs:
+  - name: auto
+    namespace: auto-gateway
+  hostnames:
+  - minio.local
+  rules:
+  - backendRefs:
+    - name: minio
+      port: 80

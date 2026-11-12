@@ -1,0 +1,19 @@
+# Namespace-scoped Role, not ClusterRole: floci's Kubernetes Lambda
+# executor (see deployment.yaml) only ever needs to manage pods inside
+# this namespace (default) — no reach into anything else on the cluster.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: floci-lambda
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "watch", "delete", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "watch"]
+  # Only needed if FLOCI_TLS_ENABLED=true is ever set (not currently) —
+  # the CA cert gets shared with Lambda pods via a ConfigMap.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "get", "update", "patch"]

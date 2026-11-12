@@ -1,0 +1,46 @@
+name: Bug report
+description: Something in auto doesn't work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting it. [Troubleshooting](https://devocho.github.io/auto/troubleshooting/)
+        covers the common problems, in case yours is there.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The command you ran, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The output of the command that failed. `auto status` and `kubectl get pods -A` help too.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: auto version
+      description: The output of `auto --version`.
+      placeholder: auto, version 0.9.4
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS (Apple Silicon)
+        - Windows (WSL2)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Docker and k3d versions
+      description: The output of `docker --version` and `k3d version`.
